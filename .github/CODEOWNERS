@@ -1,0 +1,10 @@
+# Default owners for everything in the repo.
+*                       @sky
+
+# Module ownership (Developer 1 — project setup, clinics, appointments, documents)
+/backend/src/clinics/   @sky
+/backend/src/appointments/ @sky
+/backend/src/documents/ @sky
+/packages/schemas/      @sky
+/.github/               @sky
+/docker-compose.yml     @sky

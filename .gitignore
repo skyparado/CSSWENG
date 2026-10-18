@@ -1,0 +1,23 @@
+node_modules/
+dist/
+build/
+coverage/
+.env
+.env.local
+*.log
+npm-debug.log*
+
+# Prisma
+backend/prisma/*.db
+backend/prisma/migrations/dev.db*
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Puppeteer / local artifacts
+backend/.tmp/
+*.pdf
+!backend/src/documents/templates/**/*.pdf
