@@ -1,0 +1,158 @@
+// Prisma schema — clinic management system.
+//
+// Developer 1 owns: Clinic, ClinicSchedule, Appointment, Document, DocumentRequest.
+// Patient (Dev 2) and User (Dev 4) are included here as MINIMAL PLACEHOLDERS so
+// this branch migrates and builds in isolation. Their owning developers replace
+// these stubs with the full models; keep the `id` field stable so foreign keys
+// from this module continue to resolve.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================ Placeholders (other devs) ======================
+
+/// PLACEHOLDER — owned by Developer 2. Keep `id`.
+model Patient {
+  id        String   @id @default(cuid())
+  firstName String
+  lastName  String
+  createdAt DateTime @default(now())
+
+  appointments     Appointment[]
+  documents        Document[]
+  documentRequests DocumentRequest[]
+}
+
+/// PLACEHOLDER — owned by Developer 4. Keep `id`.
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  fullName  String
+  createdAt DateTime @default(now())
+
+  documentRequests DocumentRequest[]
+}
+
+// ================================ Clinic (Dev 1) =============================
+
+model Clinic {
+  id        String   @id @default(cuid())
+  name      String
+  address   String?
+  phone     String?
+  email     String?
+  timezone  String   @default("Asia/Manila")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  schedules    ClinicSchedule[]
+  appointments Appointment[]
+  documents    Document[]
+
+  @@index([isActive])
+}
+
+/// One operating-hours window for a clinic on a weekday (0 = Sunday … 6 = Saturday).
+model ClinicSchedule {
+  id        String   @id @default(cuid())
+  clinicId  String
+  dayOfWeek Int // 0..6
+  openTime  String // "HH:mm"
+  closeTime String // "HH:mm"
+  createdAt DateTime @default(now())
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId, dayOfWeek])
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+}
+
+model Appointment {
+  id        String            @id @default(cuid())
+  clinicId  String
+  patientId String
+  startsAt  DateTime
+  endsAt    DateTime
+  reason    String?
+  status    AppointmentStatus @default(SCHEDULED)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  clinic  Clinic  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId, startsAt])
+  @@index([patientId, startsAt])
+  @@index([status])
+}
+
+// =============================== Documents (Dev 1) ===========================
+
+enum DocumentType {
+  PRESCRIPTION
+  MEDICAL_CERTIFICATE
+}
+
+enum DocumentRequestStatus {
+  PENDING
+  GENERATING
+  READY
+  FAILED
+}
+
+/// A document generation request. Rendering is handled by the Puppeteer service;
+/// the resulting PDF is stored in S3 and linked via `Document`.
+model DocumentRequest {
+  id        String                @id @default(cuid())
+  type      DocumentType
+  status    DocumentRequestStatus @default(PENDING)
+  clinicId  String
+  patientId String
+  requestedById String?
+  payload   Json
+  error     String?
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
+
+  patient     Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  requestedBy User?     @relation(fields: [requestedById], references: [id], onDelete: SetNull)
+  document    Document?
+
+  @@index([status])
+  @@index([patientId])
+}
+
+/// A generated, stored document (PDF in S3).
+model Document {
+  id         String       @id @default(cuid())
+  type       DocumentType
+  clinicId   String
+  patientId  String
+  requestId  String       @unique
+  storageKey String // object key in the S3 bucket
+  fileName   String
+  mimeType   String       @default("application/pdf")
+  sizeBytes  Int
+  createdAt  DateTime     @default(now())
+
+  clinic  Clinic          @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient Patient         @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  request DocumentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@index([clinicId])
+}
