@@ -9,8 +9,13 @@ import {
 import { prisma } from '../prisma.js';
 import { asyncHandler, badRequest, conflict, notFound, validate } from '../http.js';
 import { checkWithinOperatingHours } from './operatingHours.js';
+import { requireAuth } from '../auth/middleware.js';
 
 export const appointmentsRouter = Router();
+
+// All appointment endpoints require an authenticated user. Both roles may
+// schedule, reschedule and cancel (per Role Permission Matrix in the SDD).
+appointmentsRouter.use(requireAuth);
 
 /** Reject if the requested window overlaps an existing (non-cancelled) appointment at the clinic. */
 async function assertNoOverlap(
