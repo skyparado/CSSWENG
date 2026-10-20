@@ -1,8 +1,16 @@
 import { PrismaClient } from '@prisma/client';
+import argon2 from 'argon2';
+
 
 const prisma = new PrismaClient();
 
-/** Seed a demo clinic with Mon–Fri 09:00–17:00 hours and one patient. */
+/**
+ * Seed demo data for local dev: one clinic with Mon-Fri 09:00-17:00 hours,
+ * one patient, and two staff accounts (a doctor and a secretary).
+ *
+ * The staff passwords here are only for local dev. They are never used in
+ * production.
+ */
 async function main() {
   const clinic = await prisma.clinic.upsert({
     where: { id: 'seed-clinic-mabuhay' },
@@ -33,8 +41,38 @@ async function main() {
     create: { id: 'seed-patient-juan', firstName: 'Juan', lastName: 'Dela Cruz' },
   });
 
+  const doctorHash = await argon2.hash('DoctorPass123!');
+  await prisma.user.upsert({
+    where: { email: 'doctor@mabuhayclinic.local' },
+    update: {},
+    create: {
+      email: 'doctor@mabuhayclinic.local',
+      fullName: 'Dr. Angeline Pacio',
+      passwordHash: doctorHash,
+      role: 'DOCTOR',
+      status: 'ACTIVE',
+    },
+  });
+
+  const secretaryHash = await argon2.hash('SecretaryPass123!');
+  await prisma.user.upsert({
+    where: { email: 'secretary@mabuhayclinic.local' },
+    update: {},
+    create: {
+      email: 'secretary@mabuhayclinic.local',
+      fullName: 'Clinic Secretary',
+      passwordHash: secretaryHash,
+      role: 'SECRETARY',
+      status: 'ACTIVE',
+    },
+  });
+
   // eslint-disable-next-line no-console
-  console.log('Seeded demo clinic, schedule and patient.');
+  console.log('Seeded demo clinic, schedule, patient, and auth users.');
+  // eslint-disable-next-line no-console
+  console.log('  doctor@mabuhayclinic.local / DoctorPass123!');
+  // eslint-disable-next-line no-console
+  console.log('  secretary@mabuhayclinic.local / SecretaryPass123!');
 }
 
 main()

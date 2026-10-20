@@ -40,6 +40,10 @@ jobs:
       DATABASE_URL: postgresql://clinic:clinic@localhost:5432/clinic_test?schema=public
       REDIS_URL: redis://localhost:6379
       NODE_ENV: test
+      # Session cookie signing secret for the test runs. Not a real secret;
+      # safe to live in the workflow because CI builds don't accept external
+      # traffic. Production uses a GitHub Actions secret instead.
+      SESSION_SECRET: ci-test-secret-do-not-use-in-production-only-for-vitest-runs
 
     steps:
       - uses: actions/checkout@v4

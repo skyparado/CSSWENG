@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { z } from 'zod';
 
 /**
@@ -10,8 +11,17 @@ const envSchema = z.object({
     .default('development'),
   PORT: z.coerce.number().int().default(4000),
   DATABASE_URL: z.string().min(1),
-  REDIS_URL: z.string().min(1).optional(),
+
+  // Redis is now required because sessions live there (connect-redis).
+  REDIS_URL: z.string().min(1),
+
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
+
+  // Session configuration. SESSION_SECRET signs the session cookie, so a weak
+  // value would let a client forge sessions. In production we require 32+ chars.
+  SESSION_SECRET: z.string().min(16),
+  SESSION_COOKIE_NAME: z.string().default('clinic.sid'),
+  SESSION_IDLE_TIMEOUT_MINUTES: z.coerce.number().int().positive().default(30),
 
   S3_ENDPOINT: z.string().optional(),
   S3_REGION: z.string().default('us-east-1'),
@@ -26,5 +36,14 @@ const envSchema = z.object({
   PUPPETEER_EXECUTABLE_PATH: z.string().optional(),
 });
 
-export const env = envSchema.parse(process.env);
+const parsed = envSchema.parse(process.env);
+
+// Extra guard for production: a short dev secret must not be used in prod.
+if (parsed.NODE_ENV === 'production' && parsed.SESSION_SECRET.length < 32) {
+  throw new Error(
+    'SESSION_SECRET must be at least 32 characters in production.',
+  );
+}
+
+export const env = parsed;
 export type Env = typeof env;
