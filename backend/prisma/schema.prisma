@@ -1,10 +1,8 @@
 // Prisma schema — clinic management system.
 //
 // Developer 1 owns: Clinic, ClinicSchedule, Appointment, Document, DocumentRequest.
-// Patient (Dev 2) and User (Dev 4) are included here as MINIMAL PLACEHOLDERS so
-// this branch migrates and builds in isolation. Their owning developers replace
-// these stubs with the full models; keep the `id` field stable so foreign keys
-// from this module continue to resolve.
+// Developer 2 owns: Patient (full model below).
+// User (Dev 4) is still a placeholder; keep its `id` stable.
 
 generator client {
   provider = "prisma-client-js"
@@ -15,18 +13,76 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ============================ Placeholders (other devs) ======================
+// ============================ Patients (Dev 2) ===============================
 
-/// PLACEHOLDER — owned by Developer 2. Keep `id`.
+enum Sex {
+  MALE
+  FEMALE
+}
+
+/// Shared patient chart (data dictionary 1.4.4).
+///
+/// Fields marked @encrypted hold AES-256-GCM ciphertext written by
+/// src/lib/fieldCrypto.ts, never plaintext. Because ciphertext cannot be
+/// searched, each searchable field also has a keyed HMAC "blind index"
+/// (*Idx columns). Search and duplicate detection run on those indexes.
+/// Blind indexes support exact matches only (after normalisation), not
+/// partial matches.
 model Patient {
-  id        String   @id @default(cuid())
-  firstName String
-  lastName  String
-  createdAt DateTime @default(now())
+  id                    String    @id @default(cuid())
+  /// Sequential number shown as "P-00231". Never reused.
+  patientSeq            Int       @unique @default(autoincrement())
+  registeredClinicId    String
+
+  firstName             String    /// @encrypted
+  middleName            String?   /// @encrypted
+  lastName              String    /// @encrypted
+  dateOfBirth           String    /// @encrypted (ISO date "YYYY-MM-DD")
+  sex                   Sex
+  civilStatus           String?
+  occupation            String?   /// @encrypted
+
+  mobileNumber          String    /// @encrypted
+  alternatePhone        String?   /// @encrypted
+  email                 String?   /// @encrypted
+  address               String?   /// @encrypted
+  emergencyContactName  String?   /// @encrypted
+  emergencyContactPhone String?   /// @encrypted
+
+  hmoProvider           String?
+  hmoMemberNumber       String?   /// @encrypted
+  hmoValidUntil         DateTime? @db.Date
+  philhealthNumber      String?   /// @encrypted
+  referralSource        String?
+
+  /// Doctor-only, from supervised intake.
+  medicalHistory        String?   /// @encrypted
+  ophthalmicHistory     String?   /// @encrypted
+
+  // Blind indexes (HMAC-SHA256 hex of the normalised value)
+  firstNameIdx          String
+  lastNameIdx           String
+  dobIdx                String
+  mobileIdx             String
+
+  voidedAt              DateTime?
+  voidReason            String?
+  createdById           String
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  registeredClinic Clinic @relation("PatientRegisteredClinic", fields: [registeredClinicId], references: [id], onDelete: Restrict)
+  createdBy        User   @relation("PatientCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
 
   appointments     Appointment[]
   documents        Document[]
   documentRequests DocumentRequest[]
+
+  @@index([lastNameIdx])
+  @@index([firstNameIdx])
+  @@index([dobIdx, lastNameIdx])
+  @@index([mobileIdx])
+  @@index([registeredClinicId])
 }
 
 /// Staff account. Only the Doctor can approve, change, revoke accounts and the
@@ -46,7 +102,8 @@ model User {
   createdAt              DateTime   @default(now())
   updatedAt              DateTime   @updatedAt
 
-  documentRequests DocumentRequest[]
+  documentRequests  DocumentRequest[]
+  patientsCreated   Patient[] @relation("PatientCreatedBy")
 
   @@index([status])
   @@index([role])
@@ -80,6 +137,7 @@ model Clinic {
   schedules    ClinicSchedule[]
   appointments Appointment[]
   documents    Document[]
+  patientsRegistered Patient[] @relation("PatientRegisteredClinic")
 
   @@index([isActive])
 }
