@@ -29,14 +29,39 @@ model Patient {
   documentRequests DocumentRequest[]
 }
 
-/// PLACEHOLDER — owned by Developer 4. Keep `id`.
+/// Staff account. Only the Doctor can approve, change, revoke accounts and the
+/// clinics each account may work in (see UserClinic).
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  fullName  String
-  createdAt DateTime @default(now())
+  id                     String     @id @default(cuid())
+  email                  String     @unique
+  fullName               String
+  passwordHash           String
+  role                   UserRole   @default(SECRETARY)
+  status                 UserStatus @default(PENDING)
+  // Lockout tracking per SRS 7.2: 5 failed attempts within 15 min locks the account.
+  failedLoginAttempts    Int        @default(0)
+  firstFailedLoginAt     DateTime?
+  lockedUntil            DateTime?
+  lastLoginAt            DateTime?
+  createdAt              DateTime   @default(now())
+  updatedAt              DateTime   @updatedAt
 
   documentRequests DocumentRequest[]
+
+  @@index([status])
+  @@index([role])
+}
+
+enum UserRole {
+  DOCTOR
+  SECRETARY
+}
+
+enum UserStatus {
+  PENDING
+  ACTIVE
+  LOCKED
+  REVOKED
 }
 
 // ================================ Clinic (Dev 1) =============================
