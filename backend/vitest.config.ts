@@ -14,6 +14,11 @@ export default defineConfig({
       REDIS_URL: process.env.REDIS_URL ?? 'redis://localhost:6379',
       SESSION_SECRET:
         process.env.SESSION_SECRET ?? 'vitest-session-secret-not-used-in-production',
+      // Test-only patient field keys (32 bytes, base64). Never use in production.
+      FIELD_ENCRYPTION_KEY:
+        process.env.FIELD_ENCRYPTION_KEY ?? 'dml0ZXN0LWZpZWxkLWVuY3J5cHRpb24ta2V5LTMyYiE=',
+      BLIND_INDEX_KEY:
+        process.env.BLIND_INDEX_KEY ?? 'dml0ZXN0LWJsaW5kLWluZGV4LWtleS0tLS0tLTMyYiE=',
     },
     coverage: {
       reporter: ['text', 'html'],

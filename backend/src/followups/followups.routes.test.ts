@@ -23,6 +23,7 @@ vi.mock('../reminders/queue.js', () => queue);
 import { followUpsRouter } from './followups.routes.js';
 import { outreachRouter } from './outreach.routes.js';
 import { appWith, doctor, secretary } from '../testing/appWith.js';
+import { encrypt } from '../lib/fieldCrypto.js';
 
 const doctorApp = appWith('/api/follow-ups', followUpsRouter, doctor);
 const secretaryApp = appWith('/api/follow-ups', followUpsRouter, secretary);
@@ -35,6 +36,8 @@ const openTask = {
   status: 'OPEN',
   taskType: 'CHECK_UP',
   dueDate: new Date('2026-11-01T00:00:00Z'),
+  // Patient fields are stored encrypted; the API must decrypt them.
+  patient: { id: 'p1', firstName: encrypt('Juan'), lastName: encrypt('Dela Cruz'), mobileNumber: encrypt('+639171234567') },
 };
 
 beforeEach(() => {
@@ -118,11 +121,13 @@ describe('POST /api/follow-ups', () => {
   it('lets the Doctor create a task in the active clinic', async () => {
     db.patient.findUnique.mockResolvedValue({ id: 'p1' });
     db.clinic.findUnique.mockResolvedValue({ id: 'c1' });
-    db.followUp.create.mockImplementation(async ({ data }) => ({ id: 'f9', ...data }));
+    db.followUp.create.mockImplementation(async ({ data }) => ({ id: 'f9', ...data, patient: openTask.patient }));
 
     const res = await request(doctorApp).post('/api/follow-ups').send(body);
 
     expect(res.status).toBe(201);
+    // Patient name comes back decrypted, not as ciphertext.
+    expect(res.body.patient).toMatchObject({ firstName: 'Juan', lastName: 'Dela Cruz' });
     expect(db.followUp.create.mock.calls[0][0].data).toMatchObject({
       clinicId: 'c1',
       priority: 'NORMAL',
