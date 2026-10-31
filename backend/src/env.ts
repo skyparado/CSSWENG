@@ -34,6 +34,28 @@ const envSchema = z.object({
     .transform((v) => v === 'true'),
 
   PUPPETEER_EXECUTABLE_PATH: z.string().optional(),
+
+  // Reminder jobs (BullMQ). Set REMINDERS_ENABLED=false to run the API without
+  // the worker, e.g. when a dedicated worker process handles the queue.
+  REMINDERS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  // Timezone used to decide what "today" is for due and overdue follow-ups.
+  CLINIC_TIMEZONE: z.string().default('Asia/Manila'),
+  // Cron (in CLINIC_TIMEZONE) for the daily scan that queues reminders.
+  REMINDER_SCAN_CRON: z.string().default('0 8 * * *'),
+  // Send a reminder for tasks due within this many days.
+  REMINDER_LEAD_DAYS: z.coerce.number().int().min(0).default(2),
+  // BullMQ delivery attempts per reminder job (exponential backoff between them).
+  REMINDER_JOB_ATTEMPTS: z.coerce.number().int().min(1).default(5),
+  REMINDER_JOB_BACKOFF_MS: z.coerce.number().int().min(100).default(30_000),
+  // Failed contact attempts after which a task is marked UNREACHABLE (FR-5.5.8).
+  UNREACHABLE_AFTER_ATTEMPTS: z.coerce.number().int().min(1).default(3),
+
+  // Gateways. "stub" logs instead of sending until a real provider is chosen.
+  SMS_PROVIDER: z.enum(['stub']).default('stub'),
+  EMAIL_PROVIDER: z.enum(['stub']).default('stub'),
 });
 
 const parsed = envSchema.parse(process.env);

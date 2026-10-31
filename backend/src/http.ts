@@ -72,6 +72,15 @@ export function errorHandler(
   ) {
     return res.status(404).json({ error: 'Not found', details: null });
   }
+  // Prisma unique-constraint violation, e.g. two concurrent edits of one record.
+  if (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code: string }).code === 'P2002'
+  ) {
+    return res.status(409).json({ error: 'Conflict', details: null });
+  }
   // eslint-disable-next-line no-console
   console.error(err);
   return res.status(500).json({ error: 'Internal server error', details: null });
