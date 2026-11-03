@@ -19,34 +19,53 @@ datasource db {
 
 /// PLACEHOLDER — owned by Developer 2. Keep `id`.
 model Patient {
-  id        String   @id @default(cuid())
-  firstName String
-  lastName  String
-  createdAt DateTime @default(now())
+  id           String   @id @default(cuid())
+  firstName    String
+  lastName     String
+  // Contact details used by reminders. Dev 2: keep these when replacing the
+  // stub (the full model stores them encrypted).
+  mobileNumber String?
+  email        String?
+  createdAt    DateTime @default(now())
 
   appointments     Appointment[]
   documents        Document[]
   documentRequests DocumentRequest[]
+  consents         PatientConsent[]
+  followUps        FollowUp[]
+  outreachLogs     OutreachLog[]
+  medications      Medication[]
+  allergies        Allergy[]
 }
 
 /// Staff account. Only the Doctor can approve, change, revoke accounts and the
 /// clinics each account may work in (see UserClinic).
 model User {
-  id                     String     @id @default(cuid())
-  email                  String     @unique
-  fullName               String
-  passwordHash           String
-  role                   UserRole   @default(SECRETARY)
-  status                 UserStatus @default(PENDING)
+  id                  String     @id @default(cuid())
+  email               String     @unique
+  fullName            String
+  passwordHash        String
+  role                UserRole   @default(SECRETARY)
+  status              UserStatus @default(PENDING)
   // Lockout tracking per SRS 7.2: 5 failed attempts within 15 min locks the account.
-  failedLoginAttempts    Int        @default(0)
-  firstFailedLoginAt     DateTime?
-  lockedUntil            DateTime?
-  lastLoginAt            DateTime?
-  createdAt              DateTime   @default(now())
-  updatedAt              DateTime   @updatedAt
+  failedLoginAttempts Int        @default(0)
+  firstFailedLoginAt  DateTime?
+  lockedUntil         DateTime?
+  lastLoginAt         DateTime?
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
 
   documentRequests DocumentRequest[]
+  documentsSigned  Document[]        @relation("DocumentSignedBy")
+  documentsSent    Document[]        @relation("DocumentSentBy")
+
+  consentsRecorded    PatientConsent[] @relation("ConsentRecordedBy")
+  consentsWithdrawn   PatientConsent[] @relation("ConsentWithdrawnBy")
+  followUpsCreated    FollowUp[]       @relation("FollowUpCreatedBy")
+  followUpsCompleted  FollowUp[]       @relation("FollowUpCompletedBy")
+  outreachLogs        OutreachLog[]
+  medicationsRecorded Medication[]
+  allergiesRecorded   Allergy[]
 
   @@index([status])
   @@index([role])
@@ -78,9 +97,14 @@ model Clinic {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  schedules    ClinicSchedule[]
-  appointments Appointment[]
-  documents    Document[]
+  schedules        ClinicSchedule[]
+  appointments     Appointment[]
+  documents        Document[]
+  documentRequests DocumentRequest[]
+  followUps        FollowUp[]
+  outreachLogs     OutreachLog[]
+  medications      Medication[]
+  allergies        Allergy[]
 
   @@index([isActive])
 }
@@ -118,8 +142,9 @@ model Appointment {
   createdAt DateTime          @default(now())
   updatedAt DateTime          @updatedAt
 
-  clinic  Clinic  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  clinic    Clinic     @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  patient   Patient    @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  followUps FollowUp[]
 
   @@index([clinicId, startsAt])
   @@index([patientId, startsAt])
@@ -143,23 +168,30 @@ enum DocumentRequestStatus {
 /// A document generation request. Rendering is handled by the Puppeteer service;
 /// the resulting PDF is stored in S3 and linked via `Document`.
 model DocumentRequest {
-  id        String                @id @default(cuid())
-  type      DocumentType
-  status    DocumentRequestStatus @default(PENDING)
-  clinicId  String
-  patientId String
+  id            String                @id @default(cuid())
+  type          DocumentType
+  status        DocumentRequestStatus @default(PENDING)
+  clinicId      String
+  patientId     String
   requestedById String?
-  payload   Json
-  error     String?
-  createdAt DateTime              @default(now())
-  updatedAt DateTime              @updatedAt
+  payload       Json
+  error         String?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
 
-  patient     Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  clinic      Clinic    @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  patient     Patient   @relation(fields: [patientId], references: [id], onDelete: Restrict)
   requestedBy User?     @relation(fields: [requestedById], references: [id], onDelete: SetNull)
   document    Document?
 
   @@index([status])
   @@index([patientId])
+  @@index([clinicId])
+}
+
+enum DocumentSendChannel {
+  EMAIL
+  PRINT
 }
 
 /// A generated, stored document (PDF in S3).
@@ -175,10 +207,248 @@ model Document {
   sizeBytes  Int
   createdAt  DateTime     @default(now())
 
-  clinic  Clinic          @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-  patient Patient         @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  request DocumentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  signedById  String?
+  signedAt    DateTime?
+  sentById    String?
+  sentAt      DateTime?
+  sentVia     DocumentSendChannel?
+  sentToEmail String?
+
+  clinic      Clinic          @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  patient     Patient         @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  request     DocumentRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  signedBy    User?           @relation("DocumentSignedBy", fields: [signedById], references: [id], onDelete: Restrict)
+  sentBy      User?           @relation("DocumentSentBy", fields: [sentById], references: [id], onDelete: Restrict)
+  medications Medication[]
 
   @@index([patientId])
   @@index([clinicId])
+}
+
+// ===================== Follow-up, consents, meds (Dev 3) =====================
+//
+// Per the Database Design doc (1.4.5, 1.4.13-1.4.16, 1.5): foreign keys are
+// ON DELETE RESTRICT, clinical rows are never hard-deleted, and clinicId is set
+// from the session's active clinic and never re-tagged. Encounter and
+// IntakeSession tables do not exist yet; their optional FKs are added when
+// those modules land.
+
+enum ConsentType {
+  DATA_PROCESSING
+  REMINDER
+}
+
+enum ReminderChannel {
+  SMS
+  EMAIL
+}
+
+enum ConsentCaptureMethod {
+  TABLET
+  IN_PERSON
+  STAFF_ENTRY
+}
+
+/// Evidence of a consent decision. Reminder consent is per channel; a consent
+/// is "active" when granted and `withdrawnAt` is null.
+model PatientConsent {
+  id             String               @id @default(cuid())
+  patientId      String
+  consentType    ConsentType
+  channel        ReminderChannel? // REMINDER consent only
+  isGranted      Boolean
+  captureMethod  ConsentCaptureMethod
+  consentedAt    DateTime             @default(now())
+  recordedById   String
+  withdrawnAt    DateTime?
+  withdrawnById  String?
+  consentVersion String?
+
+  patient      Patient       @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  recordedBy   User          @relation("ConsentRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+  withdrawnBy  User?         @relation("ConsentWithdrawnBy", fields: [withdrawnById], references: [id], onDelete: Restrict)
+  outreachLogs OutreachLog[]
+
+  @@index([patientId, consentType, channel])
+}
+
+enum FollowUpTaskType {
+  FOLLOW_UP
+  CHECK_UP
+  LAB_TEST
+  INJECTION
+  PROCEDURE
+}
+
+enum FollowUpPriority {
+  LOW
+  NORMAL
+  HIGH
+}
+
+enum FollowUpStatus {
+  OPEN
+  SCHEDULED
+  COMPLETED
+  DECLINED
+  UNREACHABLE
+}
+
+/// A follow-up visit, check-up, lab test, injection or procedure a patient is
+/// due for. `dueDate` is a clinic-local calendar date.
+model FollowUp {
+  id            String           @id @default(cuid())
+  patientId     String
+  clinicId      String
+  appointmentId String?
+  taskType      FollowUpTaskType
+  reason        String
+  dueDate       DateTime         @db.Date
+  priority      FollowUpPriority @default(NORMAL)
+  status        FollowUpStatus   @default(OPEN)
+  recallRule    String?
+  closureNote   String?
+  createdById   String? // null when generated by a recall rule
+  completedById String?
+  completedAt   DateTime?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  patient      Patient       @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  clinic       Clinic        @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  appointment  Appointment?  @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+  createdBy    User?         @relation("FollowUpCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  completedBy  User?         @relation("FollowUpCompletedBy", fields: [completedById], references: [id], onDelete: Restrict)
+  outreachLogs OutreachLog[]
+
+  @@index([clinicId, status, dueDate])
+  @@index([patientId])
+  @@index([appointmentId])
+}
+
+enum OutreachChannel {
+  CALL
+  SMS
+  EMAIL
+}
+
+enum OutreachOutcome {
+  REACHED
+  NO_ANSWER
+  LEFT_MESSAGE
+  WRONG_NUMBER
+  DECLINED
+  BOOKED
+  SENT
+  FAILED
+}
+
+enum DeliveryStatus {
+  DELIVERED
+  FAILED
+}
+
+/// One contact attempt for a follow-up. Append-only: rows are never deleted and
+/// only `deliveryStatus` may change (when the SMS/email service reports back).
+model OutreachLog {
+  id                String          @id @default(cuid())
+  followUpId        String
+  patientId         String
+  clinicId          String
+  consentId         String? // required for SMS and EMAIL
+  channel           OutreachChannel
+  attemptNumber     Int
+  attemptedAt       DateTime        @default(now())
+  outcome           OutreachOutcome
+  patientResponse   String?
+  providerMessageId String?
+  deliveryStatus    DeliveryStatus?
+  contactedById     String? // null for automated reminders
+
+  followUp    FollowUp        @relation(fields: [followUpId], references: [id], onDelete: Restrict)
+  patient     Patient         @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  clinic      Clinic          @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  consent     PatientConsent? @relation(fields: [consentId], references: [id], onDelete: Restrict)
+  contactedBy User?           @relation(fields: [contactedById], references: [id], onDelete: Restrict)
+
+  @@index([followUpId, attemptNumber])
+  @@index([patientId])
+  @@index([providerMessageId])
+}
+
+enum MedicationStatus {
+  ACTIVE
+  ON_HOLD
+  DISCONTINUED
+}
+
+enum MedicationSource {
+  PRESCRIBED_HERE
+  PATIENT_REPORTED
+  OTHER_DOCTOR
+  OTC
+}
+
+/// Versioned medication entry. A change inserts a new row that supersedes the
+/// earlier one (`isCurrent` flips to false); rows are never edited or deleted.
+model Medication {
+  id                     String           @id @default(cuid())
+  patientId              String
+  clinicId               String
+  documentId             String?
+  medicationName         String
+  strength               String?
+  dose                   String
+  frequency              String
+  route                  String
+  instructions           String?
+  indication             String?
+  startDate              DateTime         @db.Date
+  endDate                DateTime?        @db.Date
+  status                 MedicationStatus @default(ACTIVE)
+  discontinuationReason  String?
+  prescribingDoctor      String
+  source                 MedicationSource @default(PRESCRIBED_HERE)
+  lookupVersion          Int?
+  isCurrent              Boolean          @default(true)
+  supersedesMedicationId String?          @unique
+  recordedById           String
+  recordedAt             DateTime         @default(now())
+
+  patient      Patient     @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  clinic       Clinic      @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  document     Document?   @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  recordedBy   User        @relation(fields: [recordedById], references: [id], onDelete: Restrict)
+  supersedes   Medication? @relation("MedicationVersions", fields: [supersedesMedicationId], references: [id], onDelete: Restrict)
+  supersededBy Medication? @relation("MedicationVersions")
+
+  @@index([patientId, isCurrent, status])
+  @@index([clinicId])
+}
+
+enum AllergySeverity {
+  MILD
+  MODERATE
+  SEVERE
+}
+
+/// A recorded allergy. Never hard-deleted: a removed entry is voided with a reason.
+model Allergy {
+  id            String           @id @default(cuid())
+  patientId     String
+  clinicId      String
+  allergenName  String
+  reaction      String?
+  severity      AllergySeverity?
+  lookupVersion Int?
+  recordedById  String
+  recordedAt    DateTime         @default(now())
+  voidedAt      DateTime?
+  voidReason    String?
+
+  patient    Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  clinic     Clinic  @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  recordedBy User    @relation(fields: [recordedById], references: [id], onDelete: Restrict)
+
+  @@index([patientId, voidedAt])
 }

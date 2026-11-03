@@ -25,6 +25,7 @@
     "@clinic/schemas": "*",
     "@prisma/client": "^5.21.1",
     "argon2": "^0.45.1",
+    "bullmq": "^5.81.5",
     "connect-redis": "^10.0.0",
     "cors": "^2.8.5",
     "dotenv": "^18.0.8",
