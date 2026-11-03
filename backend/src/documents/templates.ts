@@ -20,16 +20,37 @@ function fmtDate(d: Date): string {
   }).format(d);
 }
 
+/** Letterhead shared by every document Dr. Pacio issues. */
+function letterhead(clinicName: string, clinicAddress?: string): string {
+  return `<div class="letterhead">
+    <div class="dr">Angeline Pacio, MD</div>
+    <div>General Ophthalmologist</div>
+    <div>Diplomate, Philippine Board of Ophthalmology</div>
+    <div class="clinic">${esc(clinicName)}${clinicAddress ? `<br>${esc(clinicAddress)}` : ''}</div>
+  </div>`;
+}
+
+function signature(name: string, license?: string): string {
+  return `<div class="sig">
+      <div class="sig-space"></div>
+      <div class="line">${esc(name)}</div>
+      ${license ? `<div class="label">License No. ${esc(license)}</div>` : ''}
+    </div>`;
+}
+
 const baseStyle = `
   * { box-sizing: border-box; }
   body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #111827; margin: 0; padding: 48px; }
   h1 { font-size: 22px; margin: 0 0 4px; }
-  .clinic { color: #374151; font-size: 13px; margin-bottom: 24px; }
+  .letterhead { text-align: center; font-size: 13px; border-bottom: 2px solid #111827; padding-bottom: 12px; margin-bottom: 24px; }
+  .letterhead .dr { font-size: 18px; font-weight: bold; }
+  .clinic { color: #374151; font-size: 13px; margin-top: 6px; }
+  .sig-space { height: 56px; }
   .meta { font-size: 13px; color: #374151; margin-bottom: 20px; }
   table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e5e7eb; }
   th { background: #f3f4f6; }
-  .sig { margin-top: 64px; font-size: 13px; }
+  .sig { margin-top: 32px; font-size: 13px; }
   .sig .line { border-top: 1px solid #111827; width: 260px; padding-top: 4px; }
   .label { color: #6b7280; }
 `;
@@ -49,8 +70,8 @@ export function renderPrescriptionHtml(p: PrescriptionPayload): string {
     .join('');
 
   return `<!doctype html><html><head><meta charset="utf-8"><style>${baseStyle}</style></head><body>
+    ${letterhead(p.clinicName, p.clinicAddress)}
     <h1>Prescription</h1>
-    <div class="clinic">${esc(p.clinicName)}</div>
     <div class="meta">
       <div><span class="label">Patient:</span> ${esc(p.patientName)}${
         p.patientAge !== undefined ? ` (${esc(p.patientAge)} y/o)` : ''
@@ -61,10 +82,7 @@ export function renderPrescriptionHtml(p: PrescriptionPayload): string {
       <thead><tr><th>Drug</th><th>Dosage</th><th>Frequency</th><th>Duration</th><th>Notes</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
-    <div class="sig">
-      <div class="line">${esc(p.prescriberName)}</div>
-      ${p.prescriberLicense ? `<div class="label">License No. ${esc(p.prescriberLicense)}</div>` : ''}
-    </div>
+    ${signature(p.prescriberName, p.prescriberLicense)}
   </body></html>`;
 }
 
@@ -79,16 +97,13 @@ export function renderMedicalCertificateHtml(
       : '';
 
   return `<!doctype html><html><head><meta charset="utf-8"><style>${baseStyle}</style></head><body>
+    ${letterhead(p.clinicName, p.clinicAddress)}
     <h1>Medical Certificate</h1>
-    <div class="clinic">${esc(p.clinicName)}</div>
     <div class="meta"><span class="label">Date:</span> ${esc(fmtDate(p.issuedOn))}</div>
     <p>This is to certify that <strong>${esc(p.patientName)}</strong> was examined and found to have:</p>
     <p><strong>${esc(p.diagnosis)}</strong></p>
     ${p.recommendation ? `<p>${esc(p.recommendation)}</p>` : ''}
     ${rest}
-    <div class="sig">
-      <div class="line">${esc(p.prescriberName)}</div>
-      ${p.prescriberLicense ? `<div class="label">License No. ${esc(p.prescriberLicense)}</div>` : ''}
-    </div>
+    ${signature(p.prescriberName, p.prescriberLicense)}
   </body></html>`;
 }

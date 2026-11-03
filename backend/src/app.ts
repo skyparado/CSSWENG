@@ -10,6 +10,11 @@ import { appointmentsRouter } from './appointments/appointments.routes.js';
 import { documentsRouter } from './documents/documents.routes.js';
 import { authRouter } from './auth/auth.routes.js';
 import { usersRouter } from './users/users.routes.js';
+import { consentsRouter } from './consents/consents.routes.js';
+import { followUpsRouter } from './followups/followups.routes.js';
+import { outreachRouter } from './followups/outreach.routes.js';
+import { medicationsRouter } from './medications/medications.routes.js';
+import { allergiesRouter } from './medications/allergies.routes.js';
 
 /**
  * Build the Express app (no network listen). Kept separate from index.ts so
@@ -39,6 +44,12 @@ export function createApp(): Express {
   app.use('/api/appointments', appointmentsRouter);
   // Documents and document requests (POST /api/documents/requests, etc.).
   app.use('/api/documents', documentsRouter);
+  // Follow-ups, reminders and outreach; consents; medications and allergies.
+  app.use('/api/consents', consentsRouter);
+  app.use('/api/follow-ups', followUpsRouter);
+  app.use('/api/outreach-logs', outreachRouter);
+  app.use('/api/medications', medicationsRouter);
+  app.use('/api/allergies', allergiesRouter);
 
   app.use(errorHandler);
   return app;

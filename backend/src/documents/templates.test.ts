@@ -8,14 +8,17 @@ describe('document templates', () => {
   it('renders prescription items and escapes HTML', () => {
     const html = renderPrescriptionHtml({
       patientName: 'Juan <b>Dela Cruz</b>',
-      clinicName: 'Mabuhay Clinic',
-      prescriberName: 'Dr. Reyes',
+      clinicName: 'UERM',
+      clinicAddress: 'Aurora Blvd, Quezon City',
+      prescriberName: 'Angeline Pacio, MD',
       issuedOn: new Date('2026-01-10T00:00:00Z'),
       items: [
-        { drug: 'Amoxicillin', dosage: '500mg', frequency: '3x/day', duration: '7 days' },
+        { drug: 'Moxifloxacin 0.5% eye drops', dosage: '1 drop', frequency: '4x/day, both eyes', duration: '7 days' },
       ],
     });
-    expect(html).toContain('Amoxicillin');
+    expect(html).toContain('Moxifloxacin');
+    expect(html).toContain('General Ophthalmologist');
+    expect(html).toContain('Aurora Blvd, Quezon City');
     expect(html).toContain('Juan &lt;b&gt;Dela Cruz&lt;/b&gt;'); // escaped
     expect(html).not.toContain('<b>Dela Cruz</b>');
   });
@@ -23,15 +26,16 @@ describe('document templates', () => {
   it('renders a medical certificate with a rest period', () => {
     const html = renderMedicalCertificateHtml({
       patientName: 'Maria Santos',
-      clinicName: 'Mabuhay Clinic',
-      prescriberName: 'Dr. Reyes',
+      clinicName: 'Happy Eyes',
+      prescriberName: 'Angeline Pacio, MD',
       issuedOn: new Date('2026-01-10T00:00:00Z'),
-      diagnosis: 'Acute bronchitis',
+      diagnosis: 'Bacterial conjunctivitis, both eyes',
       restFromDate: new Date('2026-01-10T00:00:00Z'),
       restToDate: new Date('2026-01-13T00:00:00Z'),
     });
     expect(html).toContain('Medical Certificate');
-    expect(html).toContain('Acute bronchitis');
+    expect(html).toContain('Bacterial conjunctivitis');
+    expect(html).toContain('Diplomate, Philippine Board of Ophthalmology');
     expect(html).toContain('advised to rest');
   });
 });

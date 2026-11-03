@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import {
   clinicCreateSchema,
   clinicUpdateSchema,
@@ -12,26 +13,33 @@ import { requireAuth, requireDoctor } from '../auth/middleware.js';
 
 export const clinicsRouter = Router();
 
+const clinicListQuerySchema = paginationSchema.extend({
+  includeInactive: z.enum(['true', 'false']).optional(),
+});
+
 // Every clinic endpoint requires an authenticated user; mutations and
 // schedule changes additionally require the Doctor role.
 clinicsRouter.use(requireAuth);
 
-/** GET /api/clinics — paginated list. */
+/** GET /api/clinics — paginated list of active clinics; `?includeInactive=true` lists all. */
 clinicsRouter.get(
   '/',
-  validate(paginationSchema, 'query'),
+  validate(clinicListQuerySchema, 'query'),
   asyncHandler(async (req, res) => {
-    const { page, pageSize } = req.query as unknown as {
+    const { page, pageSize, includeInactive } = req.query as unknown as {
       page: number;
       pageSize: number;
+      includeInactive?: 'true' | 'false';
     };
+    const where = includeInactive === 'true' ? {} : { isActive: true };
     const [items, total] = await Promise.all([
       prisma.clinic.findMany({
+        where,
         orderBy: { name: 'asc' },
         skip: (page - 1) * pageSize,
         take: pageSize,
       }),
-      prisma.clinic.count(),
+      prisma.clinic.count({ where }),
     ]);
     res.json({ items, total, page, pageSize });
   }),
@@ -77,14 +85,17 @@ clinicsRouter.patch(
   }),
 );
 
-/** DELETE /api/clinics/:id. */
-clinicsRouter.delete(
-  '/:id',
+/** POST /api/clinics/:id/deactivate — clinics are never deleted; their records must survive. */
+clinicsRouter.post(
+  '/:id/deactivate',
   requireDoctor,
   validate(idParamSchema, 'params'),
   asyncHandler(async (req, res) => {
-    await prisma.clinic.delete({ where: { id: req.params.id } });
-    res.status(204).end();
+    const clinic = await prisma.clinic.update({
+      where: { id: req.params.id },
+      data: { isActive: false },
+    });
+    res.json(clinic);
   }),
 );
 

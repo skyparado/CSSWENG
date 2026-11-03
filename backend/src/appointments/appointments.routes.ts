@@ -9,6 +9,7 @@ import {
 import { prisma } from '../prisma.js';
 import { asyncHandler, badRequest, conflict, notFound, validate } from '../http.js';
 import { checkWithinOperatingHours } from './operatingHours.js';
+import { closeFollowUpsForCompletedAppointment } from '../followups/followups.service.js';
 import { requireAuth } from '../auth/middleware.js';
 
 export const appointmentsRouter = Router();
@@ -161,16 +162,25 @@ appointmentsRouter.patch(
         status: patch.status,
       },
     });
+    // A completed visit closes the follow-up tasks linked to it (FR-5.5.9).
+    if (patch.status === 'COMPLETED') {
+      await closeFollowUpsForCompletedAppointment(appt.id, req.session?.user?.userId);
+    }
     res.json(appt);
   }),
 );
 
-/** DELETE /api/appointments/:id. */
+/** DELETE /api/appointments/:id — cancels; appointments are never hard-deleted. */
 appointmentsRouter.delete(
   '/:id',
   validate(idParamSchema, 'params'),
   asyncHandler(async (req, res) => {
-    await prisma.appointment.delete({ where: { id: req.params.id } });
-    res.status(204).end();
+    const existing = await prisma.appointment.findUnique({ where: { id: req.params.id } });
+    if (!existing) throw notFound('Appointment not found');
+    const appt = await prisma.appointment.update({
+      where: { id: req.params.id },
+      data: { status: 'CANCELLED' },
+    });
+    res.json(appt);
   }),
 );
