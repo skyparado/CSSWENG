@@ -24,7 +24,10 @@ model Patient {
   lastName     String
   // Contact details used by reminders. Dev 2: keep these when replacing the
   // stub (the full model stores them encrypted).
-  mobileNumber String?
+  
+  /// @encrypted
+  mobileNumber  String?
+
   email        String?
   createdAt    DateTime @default(now())
 
@@ -526,7 +529,10 @@ model ClinicalImage {
   fileName      String
   mimeType      String
   sizeBytes     Int
+
+  /// @encrypted
   caption       String?
+
   status        ImageStatus @default(ACTIVE)
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
