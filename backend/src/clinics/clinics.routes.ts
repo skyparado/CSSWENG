@@ -8,8 +8,13 @@ import {
 } from '@clinic/schemas';
 import { prisma } from '../prisma.js';
 import { asyncHandler, notFound, validate } from '../http.js';
+import { requireAuth, requireDoctor } from '../auth/middleware.js';
 
 export const clinicsRouter = Router();
+
+// Every clinic endpoint requires an authenticated user; mutations and
+// schedule changes additionally require the Doctor role.
+clinicsRouter.use(requireAuth);
 
 /** GET /api/clinics — paginated list. */
 clinicsRouter.get(
@@ -49,6 +54,7 @@ clinicsRouter.get(
 /** POST /api/clinics — create. */
 clinicsRouter.post(
   '/',
+  requireDoctor,
   validate(clinicCreateSchema),
   asyncHandler(async (req, res) => {
     const clinic = await prisma.clinic.create({ data: req.body });
@@ -59,6 +65,7 @@ clinicsRouter.post(
 /** PATCH /api/clinics/:id — update. */
 clinicsRouter.patch(
   '/:id',
+  requireDoctor,
   validate(idParamSchema, 'params'),
   validate(clinicUpdateSchema),
   asyncHandler(async (req, res) => {
@@ -73,6 +80,7 @@ clinicsRouter.patch(
 /** DELETE /api/clinics/:id. */
 clinicsRouter.delete(
   '/:id',
+  requireDoctor,
   validate(idParamSchema, 'params'),
   asyncHandler(async (req, res) => {
     await prisma.clinic.delete({ where: { id: req.params.id } });
@@ -100,6 +108,7 @@ clinicsRouter.get(
 /** PUT /api/clinics/:id/schedule — replace the full weekly schedule. */
 clinicsRouter.put(
   '/:id/schedule',
+  requireDoctor,
   validate(idParamSchema, 'params'),
   validate(clinicScheduleReplaceSchema),
   asyncHandler(async (req, res) => {
