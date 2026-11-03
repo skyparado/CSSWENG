@@ -17,6 +17,7 @@ import { medicationsRouter } from './medications/medications.routes.js';
 import { allergiesRouter } from './medications/allergies.routes.js';
 import { auditRouter } from './audit/audit.routes.js';
 import { auditMiddleware } from './audit/audit.middleware.js';
+import { clinicalImagesRouter } from './clinicalImages/clinicalImages.routes.js';
 
 /**
  * Build the Express app (no network listen). Kept separate from index.ts so
@@ -47,6 +48,7 @@ export function createApp(): Express {
   app.use('/api/auth', authRouter);
   app.use('/api/users', usersRouter);
   app.use('/api/audit', auditRouter);
+  app.use('/api/clinical-images', clinicalImagesRouter);
   app.use('/health', healthRouter);
   app.use('/api/clinics', clinicsRouter);
   app.use('/api/appointments', appointmentsRouter);
