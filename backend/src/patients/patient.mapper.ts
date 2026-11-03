@@ -11,7 +11,7 @@ import {
 
 export type Role = "DOCTOR" | "SECRETARY";
 
-/** Columns stored encrypted. Keep in sync with the @encrypted marks in schema.prisma. */
+/** Columns stored encrypted. Keep in sync with the "app-encrypted" comments in schema.prisma. */
 const ENCRYPTED = [
   "firstName",
   "middleName",
