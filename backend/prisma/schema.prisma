@@ -56,6 +56,8 @@ model User {
   updatedAt           DateTime   @updatedAt
 
   documentRequests DocumentRequest[]
+  documentsSigned  Document[]        @relation("DocumentSignedBy")
+  documentsSent    Document[]        @relation("DocumentSentBy")
 
   consentsRecorded    PatientConsent[] @relation("ConsentRecordedBy")
   consentsWithdrawn   PatientConsent[] @relation("ConsentWithdrawnBy")
@@ -94,13 +96,14 @@ model Clinic {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  schedules    ClinicSchedule[]
-  appointments Appointment[]
-  documents    Document[]
-  followUps    FollowUp[]
-  outreachLogs OutreachLog[]
-  medications  Medication[]
-  allergies    Allergy[]
+  schedules        ClinicSchedule[]
+  appointments     Appointment[]
+  documents        Document[]
+  documentRequests DocumentRequest[]
+  followUps        FollowUp[]
+  outreachLogs     OutreachLog[]
+  medications      Medication[]
+  allergies        Allergy[]
 
   @@index([isActive])
 }
@@ -138,8 +141,8 @@ model Appointment {
   createdAt DateTime          @default(now())
   updatedAt DateTime          @updatedAt
 
-  clinic    Clinic     @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-  patient   Patient    @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  clinic    Clinic     @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  patient   Patient    @relation(fields: [patientId], references: [id], onDelete: Restrict)
   followUps FollowUp[]
 
   @@index([clinicId, startsAt])
@@ -175,12 +178,19 @@ model DocumentRequest {
   createdAt     DateTime              @default(now())
   updatedAt     DateTime              @updatedAt
 
-  patient     Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  clinic      Clinic    @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  patient     Patient   @relation(fields: [patientId], references: [id], onDelete: Restrict)
   requestedBy User?     @relation(fields: [requestedById], references: [id], onDelete: SetNull)
   document    Document?
 
   @@index([status])
   @@index([patientId])
+  @@index([clinicId])
+}
+
+enum DocumentSendChannel {
+  EMAIL
+  PRINT
 }
 
 /// A generated, stored document (PDF in S3).
@@ -196,9 +206,18 @@ model Document {
   sizeBytes  Int
   createdAt  DateTime     @default(now())
 
-  clinic      Clinic          @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-  patient     Patient         @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  request     DocumentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  signedById  String?
+  signedAt    DateTime?
+  sentById    String?
+  sentAt      DateTime?
+  sentVia     DocumentSendChannel?
+  sentToEmail String?
+
+  clinic      Clinic          @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  patient     Patient         @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  request     DocumentRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  signedBy    User?           @relation("DocumentSignedBy", fields: [signedById], references: [id], onDelete: Restrict)
+  sentBy      User?           @relation("DocumentSentBy", fields: [sentById], references: [id], onDelete: Restrict)
   medications Medication[]
 
   @@index([patientId])
