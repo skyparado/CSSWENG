@@ -3,6 +3,7 @@ import { env } from './env.js';
 import { prisma } from './prisma.js';
 import { shutdown, warmUp } from './documents/pdf.service.js';
 import { ensureBucket } from './storage/s3.js';
+import { startReminderWorker, stopReminderWorker } from './reminders/worker.js';
 
 async function main() {
   const app = createApp();
@@ -19,6 +20,14 @@ async function main() {
     console.error('Could not ensure S3 bucket (will retry on first upload):', err);
   });
 
+  // Reminder worker + daily scan (BullMQ). Disable with REMINDERS_ENABLED=false.
+  if (env.REMINDERS_ENABLED && env.NODE_ENV !== 'test') {
+    startReminderWorker().catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error('Reminder worker failed to start:', err);
+    });
+  }
+
   const server = app.listen(env.PORT, () => {
     // eslint-disable-next-line no-console
     console.log(`API listening on http://localhost:${env.PORT} (${env.NODE_ENV})`);
@@ -28,6 +37,7 @@ async function main() {
     // eslint-disable-next-line no-console
     console.log(`\n${signal} received, shutting down…`);
     server.close();
+    await stopReminderWorker();
     await shutdown();
     await prisma.$disconnect();
     process.exit(0);
