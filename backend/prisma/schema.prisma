@@ -452,3 +452,43 @@ model Allergy {
 
   @@index([patientId, voidedAt])
 }
+
+// =============================== Audit Log (Dev 4) ===========================
+
+/// Append-only audit log of every meaningful action in the system. Rows are
+/// hash-chained for tamper-evidence (entryHash includes previousHash + content).
+/// A Postgres trigger blocks UPDATE and DELETE at the DB level — even direct
+/// SQL cannot rewrite history. User fields are snapshotted strings (not
+/// foreign keys) so that deleting a user never removes their audit trail.
+model AuditLog {
+  id           String   @id @default(cuid())
+  // Snapshot of the actor at the time of the event (null for pre-auth events
+  // like failed logins against an unknown email).
+  userId       String?
+  userEmail    String?
+  userRole     String?
+  // What happened: a short constant like LOGIN_SUCCESS, LOGIN_FAILED,
+  // USER_APPROVED, APPOINTMENT_CREATED. See src/audit/actions.ts for the list.
+  action       String
+  // The thing it happened to.
+  resourceType String?
+  resourceId   String?
+  // HTTP context (null for background jobs).
+  method       String?
+  path         String?
+  statusCode   Int?
+  ipAddress    String?
+  userAgent    String?
+  // Optional per-event detail payload.
+  metadata     Json?
+  createdAt    DateTime @default(now())
+  // Hash chain: entryHash = sha256(previousHash + canonicalContent). The first
+  // row's previousHash is the empty string.
+  previousHash String
+  entryHash    String   @unique
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+  @@index([resourceType, resourceId])
+  @@index([createdAt])
+}

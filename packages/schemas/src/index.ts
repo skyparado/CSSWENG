@@ -11,3 +11,4 @@ export * from './auth.js';
 export * from './users.js';
 export * from './followup.js';
 export * from './medication.js';
+export * from './audit.js';

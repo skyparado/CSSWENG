@@ -5,6 +5,9 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.test.ts'],
     globals: false,
+    // Run test files one at a time so parallel suites don't contend on the
+    // Postgres advisory lock the audit middleware takes for every HTTP write.
+    fileParallelism: false,
     // Defaults so modules that read env.ts load in unit tests with no .env file.
     // Real values (e.g. CI's) win when set. Unit tests that mock Prisma and the
     // queue never open a connection with these.
