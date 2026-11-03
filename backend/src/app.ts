@@ -16,6 +16,8 @@ import { medicationsRouter } from './medications/medications.routes.js';
 import { allergiesRouter } from './medications/allergies.routes.js';
 import { requireAuth } from './auth/guards.js';
 import { createPatientRouter } from './patients/patient.routes.js';
+import { createEncounterRouter } from './encounters/encounter.routes.js';
+import { createComparisonRouter, createFindingRouter, createLabResultRouter } from './results/results.routes.js';
 import { prisma } from './prisma.js';
 
 /**
@@ -53,6 +55,12 @@ export function createApp(): Express {
   app.use('/api/allergies', allergiesRouter);
   // Patient registration, search and demographics (Doctor and Secretary).
   app.use('/api/patients', requireAuth, createPatientRouter(prisma));
+  // Visits, consultation notes, signing and addenda.
+  app.use('/api/encounters', requireAuth, createEncounterRouter(prisma));
+  // Examination findings, lab results and the comparison across visits.
+  app.use('/api/encounters/:encounterId/findings', requireAuth, createFindingRouter(prisma));
+  app.use('/api/lab-results', requireAuth, createLabResultRouter(prisma));
+  app.use('/api/patients', requireAuth, createComparisonRouter(prisma));
 
   app.use(errorHandler);
   return app;

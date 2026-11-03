@@ -178,12 +178,12 @@ export async function searchPatients(db: Db, query: PatientSearchQuery, actor: A
     and.push({ OR: conds });
   }
   if (query.scope === "clinic") {
-    // "Seen at this clinic": registered here or has an appointment here.
-    // TODO: switch to encounters once that model exists.
+    // "Seen at this clinic": registered here, booked here, or had a visit here.
     and.push({
       OR: [
         { registeredClinicId: actor.activeClinicId },
         { appointments: { some: { clinicId: actor.activeClinicId } } },
+        { encounters: { some: { clinicId: actor.activeClinicId } } },
       ],
     });
   }

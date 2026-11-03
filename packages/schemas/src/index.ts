@@ -6,3 +6,5 @@ export * from './auth.js';
 export * from './followup.js';
 export * from './medication.js';
 export * from './patients.js';
+export * from './encounters.js';
+export * from './results.js';

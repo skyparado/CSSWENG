@@ -83,12 +83,203 @@ model Patient {
   outreachLogs     OutreachLog[]
   medications      Medication[]
   allergies        Allergy[]
+  encounters       Encounter[]
+  examFindings     ExamFinding[]
+  labResults       LabResult[]
 
   @@index([lastNameIdx])
   @@index([firstNameIdx])
   @@index([dobIdx, lastNameIdx])
   @@index([mobileIdx])
   @@index([registeredClinicId])
+}
+
+// ============ Encounters, clinical notes, findings and lab results (Dev 2) ===
+
+enum EncounterType {
+  NEW_PATIENT
+  FOLLOW_UP
+  PROCEDURE
+  WALK_IN
+}
+
+/// OPEN until the primary note is signed, then SIGNED (set by a database
+/// trigger in the same statement that signs the note).
+enum EncounterStatus {
+  OPEN
+  SIGNED
+}
+
+enum NoteType {
+  PRIMARY
+  ADDENDUM
+}
+
+enum NoteStatus {
+  DRAFT
+  SIGNED
+}
+
+/// OU is accepted only for fields that are measured with both eyes together.
+enum Eye {
+  OD
+  OS
+  OU
+}
+
+/// One patient visit at one clinic (S06 visit list, S07 header).
+/// Holds at most one PRIMARY note, plus dated addenda once that note is signed.
+model Encounter {
+  id                String          @id @default(cuid())
+  patientId         String
+  clinicId          String
+  /// Set when the visit came from a booked appointment. One encounter per appointment.
+  appointmentId     String?         @unique
+  attendingDoctorId String
+  type              EncounterType
+  /// Clinic-local date of the visit, used for chart lists and comparisons.
+  visitDate         DateTime        @db.Date
+  visitStartedAt    DateTime        @default(now())
+  /// Set when the primary note is signed.
+  visitEndedAt      DateTime?
+  status            EncounterStatus @default(OPEN)
+  createdById       String
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  patient         Patient        @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  clinic          Clinic         @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  appointment     Appointment?   @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  attendingDoctor User           @relation("EncounterAttendingDoctor", fields: [attendingDoctorId], references: [id], onDelete: Restrict)
+  createdBy       User           @relation("EncounterCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  notes           ClinicalNote[]
+  examFindings    ExamFinding[]
+  labResults      LabResult[]
+
+  @@index([patientId, visitDate])
+  @@index([clinicId, visitDate])
+}
+
+/// Consultation note (S07) or a dated addendum to it.
+///
+/// PRIMARY: one per encounter (partial unique index in the migration). Editable
+/// while DRAFT; signing sets SIGNED and locks it.
+/// ADDENDUM: points at the signed PRIMARY through parentNoteId, needs an
+/// addendumReason, and is inserted already SIGNED.
+///
+/// Database triggers (see the encounters migration) reject any UPDATE or
+/// DELETE of a SIGNED row, and addenda on unsigned notes.
+model ClinicalNote {
+  id           String     @id @default(cuid())
+  encounterId  String
+  noteType     NoteType   @default(PRIMARY)
+  parentNoteId String?
+  status       NoteStatus @default(DRAFT)
+  /// Bumped on every save. Clients send it back so a stale autosave cannot
+  /// overwrite newer text, and so the doctor signs exactly what they saw.
+  version      Int        @default(1)
+
+  chiefComplaint String? // app-encrypted
+  subjective     String? // app-encrypted
+  objective      String? // app-encrypted
+  assessment     String? // app-encrypted
+  plan           String? // app-encrypted
+  // app-encrypted JSON: [{ code?, label, eye? }]
+  diagnosisItems String?
+  addendumReason String? @db.VarChar(500)
+
+  authorId    String
+  signedById  String?
+  signedAt    DateTime?
+  /// SHA-256 over the plaintext content and signature at signing time, so a
+  /// later change to the stored ciphertext can be detected.
+  contentHash String?   @db.Char(64)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  encounter  Encounter      @relation(fields: [encounterId], references: [id], onDelete: Restrict)
+  parentNote ClinicalNote?  @relation("NoteAddenda", fields: [parentNoteId], references: [id], onDelete: Restrict)
+  addenda    ClinicalNote[] @relation("NoteAddenda")
+  author     User           @relation("NoteAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  signedBy   User?          @relation("NoteSignedBy", fields: [signedById], references: [id], onDelete: Restrict)
+
+  @@index([encounterId])
+  @@index([parentNoteId, signedAt])
+  @@index([status])
+}
+
+/// One eye-specific measurement (S07 examination table, S08 comparison).
+/// Editable while the encounter is OPEN. Once the primary note is signed the
+/// rows are locked; a correction is a new row with amendsFindingId set.
+model ExamFinding {
+  id              String   @id @default(cuid())
+  patientId       String
+  encounterId     String
+  clinicId        String
+  eye             Eye
+  /// Comparison field key, e.g. VA, IOP (see EXAM_FIELDS in @clinic/schemas).
+  fieldName       String   @db.VarChar(100)
+  valueText       String // app-encrypted
+  unit            String?  @db.VarChar(30)
+  method          String?  @db.VarChar(100)
+  measuredAt      DateTime
+  /// Derived from visual acuity so different notations can be compared.
+  logmarValue     Decimal? @db.Decimal(6, 3)
+  lookupVersion   Int
+  amendsFindingId String?
+  amendmentReason String?  @db.VarChar(500)
+  recordedById    String
+  recordedAt      DateTime @default(now())
+
+  patient    Patient       @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  encounter  Encounter     @relation(fields: [encounterId], references: [id], onDelete: Restrict)
+  clinic     Clinic        @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  amends     ExamFinding?  @relation("FindingAmendments", fields: [amendsFindingId], references: [id], onDelete: Restrict)
+  amendedBy  ExamFinding[] @relation("FindingAmendments")
+  recordedBy User          @relation("FindingRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+
+  @@index([patientId, fieldName])
+  @@index([encounterId])
+  @@index([amendsFindingId])
+}
+
+/// Laboratory or diagnostic result, usually from an outside laboratory (S08
+/// "Add Lab Result"). Insert-only: a correction is a new row with
+/// amendsLabResultId set, and the original stays in the history.
+model LabResult {
+  id                String   @id @default(cuid())
+  patientId         String
+  /// Optional: patients often bring results that are not tied to a visit.
+  encounterId       String?
+  clinicId          String
+  testName          String   @db.VarChar(100)
+  resultValue       String // app-encrypted
+  resultUnit        String   @db.VarChar(20)
+  referenceRange    String?  @db.VarChar(50)
+  /// Computed from referenceRange when the value and range are numeric.
+  outOfRange        Boolean  @default(false)
+  /// Specimen date; never in the future. Results are ordered by this date.
+  collectionDate    DateTime @db.Date
+  laboratoryName    String   @db.VarChar(150)
+  /// Object key of the scanned report in the encrypted document store.
+  reportFileRef     String?  @db.VarChar(255)
+  lookupVersion     Int
+  amendsLabResultId String?
+  amendmentReason   String?  @db.VarChar(500)
+  recordedById      String
+  recordedAt        DateTime @default(now())
+
+  patient    Patient     @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  encounter  Encounter?  @relation(fields: [encounterId], references: [id], onDelete: Restrict)
+  clinic     Clinic      @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  amends     LabResult?  @relation("LabResultAmendments", fields: [amendsLabResultId], references: [id], onDelete: Restrict)
+  amendedBy  LabResult[] @relation("LabResultAmendments")
+  recordedBy User        @relation("LabResultRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+
+  @@index([patientId, testName, collectionDate])
+  @@index([encounterId])
+  @@index([amendsLabResultId])
 }
 
 /// Staff account. Only the Doctor can approve, change, revoke accounts and the
@@ -120,6 +311,12 @@ model User {
   medicationsRecorded Medication[]
   allergiesRecorded   Allergy[]
   patientsCreated     Patient[]        @relation("PatientCreatedBy")
+  encountersCreated   Encounter[]      @relation("EncounterCreatedBy")
+  notesAuthored       ClinicalNote[]   @relation("NoteAuthor")
+  notesSigned         ClinicalNote[]   @relation("NoteSignedBy")
+  encountersAttended  Encounter[]      @relation("EncounterAttendingDoctor")
+  findingsRecorded    ExamFinding[]    @relation("FindingRecordedBy")
+  labResultsRecorded  LabResult[]      @relation("LabResultRecordedBy")
 
   @@index([status])
   @@index([role])
@@ -159,6 +356,9 @@ model Clinic {
   medications        Medication[]
   allergies          Allergy[]
   patientsRegistered Patient[]         @relation("PatientRegisteredClinic")
+  encounters         Encounter[]
+  examFindings       ExamFinding[]
+  labResults         LabResult[]
 
   @@index([isActive])
 }
@@ -199,6 +399,7 @@ model Appointment {
   clinic    Clinic     @relation(fields: [clinicId], references: [id], onDelete: Restrict)
   patient   Patient    @relation(fields: [patientId], references: [id], onDelete: Restrict)
   followUps FollowUp[]
+  encounter Encounter?
 
   @@index([clinicId, startsAt])
   @@index([patientId, startsAt])
