@@ -5,35 +5,51 @@ import argon2 from 'argon2';
 const prisma = new PrismaClient();
 
 /**
- * Seed demo data for local dev: one clinic with Mon-Fri 09:00-17:00 hours,
- * one patient, and two staff accounts (a doctor and a secretary).
+ * Seed local dev data: Dr. Pacio's three clinics with their real hours, one
+ * patient, and two staff accounts (a doctor and a secretary).
  *
  * The staff passwords here are only for local dev. They are never used in
  * production.
  */
-async function main() {
-  const clinic = await prisma.clinic.upsert({
-    where: { id: 'seed-clinic-mabuhay' },
-    update: {},
-    create: {
-      id: 'seed-clinic-mabuhay',
-      name: 'Mabuhay Family Clinic',
-      address: '123 Katipunan Ave, Quezon City',
-      phone: '+63 2 1234 5678',
-      email: 'hello@mabuhayclinic.ph',
-      timezone: 'Asia/Manila',
-    },
-  });
+const CLINICS = [
+  {
+    id: 'seed-clinic-uerm',
+    name: 'UERM',
+    hours: [
+      { dayOfWeek: 1, openTime: '13:00', closeTime: '16:00' },
+      { dayOfWeek: 4, openTime: '10:00', closeTime: '12:00' },
+    ],
+  },
+  {
+    id: 'seed-clinic-tamesis',
+    name: 'Clinica Tamesis',
+    hours: [{ dayOfWeek: 3, openTime: '13:00', closeTime: '16:00' }],
+  },
+  {
+    id: 'seed-clinic-happy-eyes',
+    name: 'Happy Eyes',
+    hours: [
+      { dayOfWeek: 5, openTime: '13:00', closeTime: '16:00' },
+      { dayOfWeek: 6, openTime: '13:00', closeTime: '16:00' },
+    ],
+  },
+];
 
-  await prisma.clinicSchedule.deleteMany({ where: { clinicId: clinic.id } });
-  await prisma.clinicSchedule.createMany({
-    data: [1, 2, 3, 4, 5].map((dayOfWeek) => ({
-      clinicId: clinic.id,
-      dayOfWeek,
-      openTime: '09:00',
-      closeTime: '17:00',
-    })),
-  });
+async function main() {
+  // Older dev databases still have the placeholder clinic; hide it rather than delete it.
+  await prisma.clinic.updateMany({ where: { id: 'seed-clinic-mabuhay' }, data: { isActive: false } });
+
+  for (const { hours, ...clinic } of CLINICS) {
+    await prisma.clinic.upsert({
+      where: { id: clinic.id },
+      update: { name: clinic.name },
+      create: { ...clinic, timezone: 'Asia/Manila' },
+    });
+    await prisma.clinicSchedule.deleteMany({ where: { clinicId: clinic.id } });
+    await prisma.clinicSchedule.createMany({
+      data: hours.map((h) => ({ ...h, clinicId: clinic.id })),
+    });
+  }
 
   await prisma.patient.upsert({
     where: { id: 'seed-patient-juan' },
@@ -68,7 +84,7 @@ async function main() {
   });
 
   // eslint-disable-next-line no-console
-  console.log('Seeded demo clinic, schedule, patient, and auth users.');
+  console.log('Seeded clinics, schedules, patient, and auth users.');
   // eslint-disable-next-line no-console
   console.log('  doctor@mabuhayclinic.local / DoctorPass123!');
   // eslint-disable-next-line no-console

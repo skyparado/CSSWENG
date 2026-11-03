@@ -1,7 +1,12 @@
 import { Router } from 'express';
-import { documentRequestCreateSchema, idParamSchema } from '@clinic/schemas';
+import {
+  documentRequestCreateSchema,
+  documentSendSchema,
+  idParamSchema,
+  type DocumentSend,
+} from '@clinic/schemas';
 import { prisma } from '../prisma.js';
-import { asyncHandler, notFound, validate } from '../http.js';
+import { asyncHandler, badRequest, notFound, validate } from '../http.js';
 import { getObject } from '../storage/s3.js';
 import { generateDocument } from './documents.service.js';
 import { requireAuth, requireDoctor } from '../auth/middleware.js';
@@ -22,6 +27,11 @@ documentsRouter.post(
   validate(documentRequestCreateSchema),
   asyncHandler(async (req, res) => {
     const input = req.body as import('@clinic/schemas').DocumentRequestCreate;
+    // The letterhead always shows the clinic as stored, not what the client sent.
+    const clinic = await prisma.clinic.findUnique({ where: { id: input.clinicId } });
+    if (!clinic || !clinic.isActive) throw notFound('Clinic not found');
+    input.payload.clinicName = clinic.name;
+    input.payload.clinicAddress = clinic.address ?? undefined;
 
     const request = await prisma.documentRequest.create({
       data: {
@@ -30,6 +40,7 @@ documentsRouter.post(
         patientId: input.patientId,
         payload: input.payload as object,
         status: 'PENDING',
+        requestedById: req.session.user!.userId,
       },
     });
 
@@ -78,6 +89,47 @@ documentsRouter.get(
     const document = await prisma.document.findUnique({ where: { id: req.params.id } });
     if (!document) throw notFound('Document not found');
     res.json(document);
+  }),
+);
+
+/** POST /api/documents/:id/sign — the Doctor signs a generated document. */
+documentsRouter.post(
+  '/:id/sign',
+  requireDoctor,
+  validate(idParamSchema, 'params'),
+  asyncHandler(async (req, res) => {
+    const document = await prisma.document.findUnique({ where: { id: req.params.id } });
+    if (!document) throw notFound('Document not found');
+    if (document.signedAt) throw badRequest('Document is already signed');
+    const signed = await prisma.document.update({
+      where: { id: document.id },
+      data: { signedById: req.session.user!.userId, signedAt: new Date() },
+    });
+    res.json(signed);
+  }),
+);
+
+/** POST /api/documents/:id/send — record a signed document as emailed or printed. */
+documentsRouter.post(
+  '/:id/send',
+  validate(idParamSchema, 'params'),
+  validate(documentSendSchema),
+  asyncHandler(async (req, res) => {
+    const { via, email } = req.body as DocumentSend;
+    const document = await prisma.document.findUnique({ where: { id: req.params.id } });
+    if (!document) throw notFound('Document not found');
+    if (!document.signedAt) throw badRequest('Only signed documents can be sent');
+    // shortcut: records the send only; no email is dispatched until an email provider with attachments is chosen.
+    const sent = await prisma.document.update({
+      where: { id: document.id },
+      data: {
+        sentById: req.session.user!.userId,
+        sentAt: new Date(),
+        sentVia: via,
+        sentToEmail: via === 'EMAIL' ? email : null,
+      },
+    });
+    res.json(sent);
   }),
 );
 
