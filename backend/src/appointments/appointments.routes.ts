@@ -170,12 +170,17 @@ appointmentsRouter.patch(
   }),
 );
 
-/** DELETE /api/appointments/:id. */
+/** DELETE /api/appointments/:id — cancels; appointments are never hard-deleted. */
 appointmentsRouter.delete(
   '/:id',
   validate(idParamSchema, 'params'),
   asyncHandler(async (req, res) => {
-    await prisma.appointment.delete({ where: { id: req.params.id } });
-    res.status(204).end();
+    const existing = await prisma.appointment.findUnique({ where: { id: req.params.id } });
+    if (!existing) throw notFound('Appointment not found');
+    const appt = await prisma.appointment.update({
+      where: { id: req.params.id },
+      data: { status: 'CANCELLED' },
+    });
+    res.json(appt);
   }),
 );

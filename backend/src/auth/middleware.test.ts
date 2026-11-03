@@ -95,11 +95,11 @@ describe('requireDoctor middleware', () => {
     expect(res.status).toBe(403);
   });
 
-  it('rejects a Secretary DELETE /api/clinics/:id with 403', async () => {
+  it('rejects a Secretary POST /api/clinics/:id/deactivate with 403', async () => {
     if (!createdClinicId) {
       throw new Error('previous test did not create a clinic');
     }
-    const res = await secretaryAgent.delete(`/api/clinics/${createdClinicId}`);
+    const res = await secretaryAgent.post(`/api/clinics/${createdClinicId}/deactivate`);
     expect(res.status).toBe(403);
   });
 

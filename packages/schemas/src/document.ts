@@ -22,6 +22,7 @@ export const prescriptionPayloadSchema = z.object({
   patientName: z.string().min(1).max(200),
   patientAge: z.number().int().min(0).max(130).optional(),
   clinicName: z.string().min(1).max(200),
+  clinicAddress: z.string().max(300).optional(),
   prescriberName: z.string().min(1).max(200),
   prescriberLicense: z.string().max(100).optional(),
   issuedOn: z.coerce.date(),
@@ -43,6 +44,7 @@ export type PrescriptionPayload = z.infer<typeof prescriptionPayloadSchema>;
 export const medicalCertificatePayloadSchema = z.object({
   patientName: z.string().min(1).max(200),
   clinicName: z.string().min(1).max(200),
+  clinicAddress: z.string().max(300).optional(),
   prescriberName: z.string().min(1).max(200),
   prescriberLicense: z.string().max(100).optional(),
   issuedOn: z.coerce.date(),
@@ -54,6 +56,18 @@ export const medicalCertificatePayloadSchema = z.object({
 export type MedicalCertificatePayload = z.infer<
   typeof medicalCertificatePayloadSchema
 >;
+
+/** Body of POST /api/documents/:id/send. An email address is required for EMAIL. */
+export const documentSendSchema = z
+  .object({
+    via: z.enum(['EMAIL', 'PRINT']),
+    email: z.string().email().optional(),
+  })
+  .refine((v) => v.via !== 'EMAIL' || v.email, {
+    message: 'email is required when sending by EMAIL',
+    path: ['email'],
+  });
+export type DocumentSend = z.infer<typeof documentSendSchema>;
 
 /* ----------------------------- Document request ------------------------------ */
 
