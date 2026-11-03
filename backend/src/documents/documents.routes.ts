@@ -4,14 +4,21 @@ import { prisma } from '../prisma.js';
 import { asyncHandler, notFound, validate } from '../http.js';
 import { getObject } from '../storage/s3.js';
 import { generateDocument } from './documents.service.js';
+import { requireAuth, requireDoctor } from '../auth/middleware.js';
 
 export const documentsRouter = Router();
+
+// All document endpoints require an authenticated user. Creating a request
+// (prepare & e-sign) is Doctor-only; both roles may list / view / download
+// an already-signed document.
+documentsRouter.use(requireAuth);
 
 /* --------------------------- Document requests ----------------------------- */
 
 /** POST /api/document-requests — create a request and render it synchronously. */
 documentsRouter.post(
   '/requests',
+  requireDoctor,
   validate(documentRequestCreateSchema),
   asyncHandler(async (req, res) => {
     const input = req.body as import('@clinic/schemas').DocumentRequestCreate;
