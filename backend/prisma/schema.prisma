@@ -22,8 +22,9 @@ enum Sex {
 
 /// Shared patient chart (data dictionary 1.4.4).
 ///
-/// Fields marked @encrypted hold AES-256-GCM ciphertext written by
-/// src/lib/fieldCrypto.ts, never plaintext. Because ciphertext cannot be
+/// Fields commented "app-encrypted" hold AES-256-GCM ciphertext written by
+/// src/lib/fieldCrypto.ts, never plaintext. Do NOT add the prisma-field-encryption
+/// tag to these fields, or they will be encrypted twice. Because ciphertext cannot be
 /// searched, each searchable field also has a keyed HMAC "blind index"
 /// (*Idx columns). Search and duplicate detection run on those indexes.
 /// Blind indexes support exact matches only (after normalisation), not
@@ -34,30 +35,30 @@ model Patient {
   patientSeq         Int    @unique @default(autoincrement())
   registeredClinicId String
 
-  firstName   String /// @encrypted
-  middleName  String? /// @encrypted
-  lastName    String /// @encrypted
-  dateOfBirth String /// @encrypted (ISO date "YYYY-MM-DD")
+  firstName   String // app-encrypted
+  middleName  String? // app-encrypted
+  lastName    String // app-encrypted
+  dateOfBirth String // app-encrypted (ISO date "YYYY-MM-DD")
   sex         Sex
   civilStatus String?
-  occupation  String? /// @encrypted
+  occupation  String? // app-encrypted
 
-  mobileNumber          String /// @encrypted
-  alternatePhone        String? /// @encrypted
-  email                 String? /// @encrypted
-  address               String? /// @encrypted
-  emergencyContactName  String? /// @encrypted
-  emergencyContactPhone String? /// @encrypted
+  mobileNumber          String // app-encrypted
+  alternatePhone        String? // app-encrypted
+  email                 String? // app-encrypted
+  address               String? // app-encrypted
+  emergencyContactName  String? // app-encrypted
+  emergencyContactPhone String? // app-encrypted
 
   hmoProvider      String?
-  hmoMemberNumber  String? /// @encrypted
+  hmoMemberNumber  String? // app-encrypted
   hmoValidUntil    DateTime? @db.Date
-  philhealthNumber String? /// @encrypted
+  philhealthNumber String? // app-encrypted
   referralSource   String?
 
   /// Doctor-only, from supervised intake.
-  medicalHistory    String? /// @encrypted
-  ophthalmicHistory String? /// @encrypted
+  medicalHistory    String? // app-encrypted
+  ophthalmicHistory String? // app-encrypted
 
   // Blind indexes (HMAC-SHA256 hex of the normalised value)
   firstNameIdx String
