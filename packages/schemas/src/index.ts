@@ -13,3 +13,4 @@ export * from './followup.js';
 export * from './medication.js';
 export * from './audit.js';
 export * from './clinicalImage.js';
+export * from './tabletIntake.js';
