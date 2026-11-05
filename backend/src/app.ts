@@ -14,6 +14,9 @@ import { followUpsRouter } from './followups/followups.routes.js';
 import { outreachRouter } from './followups/outreach.routes.js';
 import { medicationsRouter } from './medications/medications.routes.js';
 import { allergiesRouter } from './medications/allergies.routes.js';
+import { requireAuth } from './auth/guards.js';
+import { createPatientRouter } from './patients/patient.routes.js';
+import { prisma } from './prisma.js';
 
 /**
  * Build the Express app (no network listen). Kept separate from index.ts so
@@ -48,6 +51,8 @@ export function createApp(): Express {
   app.use('/api/outreach-logs', outreachRouter);
   app.use('/api/medications', medicationsRouter);
   app.use('/api/allergies', allergiesRouter);
+  // Patient registration, search and demographics (Doctor and Secretary).
+  app.use('/api/patients', requireAuth, createPatientRouter(prisma));
 
   app.use(errorHandler);
   return app;

@@ -5,6 +5,7 @@ import { findActiveReminderConsent } from '../consents/consents.service.js';
 import { addDays, todayInTimezone, toDateOnly } from '../followups/dates.js';
 import { logOutreachAttempt } from '../followups/outreach.service.js';
 import type { Gateways } from './gateway.js';
+import { decryptOpt } from '../lib/fieldCrypto.js';
 
 export interface ReminderJobData {
   followUpId: string;
@@ -68,7 +69,8 @@ export async function processReminder(
   const consent = await findActiveReminderConsent(followUp.patientId, job.channel);
   if (!consent) return { status: 'skipped', reason: 'NO_CONSENT' };
 
-  const to = job.channel === 'SMS' ? followUp.patient.mobileNumber : followUp.patient.email;
+  // Patient contact details are stored encrypted (patients/patient.mapper.ts).
+  const to = decryptOpt(job.channel === 'SMS' ? followUp.patient.mobileNumber : followUp.patient.email);
   if (!to) return { status: 'skipped', reason: 'NO_CONTACT' };
 
   const message = buildReminderMessage({
