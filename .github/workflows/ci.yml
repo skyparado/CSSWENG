@@ -119,6 +119,10 @@ jobs:
       REMINDERS_ENABLED: 'false'
       EMAIL_PROVIDER: smtp
       SMTP_URL: smtp://localhost:1025
+      # env.ts requires this (prisma-field-encryption). Vitest supplies its own
+      # default via vitest.config.ts; the e2e backend is a real server, so it
+      # needs the variable here. Throwaway all-zero key, CI data only.
+      PRISMA_FIELD_ENCRYPTION_KEY: k1.aesgcm256.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 
     steps:
       - uses: actions/checkout@v4

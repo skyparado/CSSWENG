@@ -27,6 +27,10 @@ const loginRateLimiter = rateLimit({
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: { error: 'Too many login attempts from this IP. Try again later.' },
+  // The e2e suite signs in well over 10 times against one long-lived server
+  // from one IP, so the limiter would reject the later specs. Off in tests
+  // only; development and production still enforce it.
+  skip: () => env.NODE_ENV === 'test',
 });
 
 /** POST /api/auth/login — exchange credentials for a session cookie. */

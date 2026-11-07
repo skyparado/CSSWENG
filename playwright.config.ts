@@ -21,7 +21,9 @@ export default defineConfig({
         {
           command: 'npm run dev:backend',
           // Real email to Mailpit (docker-compose.yml), so the send test can read it.
-          env: { EMAIL_PROVIDER: 'smtp', SMTP_URL: 'smtp://localhost:1025' },
+          // NODE_ENV=test matches CI and turns off the login rate limiter,
+          // which the suite's many sign-ins would otherwise trip.
+          env: { NODE_ENV: 'test', EMAIL_PROVIDER: 'smtp', SMTP_URL: 'smtp://localhost:1025' },
           url: 'http://localhost:4000/health',
           reuseExistingServer: true,
           timeout: 120_000,
