@@ -2,9 +2,12 @@ import Redis from 'ioredis';
 import { env } from './env.js';
 
 /**
- * Single Redis client for the process. Used by the session store and later by
- * BullMQ (Dev 3's reminder jobs). Reusing one client keeps the connection
- * count low on the shared dev Redis.
+ * ioredis client reserved for BullMQ (reminder job queue, Dev 3's module).
+ * Session storage uses a SEPARATE node-redis client in src/auth/session.ts
+ * because connect-redis v8 targets the node-redis API, not ioredis.
+ *
+ * BullMQ requires maxRetriesPerRequest: null because its blocking commands
+ * (BRPOPLPUSH, BZPOPMIN, etc.) otherwise crash on retry (see BullMQ docs).
  */
 const globalForRedis = globalThis as unknown as {
   redis: Redis | undefined;
@@ -13,8 +16,7 @@ const globalForRedis = globalThis as unknown as {
 export const redis =
   globalForRedis.redis ??
   new Redis(env.REDIS_URL, {
-    // Fail fast in dev so a dead Redis doesn't hang requests silently.
-    maxRetriesPerRequest: 3,
+    maxRetriesPerRequest: null,
     enableReadyCheck: true,
   });
 
@@ -23,8 +25,7 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 redis.on('error', (err) => {
-  // Avoid crashing on transient hiccups; the per-request retries will surface
-  // a user-visible 500 if it stays down.
+  // Avoid crashing on transient hiccups.
   // eslint-disable-next-line no-console
   console.error('[redis]', err.message);
 });
