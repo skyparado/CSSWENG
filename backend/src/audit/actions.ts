@@ -29,6 +29,9 @@ export const AuditActions = {
   INTAKE_SESSION_SUBMITTED: 'INTAKE_SESSION_SUBMITTED',
   INTAKE_SESSION_CANCELLED: 'INTAKE_SESSION_CANCELLED',
   
+  // Access control
+  ACCESS_REFUSED: 'ACCESS_REFUSED',
+
   // Generic auto-logged HTTP activity (middleware)
   HTTP_REQUEST: 'HTTP_REQUEST',
 } as const;
