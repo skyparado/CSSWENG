@@ -81,6 +81,7 @@ enum UserStatus {
   ACTIVE
   LOCKED
   REVOKED
+  REJECTED
 }
 
 // ================================ Clinic (Dev 1) =============================
