@@ -106,10 +106,37 @@ describe('clinics + appointments (DB)', () => {
   it('cancels instead of deleting an appointment', async () => {
     const list = await agent.get(`/api/appointments?clinicId=${clinicId}`);
     const id = list.body.items[0].id;
-    const res = await agent.delete(`/api/appointments/${id}`);
+    expect((await agent.delete(`/api/appointments/${id}`).send({})).status).toBe(400); // reason required
+    const res = await agent.delete(`/api/appointments/${id}`).send({ reason: 'Patient is travelling' });
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('CANCELLED');
+    expect(res.body.cancelReason).toBe('Patient is travelling');
     expect(await prisma.appointment.findUnique({ where: { id } })).not.toBeNull();
+
+    // The original booking stays in the history.
+    const history = await agent.get(`/api/appointments/${id}/history`);
+    expect(history.body.items.map((e: { action: string }) => e.action)).toEqual(['BOOKED', 'CANCELLED']);
+    expect(history.body.items[1].reason).toBe('Patient is travelling');
+  });
+
+  it('suggests the nearest free times when a booking is refused', async () => {
+    // Monday 2030-01-07 12:00 Manila is before opening (13:00).
+    const res = await agent.post('/api/appointments').send({
+      clinicId,
+      patientId,
+      startsAt: '2030-01-07T04:00:00Z',
+      endsAt: '2030-01-07T04:30:00Z',
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.details.suggestions[0]).toBe('2030-01-07T05:00:00.000Z');
+  });
+
+  it('books a walk-in outside hours, approved at once when the Doctor books it', async () => {
+    const res = await agent.post('/api/appointments/walk-in').send({ clinicId, patientId });
+    expect(res.status).toBe(201);
+    expect(res.body.walkIn).toBe(true);
+    expect(res.body.walkInApprovedAt).not.toBeNull();
+    await agent.delete(`/api/appointments/${res.body.id}`).send({ reason: 'cleanup' });
   });
 
   it('deactivates a clinic and hides it from the default list', async () => {

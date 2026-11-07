@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import nodemailer from 'nodemailer';
 import type { DeliveryStatus } from '@prisma/client';
+import { env } from '../env.js';
 
 export interface SendResult {
   /** Message id returned by the provider; stored on the outreach log. */
@@ -17,6 +19,7 @@ export interface EmailMessage {
   to: string;
   subject: string;
   body: string;
+  attachments?: Array<{ filename: string; content: Buffer; contentType: string }>;
 }
 
 /** Implemented by the SMS provider adapter. Throw on any delivery failure. */
@@ -55,6 +58,23 @@ export class StubEmailGateway implements EmailGateway {
   }
 }
 
+/** Sends through any SMTP server (SMTP_URL), e.g. Mailpit locally or a provider's SMTP relay. */
+export class SmtpEmailGateway implements EmailGateway {
+  private transport = nodemailer.createTransport(env.SMTP_URL);
+
+  async send(message: EmailMessage): Promise<SendResult> {
+    const info = await this.transport.sendMail({
+      from: env.EMAIL_FROM,
+      to: message.to,
+      subject: message.subject,
+      text: message.body,
+      attachments: message.attachments,
+    });
+    // The server accepted it; delivery or bounce is only known later.
+    return { providerMessageId: info.messageId };
+  }
+}
+
 export interface Gateways {
   sms: SmsGateway;
   email: EmailGateway;
@@ -65,5 +85,8 @@ export interface Gateways {
  * is chosen (SMS_PROVIDER / EMAIL_PROVIDER in env.ts).
  */
 export function createGateways(): Gateways {
-  return { sms: new StubSmsGateway(), email: new StubEmailGateway() };
+  return {
+    sms: new StubSmsGateway(),
+    email: env.EMAIL_PROVIDER === 'smtp' ? new SmtpEmailGateway() : new StubEmailGateway(),
+  };
 }

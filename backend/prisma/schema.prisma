@@ -19,17 +19,17 @@ datasource db {
 
 /// PLACEHOLDER — owned by Developer 2. Keep `id`.
 model Patient {
-  id           String   @id @default(cuid())
-  firstName    String
-  lastName     String
+  id        String @id @default(cuid())
+  firstName String
+  lastName  String
   // Contact details used by reminders. Dev 2: keep these when replacing the
   // stub (the full model stores them encrypted).
-  
-  /// @encrypted
-  mobileNumber  String?
 
-  email        String?
-  createdAt    DateTime @default(now())
+  /// @encrypted
+  mobileNumber String?
+
+  email     String?
+  createdAt DateTime @default(now())
 
   appointments     Appointment[]
   documents        Document[]
@@ -61,11 +61,15 @@ model User {
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt
 
-  documentRequests DocumentRequest[]
-  uploadedImages      ClinicalImage[]
-  createdAnnotations  ImageAnnotation[]
-  documentsSigned  Document[]        @relation("DocumentSignedBy")
-  documentsSent    Document[]        @relation("DocumentSentBy")
+  documentRequests   DocumentRequest[]
+  clinics            UserClinic[]
+  appointmentEvents  AppointmentEvent[]
+  walkInsApproved    Appointment[]      @relation("WalkInApprovedBy")
+  documentDeliveries DocumentDelivery[]
+  uploadedImages     ClinicalImage[]
+  createdAnnotations ImageAnnotation[]
+  documentsSigned    Document[]         @relation("DocumentSignedBy")
+  documentsSent      Document[]         @relation("DocumentSentBy")
 
   consentsRecorded    PatientConsent[] @relation("ConsentRecordedBy")
   consentsWithdrawn   PatientConsent[] @relation("ConsentWithdrawnBy")
@@ -76,7 +80,6 @@ model User {
   allergiesRecorded   Allergy[]
 
   startedTabletSessions TabletIntakeSession[] @relation("TabletIntakeSessionStarter")
-  userClinics           UserClinic[]
 
   @@index([status])
   @@index([role])
@@ -109,6 +112,7 @@ model Clinic {
   updatedAt DateTime @updatedAt
 
   schedules        ClinicSchedule[]
+  staff            UserClinic[]
   appointments     Appointment[]
   documents        Document[]
   documentRequests DocumentRequest[]
@@ -118,7 +122,6 @@ model Clinic {
   allergies        Allergy[]
 
   tabletSessions TabletIntakeSession[]
-  userClinics    UserClinic[]
 
   @@index([isActive])
 }
@@ -146,24 +149,60 @@ enum AppointmentStatus {
 }
 
 model Appointment {
-  id        String            @id @default(cuid())
-  clinicId  String
-  patientId String
-  startsAt  DateTime
-  endsAt    DateTime
-  reason    String?
-  status    AppointmentStatus @default(SCHEDULED)
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
+  id                 String            @id @default(cuid())
+  clinicId           String
+  patientId          String
+  startsAt           DateTime
+  endsAt             DateTime
+  reason             String?
+  visitType          String?
+  status             AppointmentStatus @default(SCHEDULED)
+  cancelReason       String?
+  // A walk-in is booked for "now", even outside clinic hours, and needs the
+  // Doctor's approval, which is recorded here.
+  walkIn             Boolean           @default(false)
+  walkInApprovedById String?
+  walkInApprovedAt   DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
 
-  clinic    Clinic     @relation(fields: [clinicId], references: [id], onDelete: Restrict)
-  patient   Patient    @relation(fields: [patientId], references: [id], onDelete: Restrict)
-  followUps FollowUp[]
-  images    ClinicalImage[]
+  clinic           Clinic             @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  patient          Patient            @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  walkInApprovedBy User?              @relation("WalkInApprovedBy", fields: [walkInApprovedById], references: [id], onDelete: Restrict)
+  followUps        FollowUp[]
+  events           AppointmentEvent[]
+  images           ClinicalImage[]
 
   @@index([clinicId, startsAt])
   @@index([patientId, startsAt])
   @@index([status])
+}
+
+enum AppointmentAction {
+  BOOKED
+  RESCHEDULED
+  CANCELLED
+  STATUS_CHANGED
+  WALK_IN_APPROVED
+}
+
+/// Append-only history of an appointment: the original booking is kept when
+/// it is rescheduled or cancelled.
+model AppointmentEvent {
+  id            String            @id @default(cuid())
+  appointmentId String
+  action        AppointmentAction
+  startsAt      DateTime // the time slot after this event
+  endsAt        DateTime
+  status        AppointmentStatus
+  reason        String? // cancel reason
+  actorId       String?
+  at            DateTime          @default(now())
+
+  appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  actor       User?       @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([appointmentId, at])
 }
 
 // =============================== Documents (Dev 1) ===========================
@@ -174,25 +213,36 @@ enum DocumentType {
 }
 
 enum DocumentRequestStatus {
+  REQUESTED // logged by staff; the Doctor has not prepared it yet
   PENDING
   GENERATING
   READY
   FAILED
 }
 
+enum DocumentRequestChannel {
+  PHONE
+  IN_PERSON
+  EMAIL
+}
+
 /// A document generation request. Rendering is handled by the Puppeteer service;
 /// the resulting PDF is stored in S3 and linked via `Document`.
 model DocumentRequest {
-  id            String                @id @default(cuid())
-  type          DocumentType
-  status        DocumentRequestStatus @default(PENDING)
-  clinicId      String
-  patientId     String
-  requestedById String?
-  payload       Json
-  error         String?
-  createdAt     DateTime              @default(now())
-  updatedAt     DateTime              @updatedAt
+  id                     String                  @id @default(cuid())
+  type                   DocumentType
+  status                 DocumentRequestStatus   @default(PENDING)
+  clinicId               String
+  patientId              String
+  requestedById          String?
+  requestedVia           DocumentRequestChannel?
+  notes                  String?
+  payload                Json? // null until the Doctor prepares a REQUESTED document
+  // Safety alerts (duplicate medicine, allergy) the Doctor acknowledged, with reasons.
+  safetyAcknowledgements Json?
+  error                  String?
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
 
   clinic      Clinic    @relation(fields: [clinicId], references: [id], onDelete: Restrict)
   patient     Patient   @relation(fields: [patientId], references: [id], onDelete: Restrict)
@@ -211,16 +261,19 @@ enum DocumentSendChannel {
 
 /// A generated, stored document (PDF in S3).
 model Document {
-  id         String       @id @default(cuid())
-  type       DocumentType
-  clinicId   String
-  patientId  String
-  requestId  String       @unique
-  storageKey String // object key in the S3 bucket
-  fileName   String
-  mimeType   String       @default("application/pdf")
-  sizeBytes  Int
-  createdAt  DateTime     @default(now())
+  id                String       @id @default(cuid())
+  type              DocumentType
+  clinicId          String
+  patientId         String
+  requestId         String       @unique
+  storageKey        String // object key in the S3 bucket
+  fileName          String
+  mimeType          String       @default("application/pdf")
+  sizeBytes         Int
+  // Signed documents are locked; a change is issued as a new version.
+  version           Int          @default(1)
+  previousVersionId String?      @unique
+  createdAt         DateTime     @default(now())
 
   signedById  String?
   signedAt    DateTime?
@@ -229,15 +282,34 @@ model Document {
   sentVia     DocumentSendChannel?
   sentToEmail String?
 
-  clinic      Clinic          @relation(fields: [clinicId], references: [id], onDelete: Restrict)
-  patient     Patient         @relation(fields: [patientId], references: [id], onDelete: Restrict)
-  request     DocumentRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
-  signedBy    User?           @relation("DocumentSignedBy", fields: [signedById], references: [id], onDelete: Restrict)
-  sentBy      User?           @relation("DocumentSentBy", fields: [sentById], references: [id], onDelete: Restrict)
-  medications Medication[]
+  clinic          Clinic             @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  patient         Patient            @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  request         DocumentRequest    @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  signedBy        User?              @relation("DocumentSignedBy", fields: [signedById], references: [id], onDelete: Restrict)
+  sentBy          User?              @relation("DocumentSentBy", fields: [sentById], references: [id], onDelete: Restrict)
+  previousVersion Document?          @relation("DocumentVersions", fields: [previousVersionId], references: [id], onDelete: Restrict)
+  nextVersion     Document?          @relation("DocumentVersions")
+  deliveries      DocumentDelivery[]
+  medications     Medication[]
 
   @@index([patientId])
   @@index([clinicId])
+}
+
+/// Every time a signed document was emailed or printed (Document.sent* holds the latest).
+model DocumentDelivery {
+  id         String              @id @default(cuid())
+  documentId String
+  via        DocumentSendChannel
+  toEmail    String?
+  messageId  String? // the mail server's id for an email
+  sentById   String
+  sentAt     DateTime            @default(now())
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  sentBy   User     @relation(fields: [sentById], references: [id], onDelete: Restrict)
+
+  @@index([documentId, sentAt])
 }
 
 // ===================== Follow-up, consents, meds (Dev 3) =====================
@@ -522,22 +594,22 @@ enum ImageStatus {
 /// `storageKey`; only the Doctor's object-storage client ever sees them in the
 /// clear (server-side encryption is applied on upload).
 model ClinicalImage {
-  id            String      @id @default(cuid())
+  id            String  @id @default(cuid())
   patientId     String
   appointmentId String?
   uploadedById  String?
   // S3 object key, unique across the bucket.
-  storageKey    String      @unique
+  storageKey    String  @unique
   fileName      String
   mimeType      String
   sizeBytes     Int
 
   /// @encrypted
-  caption       String?
+  caption String?
 
-  status        ImageStatus @default(ACTIVE)
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  status    ImageStatus @default(ACTIVE)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
 
   patient     Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
   appointment Appointment?      @relation(fields: [appointmentId], references: [id], onDelete: SetNull)

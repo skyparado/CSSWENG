@@ -13,10 +13,11 @@ export const authUserSchema = z.object({
   email: z.string().email(),
   fullName: z.string(),
   role: z.enum(['DOCTOR', 'SECRETARY']),
+  activeClinicId: z.string().optional(),
 });
 export type AuthUser = z.infer<typeof authUserSchema>;
 
-/** POST /api/auth/select-clinic payload. */
+/** POST /api/auth/select-clinic payload (S02 Clinic Selection). */
 export const selectClinicSchema = z.object({
   clinicId: z.string().min(1),
 });
