@@ -15,6 +15,8 @@ import { followUpsRouter } from './followups/followups.routes.js';
 import { outreachRouter } from './followups/outreach.routes.js';
 import { medicationsRouter } from './medications/medications.routes.js';
 import { allergiesRouter } from './medications/allergies.routes.js';
+import { auditRouter } from './audit/audit.routes.js';
+import { auditMiddleware } from './audit/audit.middleware.js';
 
 /**
  * Build the Express app (no network listen). Kept separate from index.ts so
@@ -37,8 +39,14 @@ export function createApp(): Express {
   // can read req.session.user.
   app.use(buildSessionMiddleware());
 
+  // Audit middleware comes AFTER session so it can snapshot the actor, and
+  // BEFORE routes so every route's response is observed. It skips /health
+  // and /api/audit itself to avoid noise and recursion.
+  app.use(auditMiddleware);
+
   app.use('/api/auth', authRouter);
   app.use('/api/users', usersRouter);
+  app.use('/api/audit', auditRouter);
   app.use('/health', healthRouter);
   app.use('/api/clinics', clinicsRouter);
   app.use('/api/appointments', appointmentsRouter);
