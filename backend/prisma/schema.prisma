@@ -37,6 +37,8 @@ model Patient {
   outreachLogs     OutreachLog[]
   medications      Medication[]
   allergies        Allergy[]
+
+  tabletIntakeSubmissions TabletIntakeSubmission[]
 }
 
 /// Staff account. Only the Doctor can approve, change, revoke accounts and the
@@ -69,6 +71,8 @@ model User {
   outreachLogs        OutreachLog[]
   medicationsRecorded Medication[]
   allergiesRecorded   Allergy[]
+
+  startedTabletSessions TabletIntakeSession[] @relation("TabletIntakeSessionStarter")
 
   @@index([status])
   @@index([role])
@@ -108,6 +112,8 @@ model Clinic {
   outreachLogs     OutreachLog[]
   medications      Medication[]
   allergies        Allergy[]
+
+  tabletSessions TabletIntakeSession[]
 
   @@index([isActive])
 }
@@ -552,4 +558,57 @@ model ImageAnnotation {
 
   @@unique([clinicalImageId, version])
   @@index([clinicalImageId, createdAt])
+}
+
+// ============================= Tablet Intake (Dev 4) =========================
+
+/// Lifecycle of a supervised intake session on a shared clinic tablet. A
+/// session is one-shot: after submit it moves to SUBMITTED and the token
+/// no longer accepts further input. The next patient needs a fresh session.
+enum TabletIntakeStatus {
+  ACTIVE
+  SUBMITTED
+  CANCELLED
+  EXPIRED
+}
+
+/// A supervised intake handover. The Secretary starts it on a tablet, hands
+/// the tablet to the patient, and the patient fills the form. The token is
+/// a random opaque string the tablet sends on each request so the patient
+/// never signs in.
+model TabletIntakeSession {
+  id                   String             @id @default(cuid())
+  clinicId             String
+  startedBySecretaryId String?
+  // High-entropy opaque token (base64url of 32 random bytes). Kept unique so
+  // leaked tokens cannot collide with newly minted ones.
+  token                String             @unique
+  status               TabletIntakeStatus @default(ACTIVE)
+  expiresAt            DateTime
+  createdAt            DateTime           @default(now())
+  submittedAt          DateTime?
+  cancelledAt          DateTime?
+
+  clinic             Clinic                  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  startedBySecretary User?                   @relation("TabletIntakeSessionStarter", fields: [startedBySecretaryId], references: [id], onDelete: SetNull)
+  submission         TabletIntakeSubmission?
+
+  @@index([status])
+  @@index([clinicId, createdAt])
+}
+
+/// The one-and-only form submission for a given session. Linked to the Patient
+/// the session resolved to (either dedup-matched or newly created on submit).
+model TabletIntakeSubmission {
+  id         String   @id @default(cuid())
+  sessionId  String   @unique
+  patientId  String
+  // Full form payload as submitted (personal info, med history, consents).
+  rawPayload Json
+  createdAt  DateTime @default(now())
+
+  session TabletIntakeSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  patient Patient             @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
 }
