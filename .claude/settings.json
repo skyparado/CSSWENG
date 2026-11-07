@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" localhost:9000/clinic-documents)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" -I localhost:9000/clinic-documents)",
+      "Bash(curl -s -I localhost:9000/clinic-documents)",
+      "Bash(DATABASE_URL=\"postgresql://clinic:clinic@192.168.56.1:5432/clinic_test?schema=public\" npm test)",
+      "Bash(curl -s localhost:4100/health/ready)",
+      "Bash(curl -s -i localhost:4100/)"
+    ]
+  }
+}
