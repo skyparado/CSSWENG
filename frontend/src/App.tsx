@@ -1,107 +1,165 @@
-import { useEffect, useState } from 'react';
-import { api, type Clinic } from './api';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { api, type Clinic, type User } from './api';
+import { SessionContext, go, useRoute, useSession, type Session } from './session';
+import ClinicSelect from './pages/ClinicSelect';
+import Dashboard from './pages/Dashboard';
+import Calendar from './pages/Calendar';
+import DocumentEditor from './pages/DocumentEditor';
+import Documents from './pages/Documents';
 
-/**
- * Frontend shell for the Oct 19 demo: a clinic selector backed by the live
- * API. Login/roles, patient registration and the follow-up list are owned by
- * other developers and plug in alongside this screen.
- */
+/** Sidebar entries; `doctorOnly` items are hidden from the Secretary (SDD role matrix). */
+const MENU: Array<{ label: string; path: string; doctorOnly?: boolean }> = [
+  { label: 'Dashboard', path: '/dashboard' },
+  { label: 'Patients', path: '/patients' },
+  { label: 'Follow-Ups', path: '/follow-ups' },
+  { label: 'Appointments', path: '/appointments' },
+  { label: 'Documents', path: '/documents' },
+  { label: 'Reports', path: '/reports' },
+  { label: 'User Accounts', path: '/users', doctorOnly: true },
+  { label: 'Audit Log', path: '/audit', doctorOnly: true },
+];
+
 export default function App() {
+  const [user, setUser] = useState<User | null>();
   const [clinics, setClinics] = useState<Clinic[]>([]);
-  const [selectedId, setSelectedId] = useState<string>('');
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api
-      .listClinics()
-      .then((res) => {
-        setClinics(res.items);
-        if (res.items[0]) setSelectedId(res.items[0].id);
-      })
-      .catch((e: unknown) =>
-        setError(e instanceof Error ? e.message : 'Failed to load clinics'),
-      )
-      .finally(() => setLoading(false));
+    api.me().then((r) => setUser(r.user), () => setUser(null));
   }, []);
+  useEffect(() => {
+    if (user) void api.listClinics().then((r) => setClinics(r.items));
+  }, [user]);
 
-  const selected = clinics.find((c) => c.id === selectedId);
+  if (user === undefined) return <p className="page">Loading…</p>;
+  if (user === null) return <Login onLogin={setUser} />;
+
+  const session: Session = {
+    user,
+    clinics,
+    clinic: clinics.find((c) => c.id === user.activeClinicId),
+    selectClinic: async (id) => {
+      await api.setActiveClinic(id);
+      setUser({ ...user, activeClinicId: id });
+    },
+    logout: async () => {
+      await api.logout();
+      setUser(null);
+      go('/dashboard');
+    },
+  };
 
   return (
-    <main style={styles.main}>
-      <header style={styles.header}>
-        <h1 style={styles.h1}>Clinic Management</h1>
-        <span style={styles.badge}>Dev 1 shell</span>
-      </header>
-
-      <section style={styles.card}>
-        <label htmlFor="clinic" style={styles.label}>
-          Select clinic
-        </label>
-        {loading && <p>Loading clinics…</p>}
-        {error && <p style={styles.error}>Error: {error}</p>}
-        {!loading && !error && clinics.length === 0 && (
-          <p>No clinics yet. Create one via <code>POST /api/clinics</code> or run the seed.</p>
-        )}
-        {clinics.length > 0 && (
-          <select
-            id="clinic"
-            value={selectedId}
-            onChange={(e) => setSelectedId(e.target.value)}
-            style={styles.select}
-          >
-            {clinics.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        )}
-
-        {selected && (
-          <dl style={styles.details}>
-            <div style={styles.row}>
-              <dt style={styles.dt}>Address</dt>
-              <dd style={styles.dd}>{selected.address ?? '—'}</dd>
-            </div>
-            <div style={styles.row}>
-              <dt style={styles.dt}>Phone</dt>
-              <dd style={styles.dd}>{selected.phone ?? '—'}</dd>
-            </div>
-            <div style={styles.row}>
-              <dt style={styles.dt}>Timezone</dt>
-              <dd style={styles.dd}>{selected.timezone}</dd>
-            </div>
-          </dl>
-        )}
-      </section>
-    </main>
+    <SessionContext.Provider value={session}>
+      <Routes />
+    </SessionContext.Provider>
   );
 }
 
-const styles: Record<string, React.CSSProperties> = {
-  main: {
-    fontFamily: 'system-ui, sans-serif',
-    maxWidth: 640,
-    margin: '0 auto',
-    padding: 24,
-    color: '#111827',
-  },
-  header: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 },
-  h1: { fontSize: 24, margin: 0 },
-  badge: {
-    fontSize: 12,
-    background: '#e0e7ff',
-    color: '#3730a3',
-    padding: '2px 8px',
-    borderRadius: 999,
-  },
-  card: { border: '1px solid #e5e7eb', borderRadius: 12, padding: 20 },
-  label: { display: 'block', fontWeight: 600, marginBottom: 8 },
-  select: { width: '100%', padding: 8, fontSize: 15, borderRadius: 8, border: '1px solid #d1d5db' },
-  details: { marginTop: 20 },
-  row: { display: 'flex', borderTop: '1px solid #f3f4f6', padding: '8px 0' },
-  dt: { width: 120, color: '#6b7280' },
-  dd: { margin: 0 },
-  error: { color: '#b91c1c' },
-};
+function Routes() {
+  const route = useRoute();
+  const { user, clinic, clinics } = useSession();
+  if (clinics.length === 0) return <p className="page">Loading clinics…</p>;
+  // No active clinic yet (or the user asked to switch): S02 before anything else.
+  if (!clinic || route === '/select-clinic') return <ClinicSelect />;
+
+  const doctor = user.role === 'DOCTOR';
+  let page: ReactNode;
+  if (route === '/dashboard') page = <Dashboard />;
+  else if (route === '/appointments') page = <Calendar />;
+  else if (route === '/documents') page = <Documents />;
+  else if (route.startsWith('/documents/new'))
+    page = doctor ? <DocumentEditor /> : <p>Only the Doctor can prepare and sign documents.</p>;
+  else {
+    const item = MENU.find((m) => m.path === route);
+    page = (
+      <>
+        <h1>{item?.label ?? 'Not found'}</h1>
+        <p className="muted">This screen is not available yet.</p>
+      </>
+    );
+  }
+  return <Layout route={route}>{page}</Layout>;
+}
+
+/** App layout used by every screen: navy sidebar, top bar with the active clinic, role menu. */
+function Layout({ route, children }: { route: string; children: ReactNode }) {
+  const { user, clinic, clinics, selectClinic, logout } = useSession();
+  const menu = MENU.filter((m) => !m.doctorOnly || user.role === 'DOCTOR');
+  return (
+    <div className="app">
+      <aside className="sidebar">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden /> EMR System
+        </div>
+        <nav aria-label="Main">
+          {menu.map((m) => (
+            <a
+              key={m.path}
+              href={`#${m.path}`}
+              aria-current={route.split('?')[0].startsWith(m.path) ? 'page' : undefined}
+            >
+              {m.label}
+            </a>
+          ))}
+        </nav>
+      </aside>
+      <div>
+        <header className="topbar">
+          <label className="sr-only" htmlFor="active-clinic">
+            Active clinic
+          </label>
+          <select
+            id="active-clinic"
+            className="clinic-switch"
+            value={clinic?.id}
+            onChange={(e) => void selectClinic(e.target.value)}
+          >
+            {clinics.map((c) => (
+              <option key={c.id} value={c.id}>
+                Clinic: {c.name}
+              </option>
+            ))}
+          </select>
+          <span>{user.fullName}</span>
+          <button className="primary" onClick={() => void logout()}>
+            Log Out
+          </button>
+        </header>
+        <main className="page">{children}</main>
+      </div>
+    </div>
+  );
+}
+
+function Login({ onLogin }: { onLogin: (u: User) => void }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string>();
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    api.login(email, password).then(
+      (r) => onLogin(r.user),
+      (err: Error) => setError(err.message),
+    );
+  };
+  return (
+    <>
+      <header className="topbar solo">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden /> EMR System
+        </div>
+      </header>
+      <form className="card" style={{ maxWidth: 420, margin: '60px auto' }} onSubmit={submit}>
+        <h1>Sign in</h1>
+        <label htmlFor="email">Email</label>
+        <input id="email" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
+        <label htmlFor="password">Password</label>
+        <input id="password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+        {error && <p className="error" role="alert">{error}</p>}
+        <button className="primary" style={{ marginTop: 16, width: '100%' }}>
+          Sign in
+        </button>
+      </form>
+    </>
+  );
+}

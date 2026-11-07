@@ -21,3 +21,7 @@ backend/prisma/migrations/dev.db*
 backend/.tmp/
 *.pdf
 !backend/src/documents/templates/**/*.pdf
+
+# Playwright
+test-results/
+playwright-report/

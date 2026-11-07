@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   checkWithinOperatingHours,
+  nearestFreeTimes,
   wallClock,
   type ScheduleWindow,
 } from './operatingHours.js';
@@ -87,5 +88,32 @@ describe('checkWithinOperatingHours', () => {
       TZ,
     );
     expect(r.ok).toBe(false);
+  });
+});
+
+describe('nearestFreeTimes', () => {
+  const uerm = [
+    { dayOfWeek: 1, openTime: '13:00', closeTime: '16:00' },
+    { dayOfWeek: 4, openTime: '10:00', closeTime: '12:00' },
+  ];
+  const hour = 3_600_000;
+
+  it('skips closed time and bookings, in clinic time', () => {
+    // Mon 2026-01-05 12:10 Manila → first fit is 13:00 (05:00Z); 13:00–14:00 is booked.
+    const busy: Array<[number, number]> = [[Date.parse('2026-01-05T05:00:00Z'), Date.parse('2026-01-05T06:00:00Z')]];
+    const times = nearestFreeTimes(new Date('2026-01-05T04:10:00Z'), hour, uerm, 'Asia/Manila', busy);
+    expect(times.map((d) => d.toISOString())).toEqual([
+      '2026-01-05T06:00:00.000Z',
+      '2026-01-05T06:30:00.000Z',
+      '2026-01-05T07:00:00.000Z',
+    ]);
+  });
+
+  it('rolls over to the next open day and gives up past the horizon', () => {
+    const fromMonEvening = new Date('2026-01-05T09:00:00Z'); // 17:00 Manila, closed
+    expect(nearestFreeTimes(fromMonEvening, hour, uerm, 'Asia/Manila', [], 1)[0].toISOString()).toBe(
+      '2026-01-08T02:00:00.000Z', // Thu 10:00 Manila
+    );
+    expect(nearestFreeTimes(fromMonEvening, hour, [], 'Asia/Manila', [])).toEqual([]);
   });
 });

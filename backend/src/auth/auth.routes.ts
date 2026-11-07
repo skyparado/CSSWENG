@@ -2,6 +2,8 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { loginSchema, selectClinicSchema, type AuthUser, type SelectClinicInput } from '@clinic/schemas';
 import { asyncHandler, validate, HttpError } from '../http.js';
+import { requireAuth } from './middleware.js';
+import { authorizedClinics } from '../clinics/clinics.routes.js';
 import { prisma } from '../prisma.js';
 import { authenticate, InvalidCredentialsError } from './auth.service.js';
 import { sessionCookieOptions } from './session.js';
@@ -21,6 +23,10 @@ const loginRateLimiter = rateLimit({
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: { error: 'Too many login attempts from this IP. Try again later.' },
+  // The e2e suite signs in well over 10 times against one long-lived server
+  // from one IP, so the limiter would reject the later specs. Off in tests
+  // only; development and production still enforce it.
+  skip: () => env.NODE_ENV === 'test',
 });
 
 /** POST /api/auth/login — exchange credentials for a session cookie. */
@@ -109,6 +115,7 @@ authRouter.get(
       email: user.email,
       fullName: user.fullName,
       role: user.role,
+      activeClinicId: req.session.user.activeClinicId,
     };
     res.json({ user: payload });
   }),

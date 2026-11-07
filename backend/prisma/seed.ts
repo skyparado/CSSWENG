@@ -68,8 +68,8 @@ async function main() {
 
   await prisma.patient.upsert({
     where: { id: 'seed-patient-juan' },
-    update: {},
-    create: { id: 'seed-patient-juan', firstName: 'Juan', lastName: 'Dela Cruz' },
+    update: { email: 'juan.delacruz@example.com' },
+    create: { id: 'seed-patient-juan', firstName: 'Juan', lastName: 'Dela Cruz', email: 'juan.delacruz@example.com' },
   });
 
   const doctorEmail = 'doctor@pacio.clinic.local';
@@ -90,7 +90,7 @@ async function main() {
   const secretaryEmail = 'secretary@pacio.clinic.local';
   const secretaryPassword = 'SecretaryPass123!';
   const secretaryHash = await argon2.hash(secretaryPassword, { type: argon2.argon2id });
-  await prisma.user.upsert({
+  const secretary = await prisma.user.upsert({
     where: { email: secretaryEmail },
     update: {},
     create: {
@@ -100,6 +100,11 @@ async function main() {
       role: 'SECRETARY',
       status: 'ACTIVE',
     },
+  });
+  // The secretary works in every seeded clinic (S02 lists only assigned clinics).
+  await prisma.userClinic.createMany({
+    data: CLINICS.map((c) => ({ userId: secretary.id, clinicId: c.id })),
+    skipDuplicates: true,
   });
 
   // eslint-disable-next-line no-console
