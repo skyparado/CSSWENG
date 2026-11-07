@@ -76,6 +76,7 @@ model User {
   allergiesRecorded   Allergy[]
 
   startedTabletSessions TabletIntakeSession[] @relation("TabletIntakeSessionStarter")
+  userClinics           UserClinic[]
 
   @@index([status])
   @@index([role])
@@ -117,6 +118,7 @@ model Clinic {
   allergies        Allergy[]
 
   tabletSessions TabletIntakeSession[]
+  userClinics    UserClinic[]
 
   @@index([isActive])
 }
@@ -617,4 +619,23 @@ model TabletIntakeSubmission {
   patient Patient             @relation(fields: [patientId], references: [id], onDelete: Cascade)
 
   @@index([patientId])
+}
+
+// ============================= User <-> Clinic (Dev 4) =======================
+
+/// Many-to-many assignment of users to clinics. A user can only act on data
+/// scoped to a clinic they are assigned to (QA 3). The Doctor is typically
+/// assigned to all clinics they own; Secretaries are assigned to one or more
+/// clinics they staff.
+model UserClinic {
+  userId     String
+  clinicId   String
+  assignedAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@id([userId, clinicId])
+  @@index([userId])
+  @@index([clinicId])
 }
