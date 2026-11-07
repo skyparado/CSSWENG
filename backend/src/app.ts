@@ -9,6 +9,7 @@ import { clinicsRouter } from './clinics/clinics.routes.js';
 import { appointmentsRouter } from './appointments/appointments.routes.js';
 import { documentsRouter } from './documents/documents.routes.js';
 import { authRouter } from './auth/auth.routes.js';
+import { usersRouter } from './users/users.routes.js';
 import { consentsRouter } from './consents/consents.routes.js';
 import { followUpsRouter } from './followups/followups.routes.js';
 import { outreachRouter } from './followups/outreach.routes.js';
@@ -37,6 +38,7 @@ export function createApp(): Express {
   app.use(buildSessionMiddleware());
 
   app.use('/api/auth', authRouter);
+  app.use('/api/users', usersRouter);
   app.use('/health', healthRouter);
   app.use('/api/clinics', clinicsRouter);
   app.use('/api/appointments', appointmentsRouter);
