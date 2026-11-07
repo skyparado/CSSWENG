@@ -24,18 +24,24 @@ model Patient {
   lastName     String
   // Contact details used by reminders. Dev 2: keep these when replacing the
   // stub (the full model stores them encrypted).
-  mobileNumber String?
+  
+  /// @encrypted
+  mobileNumber  String?
+
   email        String?
   createdAt    DateTime @default(now())
 
   appointments     Appointment[]
   documents        Document[]
+  images           ClinicalImage[]
   documentRequests DocumentRequest[]
   consents         PatientConsent[]
   followUps        FollowUp[]
   outreachLogs     OutreachLog[]
   medications      Medication[]
   allergies        Allergy[]
+
+  tabletIntakeSubmissions TabletIntakeSubmission[]
 }
 
 /// Staff account. Only the Doctor can approve, change, revoke accounts and the
@@ -55,13 +61,11 @@ model User {
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt
 
-  documentRequests   DocumentRequest[]
-  clinics            UserClinic[]
-  appointmentEvents  AppointmentEvent[]
-  walkInsApproved    Appointment[]      @relation("WalkInApprovedBy")
-  documentDeliveries DocumentDelivery[]
-  documentsSigned    Document[]         @relation("DocumentSignedBy")
-  documentsSent      Document[]         @relation("DocumentSentBy")
+  documentRequests DocumentRequest[]
+  uploadedImages      ClinicalImage[]
+  createdAnnotations  ImageAnnotation[]
+  documentsSigned  Document[]        @relation("DocumentSignedBy")
+  documentsSent    Document[]        @relation("DocumentSentBy")
 
   consentsRecorded    PatientConsent[] @relation("ConsentRecordedBy")
   consentsWithdrawn   PatientConsent[] @relation("ConsentWithdrawnBy")
@@ -70,6 +74,8 @@ model User {
   outreachLogs        OutreachLog[]
   medicationsRecorded Medication[]
   allergiesRecorded   Allergy[]
+
+  startedTabletSessions TabletIntakeSession[] @relation("TabletIntakeSessionStarter")
 
   @@index([status])
   @@index([role])
@@ -85,6 +91,7 @@ enum UserStatus {
   ACTIVE
   LOCKED
   REVOKED
+  REJECTED
 }
 
 // ================================ Clinic (Dev 1) =============================
@@ -109,6 +116,8 @@ model Clinic {
   outreachLogs     OutreachLog[]
   medications      Medication[]
   allergies        Allergy[]
+
+  tabletSessions TabletIntakeSession[]
 
   @@index([isActive])
 }
@@ -149,28 +158,20 @@ enum AppointmentStatus {
 }
 
 model Appointment {
-  id                 String            @id @default(cuid())
-  clinicId           String
-  patientId          String
-  startsAt           DateTime
-  endsAt             DateTime
-  reason             String?
-  visitType          String?
-  status             AppointmentStatus @default(SCHEDULED)
-  cancelReason       String?
-  // A walk-in is booked for "now", even outside clinic hours, and needs the
-  // Doctor's approval, which is recorded here.
-  walkIn             Boolean           @default(false)
-  walkInApprovedById String?
-  walkInApprovedAt   DateTime?
-  createdAt          DateTime          @default(now())
-  updatedAt          DateTime          @updatedAt
+  id        String            @id @default(cuid())
+  clinicId  String
+  patientId String
+  startsAt  DateTime
+  endsAt    DateTime
+  reason    String?
+  status    AppointmentStatus @default(SCHEDULED)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
 
-  clinic           Clinic             @relation(fields: [clinicId], references: [id], onDelete: Restrict)
-  patient          Patient            @relation(fields: [patientId], references: [id], onDelete: Restrict)
-  walkInApprovedBy User?              @relation("WalkInApprovedBy", fields: [walkInApprovedById], references: [id], onDelete: Restrict)
-  followUps        FollowUp[]
-  events           AppointmentEvent[]
+  clinic    Clinic     @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  patient   Patient    @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  followUps FollowUp[]
+  images    ClinicalImage[]
 
   @@index([clinicId, startsAt])
   @@index([patientId, startsAt])
@@ -537,4 +538,157 @@ model Allergy {
   recordedBy User    @relation(fields: [recordedById], references: [id], onDelete: Restrict)
 
   @@index([patientId, voidedAt])
+}
+
+// =============================== Audit Log (Dev 4) ===========================
+
+/// Append-only audit log of every meaningful action in the system. Rows are
+/// hash-chained for tamper-evidence (entryHash includes previousHash + content).
+/// A Postgres trigger blocks UPDATE and DELETE at the DB level — even direct
+/// SQL cannot rewrite history. User fields are snapshotted strings (not
+/// foreign keys) so that deleting a user never removes their audit trail.
+model AuditLog {
+  id           String   @id @default(cuid())
+  // Snapshot of the actor at the time of the event (null for pre-auth events
+  // like failed logins against an unknown email).
+  userId       String?
+  userEmail    String?
+  userRole     String?
+  // What happened: a short constant like LOGIN_SUCCESS, LOGIN_FAILED,
+  // USER_APPROVED, APPOINTMENT_CREATED. See src/audit/actions.ts for the list.
+  action       String
+  // The thing it happened to.
+  resourceType String?
+  resourceId   String?
+  // HTTP context (null for background jobs).
+  method       String?
+  path         String?
+  statusCode   Int?
+  ipAddress    String?
+  userAgent    String?
+  // Optional per-event detail payload.
+  metadata     Json?
+  createdAt    DateTime @default(now())
+  // Hash chain: entryHash = sha256(previousHash + canonicalContent). The first
+  // row's previousHash is the empty string.
+  previousHash String
+  entryHash    String   @unique
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+  @@index([resourceType, resourceId])
+  @@index([createdAt])
+}
+
+// ============================= Clinical Images (Dev 4) =======================
+
+/// Soft-delete status for ClinicalImage. Hard delete would compromise the
+/// audit trail; a DELETED row stays in the DB but is hidden from normal reads.
+enum ImageStatus {
+  ACTIVE
+  DELETED
+}
+
+/// A clinical image uploaded by a Doctor for a patient, optionally tied to a
+/// specific appointment (visit). The bytes live in S3-compatible storage under
+/// `storageKey`; only the Doctor's object-storage client ever sees them in the
+/// clear (server-side encryption is applied on upload).
+model ClinicalImage {
+  id            String      @id @default(cuid())
+  patientId     String
+  appointmentId String?
+  uploadedById  String?
+  // S3 object key, unique across the bucket.
+  storageKey    String      @unique
+  fileName      String
+  mimeType      String
+  sizeBytes     Int
+
+  /// @encrypted
+  caption       String?
+
+  status        ImageStatus @default(ACTIVE)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  patient     Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  appointment Appointment?      @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  uploadedBy  User?             @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  annotations ImageAnnotation[]
+
+  @@index([patientId, createdAt])
+  @@index([appointmentId])
+  @@index([status])
+}
+
+/// A versioned Konva drawing/annotation layer over a ClinicalImage. Saves are
+/// append-only: a new save creates a new row with the next `version` number,
+/// so the previous layer stays in the DB and can be audited or restored.
+model ImageAnnotation {
+  id              String   @id @default(cuid())
+  clinicalImageId String
+  createdById     String?
+  version         Int      @default(1)
+  // Full Konva stage JSON (strokes, text, shapes, their styling).
+  konvaData       Json
+  createdAt       DateTime @default(now())
+
+  clinicalImage ClinicalImage @relation(fields: [clinicalImageId], references: [id], onDelete: Cascade)
+  createdBy     User?         @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([clinicalImageId, version])
+  @@index([clinicalImageId, createdAt])
+}
+
+// ============================= Tablet Intake (Dev 4) =========================
+
+/// Lifecycle of a supervised intake session on a shared clinic tablet. A
+/// session is one-shot: after submit it moves to SUBMITTED and the token
+/// no longer accepts further input. The next patient needs a fresh session.
+enum TabletIntakeStatus {
+  ACTIVE
+  SUBMITTED
+  CANCELLED
+  EXPIRED
+}
+
+/// A supervised intake handover. The Secretary starts it on a tablet, hands
+/// the tablet to the patient, and the patient fills the form. The token is
+/// a random opaque string the tablet sends on each request so the patient
+/// never signs in.
+model TabletIntakeSession {
+  id                   String             @id @default(cuid())
+  clinicId             String
+  startedBySecretaryId String?
+  // High-entropy opaque token (base64url of 32 random bytes). Kept unique so
+  // leaked tokens cannot collide with newly minted ones.
+  token                String             @unique
+  status               TabletIntakeStatus @default(ACTIVE)
+  expiresAt            DateTime
+  createdAt            DateTime           @default(now())
+  submittedAt          DateTime?
+  cancelledAt          DateTime?
+
+  clinic             Clinic                  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  startedBySecretary User?                   @relation("TabletIntakeSessionStarter", fields: [startedBySecretaryId], references: [id], onDelete: SetNull)
+  submission         TabletIntakeSubmission?
+
+  @@index([status])
+  @@index([clinicId, createdAt])
+}
+
+/// The one-and-only form submission for a given session. Linked to the Patient
+/// the session resolved to (either dedup-matched or newly created on submit).
+model TabletIntakeSubmission {
+  id         String   @id @default(cuid())
+  sessionId  String   @unique
+  patientId  String
+  // Full form payload as submitted (personal info, med history, consents).
+  rawPayload Json
+  createdAt  DateTime @default(now())
+
+  session TabletIntakeSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  patient Patient             @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
 }

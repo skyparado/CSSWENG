@@ -4,26 +4,52 @@ import { prisma } from '../prisma.js';
 import { HttpError } from '../http.js';
 
 /**
- * Lockout policy per SRS 7.2: 5 failed attempts inside this rolling 15-minute
- * window locks the account. The lock itself also lasts 15 minutes before the
- * next attempt is allowed.
+ * Lockout policy per SRS 7.2 (updated per QA 1 feedback):
+ *  - 5 failed attempts inside a rolling 15-minute window locks the account
+ *  - LOCKED is permanent until a doctor unlocks via POST /api/users/:id/unlock
  */
 const MAX_FAILED_ATTEMPTS = 5;
 const FAILED_WINDOW_MS = 15 * 60 * 1000;
-const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
 
-const ARGON_OPTS = { type: argon2.argon2id };
+/**
+ * 401 with "Invalid credentials" — same for unknown email, wrong password,
+ * and non-ACTIVE accounts. `attemptsRemaining` is populated only when we
+ * recognised the email AND incremented a real counter. For every other
+ * failure path it is null so the response carries no enumeration signal.
+ */
+export class InvalidCredentialsError extends HttpError {
+  readonly attemptsRemaining: number | null;
+  constructor(attemptsRemaining: number | null) {
+    super(401, 'Invalid credentials');
+    this.attemptsRemaining = attemptsRemaining;
+  }
+}
 
-/** Hash a plaintext password. Used by the seed script and user creation. */
+/** Hash a plaintext password with argon2id (explicit, not relying on defaults). */
 export async function hashPassword(plain: string): Promise<string> {
-  // argon2id is the default algorithm in argon2 v0.40+, so no options needed.
-  return argon2.hash(plain);
+  return argon2.hash(plain, { type: argon2.argon2id });
 }
 
 /**
- * Authenticate (email, password). On success returns the user record. On any
- * failure throws an HttpError. Also enforces the account status rules and the
- * lockout counter.
+ * Cached dummy argon2id hash. We verify against it on the unknown-email path
+ * so response time is indistinguishable from a real failed verify — no
+ * account enumeration via timing.
+ */
+let dummyHashPromise: Promise<string> | null = null;
+function getDummyHash(): Promise<string> {
+  if (!dummyHashPromise) {
+    dummyHashPromise = argon2.hash('dummy-for-timing-mitigation', {
+      type: argon2.argon2id,
+    });
+  }
+  return dummyHashPromise;
+}
+
+/**
+ * Authenticate (emailLower, password). Returns the user on success, throws
+ * InvalidCredentialsError on any failure (unknown email, non-ACTIVE account,
+ * wrong password). Enforces status rules and atomically bumps the failed-
+ * attempt counter with SELECT ... FOR UPDATE.
  */
 export async function authenticate(
   emailLower: string,
@@ -31,41 +57,33 @@ export async function authenticate(
 ): Promise<User> {
   const user = await prisma.user.findUnique({ where: { email: emailLower } });
 
-  // Same generic 401 for both "no such user" and "wrong password" so an
-  // attacker cannot enumerate accounts by trying different emails.
   if (!user) {
-    throw new HttpError(401, 'Invalid email or password');
+    // Timing-uniform path for unknown accounts.
+    await argon2.verify(await getDummyHash(), password).catch(() => undefined);
+    throw new InvalidCredentialsError(null);
   }
 
-  if (user.status === 'REVOKED') {
-    throw new HttpError(403, 'This account has been revoked.');
-  }
-  if (user.status === 'PENDING') {
-    throw new HttpError(403, 'This account is awaiting doctor approval.');
-  }
-
-  // Honor an active lockout window.
-  if (user.lockedUntil && user.lockedUntil > new Date()) {
-    throw new HttpError(
-      423,
-      'Account is temporarily locked after repeated failed attempts. Try again later.',
-    );
+  // Non-ACTIVE: PENDING, LOCKED, REVOKED, REJECTED all return the same error.
+  // Still run the real verify so timing matches the ACTIVE+wrong-password path.
+  if (user.status !== 'ACTIVE') {
+    await argon2.verify(user.passwordHash, password).catch(() => undefined);
+    throw new InvalidCredentialsError(null);
   }
 
   const ok = await argon2.verify(user.passwordHash, password);
   if (!ok) {
-    await recordFailedAttempt(user);
-    throw new HttpError(401, 'Invalid email or password');
+    const nextAttempts = await recordFailedAttempt(user.id);
+    const remaining = Math.max(0, MAX_FAILED_ATTEMPTS - nextAttempts);
+    throw new InvalidCredentialsError(remaining);
   }
 
-  // Success: clear the failure counter, lift any lockout, note last login.
+  // Success: clear counter, note last login. LOCKED is never auto-cleared
+  // here — only POST /api/users/:id/unlock (doctor) clears it.
   await prisma.user.update({
     where: { id: user.id },
     data: {
       failedLoginAttempts: 0,
       firstFailedLoginAt: null,
-      lockedUntil: null,
-      status: user.status === 'LOCKED' ? 'ACTIVE' : user.status,
       lastLoginAt: new Date(),
     },
   });
@@ -73,29 +91,49 @@ export async function authenticate(
   return user;
 }
 
-async function recordFailedAttempt(user: User): Promise<void> {
-  const now = new Date();
-  const windowStart = user.firstFailedLoginAt;
-  const withinWindow =
-    windowStart !== null &&
-    now.getTime() - windowStart.getTime() <= FAILED_WINDOW_MS;
+/**
+ * Atomic failed-attempt increment under a transaction with row lock. Two
+ * simultaneous wrong-password calls serialise through the FOR UPDATE so the
+ * counter never undercounts. Returns the new attempt number.
+ */
+async function recordFailedAttempt(userId: string): Promise<number> {
+  return prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<
+      Array<{
+        failedLoginAttempts: number;
+        firstFailedLoginAt: Date | null;
+        status: string;
+      }>
+    >`
+      SELECT "failedLoginAttempts", "firstFailedLoginAt", "status"
+      FROM "User"
+      WHERE id = ${userId}
+      FOR UPDATE
+    `;
+    if (rows.length === 0) {
+      throw new Error(`User ${userId} vanished mid-update`);
+    }
+    const row = rows[0];
 
-  // Reset the counter if we're outside the previous 15-minute window.
-  const nextAttempts = withinWindow ? user.failedLoginAttempts + 1 : 1;
-  const nextFirstFailed = withinWindow ? windowStart : now;
-  const shouldLock = nextAttempts >= MAX_FAILED_ATTEMPTS;
+    const now = new Date();
+    const withinWindow =
+      row.firstFailedLoginAt !== null &&
+      now.getTime() - row.firstFailedLoginAt.getTime() <= FAILED_WINDOW_MS;
 
-  await prisma.user.update({
-    where: { id: user.id },
-    data: {
-      failedLoginAttempts: nextAttempts,
-      firstFailedLoginAt: nextFirstFailed,
-      ...(shouldLock
-        ? {
-            status: 'LOCKED',
-            lockedUntil: new Date(now.getTime() + LOCKOUT_DURATION_MS),
-          }
-        : {}),
-    },
+    const nextAttempts = withinWindow ? row.failedLoginAttempts + 1 : 1;
+    const nextFirstFailed = withinWindow ? row.firstFailedLoginAt : now;
+    const shouldLock =
+      nextAttempts >= MAX_FAILED_ATTEMPTS && row.status !== 'LOCKED';
+
+    await tx.user.update({
+      where: { id: userId },
+      data: {
+        failedLoginAttempts: nextAttempts,
+        firstFailedLoginAt: nextFirstFailed,
+        ...(shouldLock ? { status: 'LOCKED' as const } : {}),
+      },
+    });
+
+    return nextAttempts;
   });
 }

@@ -1,0 +1,260 @@
+import { randomBytes } from 'node:crypto';
+import { prisma } from '../prisma.js';
+import { badRequest, notFound } from '../http.js';
+import {
+  INTAKE_SESSION_TTL_MINUTES,
+  type IntakeFormSubmit,
+  type TabletIntakeSessionAdmin,
+  type TabletIntakeSessionPublic,
+} from '@clinic/schemas';
+import { writeAudit } from '../audit/audit.service.js';
+import { AuditActions } from '../audit/actions.js';
+
+const INTAKE_RESOURCE = 'TABLET_INTAKE_SESSION';
+
+/** 32 bytes base64url ~ 43 chars; opaque, high-entropy, URL-safe. */
+function generateToken(): string {
+  return randomBytes(32).toString('base64url');
+}
+
+function minutesFromNow(mins: number): Date {
+  return new Date(Date.now() + mins * 60_000);
+}
+
+/* ------------------------------- Lifecycle -------------------------------- */
+
+export async function startSession(input: {
+  clinicId: string;
+  startedBySecretaryId: string | null;
+  userEmail: string | null;
+  userRole: string | null;
+}): Promise<TabletIntakeSessionAdmin> {
+  const clinic = await prisma.clinic.findUnique({
+    where: { id: input.clinicId },
+    select: { id: true, isActive: true },
+  });
+  if (!clinic) throw notFound('Clinic not found');
+  if (!clinic.isActive) throw badRequest('Clinic is not active');
+
+  const session = await prisma.tabletIntakeSession.create({
+    data: {
+      clinicId: input.clinicId,
+      startedBySecretaryId: input.startedBySecretaryId,
+      token: generateToken(),
+      expiresAt: minutesFromNow(INTAKE_SESSION_TTL_MINUTES),
+    },
+  });
+
+  await writeAudit({
+    userId: input.startedBySecretaryId,
+    userEmail: input.userEmail,
+    userRole: input.userRole,
+    action: AuditActions.INTAKE_SESSION_STARTED,
+    resourceType: INTAKE_RESOURCE,
+    resourceId: session.id,
+    method: null,
+    path: null,
+    statusCode: null,
+    ipAddress: null,
+    userAgent: null,
+    metadata: { clinicId: input.clinicId },
+  });
+
+  return {
+    id: session.id,
+    token: session.token,
+    clinicId: session.clinicId,
+    status: session.status,
+    expiresAt: session.expiresAt,
+    createdAt: session.createdAt,
+  };
+}
+
+/**
+ * Fetch by token. Transitions ACTIVE -> EXPIRED on read if expiresAt has passed.
+ * The returned public shape never exposes form data or secretary identifiers.
+ */
+export async function getSessionByToken(token: string): Promise<TabletIntakeSessionPublic> {
+  const session = await prisma.tabletIntakeSession.findUnique({
+    where: { token },
+    include: { clinic: { select: { id: true, name: true } } },
+  });
+  if (!session) throw notFound('Intake session not found');
+
+  // Auto-expire on read so stale sessions don't look usable in the UI.
+  let effective = session;
+  if (session.status === 'ACTIVE' && session.expiresAt.getTime() < Date.now()) {
+    effective = {
+      ...(await prisma.tabletIntakeSession.update({
+        where: { id: session.id },
+        data: { status: 'EXPIRED' },
+      })),
+      clinic: session.clinic,
+    } as typeof session;
+  }
+
+  return {
+    id: effective.id,
+    status: effective.status,
+    clinic: effective.clinic,
+    expiresAt: effective.expiresAt,
+    createdAt: effective.createdAt,
+    submittedAt: effective.submittedAt,
+  };
+}
+
+/* ------------------------------- Submit ----------------------------------- */
+
+async function findOrCreatePatient(payload: IntakeFormSubmit) {
+  // Dedup on first + last + mobileNumber (case-insensitive on name). If no
+  // mobile is given, we skip dedup to avoid merging two different people.
+  if (payload.mobileNumber) {
+    const match = await prisma.patient.findFirst({
+      where: {
+        firstName: { equals: payload.firstName, mode: 'insensitive' },
+        lastName: { equals: payload.lastName, mode: 'insensitive' },
+        mobileNumber: payload.mobileNumber,
+      },
+    });
+    if (match) return { patient: match, created: false };
+  }
+  const patient = await prisma.patient.create({
+    data: {
+      firstName: payload.firstName,
+      lastName: payload.lastName,
+      ...(payload.mobileNumber ? { mobileNumber: payload.mobileNumber } : {}),
+    },
+  });
+  return { patient, created: true };
+}
+
+export async function submitSession(token: string, payload: IntakeFormSubmit) {
+  const session = await prisma.tabletIntakeSession.findUnique({ where: { token } });
+  if (!session) throw notFound('Intake session not found');
+
+  if (session.status !== 'ACTIVE') {
+    throw badRequest(`Session is ${session.status} and cannot accept a submission`);
+  }
+  if (session.expiresAt.getTime() < Date.now()) {
+    await prisma.tabletIntakeSession.update({
+      where: { id: session.id },
+      data: { status: 'EXPIRED' },
+    });
+    throw badRequest('Session has expired');
+  }
+
+  const { patient, created } = await findOrCreatePatient(payload);
+
+  // Submission + status flip in one transaction so a crashed submit never
+  // leaves us with a submission row and an ACTIVE session (which would allow
+  // a second submit).
+  const result = await prisma.$transaction(async (tx) => {
+    const submission = await tx.tabletIntakeSubmission.create({
+      data: {
+        sessionId: session.id,
+        patientId: patient.id,
+        rawPayload: payload as any,
+      },
+    });
+    const updatedSession = await tx.tabletIntakeSession.update({
+      where: { id: session.id },
+      data: { status: 'SUBMITTED', submittedAt: new Date() },
+    });
+    return { submission, session: updatedSession };
+  });
+
+  await writeAudit({
+    userId: session.startedBySecretaryId,
+    userEmail: null,
+    userRole: 'SECRETARY',
+    action: AuditActions.INTAKE_SESSION_SUBMITTED,
+    resourceType: INTAKE_RESOURCE,
+    resourceId: session.id,
+    method: null,
+    path: null,
+    statusCode: null,
+    ipAddress: null,
+    userAgent: null,
+    metadata: {
+      patientId: patient.id,
+      patientCreated: created,
+      clinicId: session.clinicId,
+    },
+  });
+
+  return {
+    sessionId: result.session.id,
+    patientId: patient.id,
+    patientCreated: created,
+    submittedAt: result.session.submittedAt,
+  };
+}
+
+/* ------------------------------- Cancel ----------------------------------- */
+
+export async function cancelSession(input: {
+  id: string;
+  cancelledById: string | null;
+  userEmail: string | null;
+  userRole: string | null;
+}) {
+  const session = await prisma.tabletIntakeSession.findUnique({ where: { id: input.id } });
+  if (!session) throw notFound('Intake session not found');
+  if (session.status !== 'ACTIVE') {
+    throw badRequest(`Session is ${session.status} and cannot be cancelled`);
+  }
+
+  const updated = await prisma.tabletIntakeSession.update({
+    where: { id: input.id },
+    data: { status: 'CANCELLED', cancelledAt: new Date() },
+  });
+
+  await writeAudit({
+    userId: input.cancelledById,
+    userEmail: input.userEmail,
+    userRole: input.userRole,
+    action: AuditActions.INTAKE_SESSION_CANCELLED,
+    resourceType: INTAKE_RESOURCE,
+    resourceId: input.id,
+    method: null,
+    path: null,
+    statusCode: null,
+    ipAddress: null,
+    userAgent: null,
+    metadata: { clinicId: session.clinicId },
+  });
+
+  return updated;
+}
+
+/* ------------------------------- Admin list ------------------------------- */
+
+export async function listSessionsForClinic(
+  clinicId: string,
+  page: number,
+  pageSize: number,
+) {
+  const where = { clinicId };
+  const [items, total] = await Promise.all([
+    prisma.tabletIntakeSession.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      // Omit the token from admin list so a cross-site screenshot can't be
+      // reused — the secretary who started it already got it at creation.
+      select: {
+        id: true,
+        clinicId: true,
+        status: true,
+        expiresAt: true,
+        createdAt: true,
+        submittedAt: true,
+        cancelledAt: true,
+        startedBySecretaryId: true,
+      },
+    }),
+    prisma.tabletIntakeSession.count({ where }),
+  ]);
+  return { items, total, page, pageSize };
+}
