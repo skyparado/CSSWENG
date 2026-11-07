@@ -177,7 +177,7 @@ export const api = {
   login: (email: string, password: string) =>
     call<{ user: User }>('POST', '/api/auth/login', { email, password }),
   logout: () => call<void>('POST', '/api/auth/logout'),
-  setActiveClinic: (clinicId: string) => call<void>('PUT', '/api/auth/active-clinic', { clinicId }),
+  setActiveClinic: (clinicId: string) => call<void>('POST', '/api/auth/select-clinic', { clinicId }),
 
   listClinics: () => call<Paged<Clinic>>('GET', '/api/clinics?page=1&pageSize=100'),
   clinicHours: () => call<{ items: ClinicHours[] }>('GET', '/api/clinics/schedules'),
