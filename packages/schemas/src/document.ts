@@ -8,6 +8,7 @@ export const documentTypeSchema = z.enum([
 export type DocumentType = z.infer<typeof documentTypeSchema>;
 
 export const documentRequestStatusSchema = z.enum([
+  'REQUESTED',
   'PENDING',
   'GENERATING',
   'READY',
@@ -71,22 +72,54 @@ export type DocumentSend = z.infer<typeof documentSendSchema>;
 
 /* ----------------------------- Document request ------------------------------ */
 
+/** A safety alert the Doctor acknowledged before issuing a prescription. */
+export const safetyAcknowledgementSchema = z.object({
+  drug: z.string().max(200),
+  message: z.string().max(500),
+  reason: z.string().max(500).optional(),
+});
+
+/** Optional links shared by both document types. */
+const requestLinks = {
+  clinicId: idSchema,
+  patientId: idSchema,
+  /** Fulfil a REQUESTED request logged by staff instead of creating a new one. */
+  requestId: idSchema.optional(),
+  /** Issue a new version of this signed document. */
+  previousVersionId: idSchema.optional(),
+  safetyAcknowledgements: z.array(safetyAcknowledgementSchema).max(50).optional(),
+};
+
 /**
  * A request to generate a document. The `payload` shape depends on `type`
  * and is validated per-type server-side before rendering.
  */
 export const documentRequestCreateSchema = z.discriminatedUnion('type', [
-  z.object({
-    type: z.literal('PRESCRIPTION'),
-    clinicId: idSchema,
-    patientId: idSchema,
-    payload: prescriptionPayloadSchema,
-  }),
-  z.object({
-    type: z.literal('MEDICAL_CERTIFICATE'),
-    clinicId: idSchema,
-    patientId: idSchema,
-    payload: medicalCertificatePayloadSchema,
-  }),
+  z.object({ type: z.literal('PRESCRIPTION'), ...requestLinks, payload: prescriptionPayloadSchema }),
+  z.object({ type: z.literal('MEDICAL_CERTIFICATE'), ...requestLinks, payload: medicalCertificatePayloadSchema }),
 ]);
 export type DocumentRequestCreate = z.infer<typeof documentRequestCreateSchema>;
+
+export const documentRequestChannelSchema = z.enum(['PHONE', 'IN_PERSON', 'EMAIL']);
+
+/** S15 "New Request": staff log what a patient asked for; the Doctor prepares it later. */
+export const documentRequestIntakeSchema = z.object({
+  clinicId: idSchema,
+  patientId: idSchema,
+  type: documentTypeSchema,
+  requestedVia: documentRequestChannelSchema,
+  notes: z.string().max(1000).optional(),
+});
+export type DocumentRequestIntake = z.infer<typeof documentRequestIntakeSchema>;
+
+/** Signing asks the Doctor to re-enter their password. */
+export const documentSignSchema = z.object({ password: z.string().min(1).max(256) });
+
+/** S15 list: one tab, one page. */
+export const documentQueueQuerySchema = z.object({
+  clinicId: idSchema,
+  tab: z.enum(['all', 'queue', 'ready', 'delivered']).default('all'),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(10),
+});
+export type DocumentQueueQuery = z.infer<typeof documentQueueQuerySchema>;

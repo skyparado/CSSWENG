@@ -90,3 +90,29 @@ export function checkWithinOperatingHours(
     ? { ok: true }
     : { ok: false, reason: 'appointment falls outside operating hours' };
 }
+
+const SLOT_MS = 30 * 60_000;
+
+/**
+ * The first `count` start times at or after `from` (on the 30-minute grid) where
+ * a visit of `durationMs` fits the clinic's hours and overlaps nothing in
+ * `busy` ([start, end) in UTC ms). Looks at most `horizonDays` ahead. Used to
+ * offer the nearest free times when a booking is refused.
+ */
+export function nearestFreeTimes(
+  from: Date,
+  durationMs: number,
+  schedules: ScheduleWindow[],
+  timezone: string,
+  busy: Array<[number, number]>,
+  count = 3,
+  horizonDays = 14,
+): Date[] {
+  const found: Date[] = [];
+  const end = from.getTime() + horizonDays * 86_400_000;
+  for (let t = Math.ceil(from.getTime() / SLOT_MS) * SLOT_MS; t < end && found.length < count; t += SLOT_MS) {
+    const fits = checkWithinOperatingHours(new Date(t), new Date(t + durationMs), schedules, timezone).ok;
+    if (fits && !busy.some(([s, e]) => s < t + durationMs && e > t)) found.push(new Date(t));
+  }
+  return found;
+}

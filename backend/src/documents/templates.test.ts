@@ -23,6 +23,20 @@ describe('document templates', () => {
     expect(html).not.toContain('<b>Dela Cruz</b>');
   });
 
+  it('stamps unsigned documents as drafts and embeds the signature once signed', () => {
+    const p = {
+      patientName: 'Maria Santos',
+      clinicName: 'Happy Eyes',
+      prescriberName: 'Angeline Pacio, MD',
+      issuedOn: new Date('2026-01-10T00:00:00Z'),
+      items: [{ drug: 'Timolol', dosage: '1 drop', frequency: 'BID', duration: '30 days' }],
+    };
+    expect(renderPrescriptionHtml(p)).toContain('DRAFT · NOT SIGNED');
+    const signed = renderPrescriptionHtml(p, 'data:image/png;base64,AAAA');
+    expect(signed).toContain('<img class="sig-img" src="data:image/png;base64,AAAA"');
+    expect(signed).not.toContain('DRAFT');
+  });
+
   it('renders a medical certificate with a rest period', () => {
     const html = renderMedicalCertificateHtml({
       patientName: 'Maria Santos',

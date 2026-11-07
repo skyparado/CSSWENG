@@ -10,6 +10,8 @@ import {
 import { prisma } from '../prisma.js';
 import { asyncHandler, notFound, validate } from '../http.js';
 import { requireAuth, requireDoctor } from '../auth/middleware.js';
+import { currentUser } from '../auth/guards.js';
+import type { Prisma } from '@prisma/client';
 
 export const clinicsRouter = Router();
 
@@ -21,7 +23,16 @@ const clinicListQuerySchema = paginationSchema.extend({
 // schedule changes additionally require the Doctor role.
 clinicsRouter.use(requireAuth);
 
-/** GET /api/clinics — paginated list of active clinics; `?includeInactive=true` lists all. */
+/**
+ * Clinics the user may work in: the Doctor works in all of them, a Secretary
+ * only in the clinics assigned to them (UserClinic).
+ */
+export function authorizedClinics(req: Parameters<typeof currentUser>[0]): Prisma.ClinicWhereInput {
+  const user = currentUser(req);
+  return user.role === 'DOCTOR' ? {} : { staff: { some: { userId: user.userId } } };
+}
+
+/** GET /api/clinics — paginated list of active clinics the user may work in; `?includeInactive=true` lists all. */
 clinicsRouter.get(
   '/',
   validate(clinicListQuerySchema, 'query'),
@@ -31,10 +42,11 @@ clinicsRouter.get(
       pageSize: number;
       includeInactive?: 'true' | 'false';
     };
-    const where = includeInactive === 'true' ? {} : { isActive: true };
+    const where = { ...authorizedClinics(req), ...(includeInactive === 'true' ? {} : { isActive: true }) };
     const [items, total] = await Promise.all([
       prisma.clinic.findMany({
         where,
+        include: { schedules: { orderBy: [{ dayOfWeek: 'asc' }, { openTime: 'asc' }] } },
         orderBy: { name: 'asc' },
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -42,6 +54,22 @@ clinicsRouter.get(
       prisma.clinic.count({ where }),
     ]);
     res.json({ items, total, page, pageSize });
+  }),
+);
+
+/**
+ * GET /api/clinics/schedules — every active clinic's name and hours, so the
+ * calendar can show where the Doctor is on other days. Hours are not sensitive.
+ */
+clinicsRouter.get(
+  '/schedules',
+  asyncHandler(async (_req, res) => {
+    const items = await prisma.clinic.findMany({
+      where: { isActive: true },
+      select: { id: true, name: true, schedules: { select: { dayOfWeek: true, openTime: true, closeTime: true } } },
+      orderBy: { name: 'asc' },
+    });
+    res.json({ items });
   }),
 );
 

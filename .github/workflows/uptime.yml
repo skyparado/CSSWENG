@@ -1,0 +1,22 @@
+# External uptime monitor: GitHub's runners call the deployed health check
+# every 10 minutes. A failed run emails the repository's watchers/admins.
+# Set the repository variable HEALTHCHECK_URL (Settings → Secrets and
+# variables → Actions → Variables), e.g. https://clinic-emr.onrender.com
+name: Uptime
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  health:
+    name: GET /health/ready
+    runs-on: ubuntu-latest
+    if: vars.HEALTHCHECK_URL != ''
+    steps:
+      - name: Check the API and database are up
+        env:
+          URL: ${{ vars.HEALTHCHECK_URL }}
+        # Retries absorb a cold start or a single blip before alerting.
+        run: curl --fail --silent --show-error --max-time 20 --retry 3 --retry-delay 15 --retry-all-errors "$URL/health/ready"
