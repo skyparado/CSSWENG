@@ -17,6 +17,9 @@ export default defineConfig({
       REDIS_URL: process.env.REDIS_URL ?? 'redis://localhost:6379',
       SESSION_SECRET:
         process.env.SESSION_SECRET ?? 'vitest-session-secret-not-used-in-production',
+      PRISMA_FIELD_ENCRYPTION_KEY:
+        process.env.PRISMA_FIELD_ENCRYPTION_KEY ??
+        'k1.aesgcm256.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
     },
     coverage: {
       reporter: ['text', 'html'],
