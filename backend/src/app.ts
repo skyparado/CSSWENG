@@ -11,16 +11,16 @@ import { clinicsRouter } from './clinics/clinics.routes.js';
 import { appointmentsRouter } from './appointments/appointments.routes.js';
 import { documentsRouter } from './documents/documents.routes.js';
 import { authRouter } from './auth/auth.routes.js';
+import { usersRouter } from './users/users.routes.js';
 import { consentsRouter } from './consents/consents.routes.js';
 import { followUpsRouter } from './followups/followups.routes.js';
 import { outreachRouter } from './followups/outreach.routes.js';
 import { medicationsRouter } from './medications/medications.routes.js';
 import { allergiesRouter } from './medications/allergies.routes.js';
-import { patientsStubRouter } from './patients/patients.stub.routes.js';
-
-// The built SPA (frontend/dist). Served by this app in production so the site
-// and API share one origin and the session cookie needs no CORS.
-const webDir = fileURLToPath(new URL('../../frontend/dist', import.meta.url));
+import { auditRouter } from './audit/audit.routes.js';
+import { auditMiddleware } from './audit/audit.middleware.js';
+import { clinicalImagesRouter } from './clinicalImages/clinicalImages.routes.js';
+import { tabletIntakeRouter } from './tabletIntake/tabletIntake.routes.js';
 
 /**
  * Build the Express app (no network listen). Kept separate from index.ts so
@@ -50,7 +50,16 @@ export function createApp(): Express {
   // can read req.session.user.
   app.use(buildSessionMiddleware());
 
+  // Audit middleware comes AFTER session so it can snapshot the actor, and
+  // BEFORE routes so every route's response is observed. It skips /health
+  // and /api/audit itself to avoid noise and recursion.
+  app.use(auditMiddleware);
+
   app.use('/api/auth', authRouter);
+  app.use('/api/users', usersRouter);
+  app.use('/api/audit', auditRouter);
+  app.use('/api/clinical-images', clinicalImagesRouter);
+  app.use('/api/tablet-intake', tabletIntakeRouter);
   app.use('/health', healthRouter);
   app.use('/api/clinics', clinicsRouter);
   app.use('/api/appointments', appointmentsRouter);

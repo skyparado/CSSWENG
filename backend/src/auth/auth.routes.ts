@@ -1,22 +1,33 @@
 import { Router } from 'express';
-import {
-  activeClinicSchema,
-  loginSchema,
-  type ActiveClinicInput,
-  type AuthUser,
-} from '@clinic/schemas';
+import rateLimit from 'express-rate-limit';
+import { loginSchema, type AuthUser } from '@clinic/schemas';
 import { asyncHandler, validate, HttpError } from '../http.js';
 import { requireAuth } from './middleware.js';
 import { authorizedClinics } from '../clinics/clinics.routes.js';
 import { prisma } from '../prisma.js';
-import { authenticate } from './auth.service.js';
+import { authenticate, InvalidCredentialsError } from './auth.service.js';
 import { env } from '../env.js';
 
 export const authRouter = Router();
 
+/**
+ * Per-IP rate limit on /login per SDD 7.2. 10 attempts per 15-minute window,
+ * with the standard RateLimit-* headers so clients can back off before they
+ * hit the wall. Counted per IP (trust proxy is set in app.ts so a reverse
+ * proxy's X-Forwarded-For is honoured).
+ */
+const loginRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts from this IP. Try again later.' },
+});
+
 /** POST /api/auth/login — exchange credentials for a session cookie. */
 authRouter.post(
   '/login',
+  loginRateLimiter,
   validate(loginSchema, 'body'),
   asyncHandler(async (req, res) => {
     const { email, password } = req.body as {
@@ -24,12 +35,26 @@ authRouter.post(
       password: string;
     };
 
-    const user = await authenticate(email, password);
+    let user;
+    try {
+      user = await authenticate(email, password);
+    } catch (err) {
+      // Surface attemptsRemaining to the client when we have it. Status stays
+      // 401 and the message is the same generic "Invalid credentials" the
+      // service throws — the only extra signal is the counter.
+      if (err instanceof InvalidCredentialsError) {
+        return res.status(err.status).json({
+          error: err.message,
+          attemptsRemaining: err.attemptsRemaining,
+        });
+      }
+      throw err;
+    }
 
     // Rotate the session id after a successful login to prevent session
     // fixation (a pre-login session id must not become a logged-in id).
-    req.session.regenerate((err) => {
-      if (err) return res.status(500).json({ error: 'Session error' });
+    req.session.regenerate((regenErr) => {
+      if (regenErr) return res.status(500).json({ error: 'Session error' });
 
       req.session.user = {
         userId: user.id,

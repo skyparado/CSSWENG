@@ -55,11 +55,11 @@ const envSchema = z.object({
 
   // Gateways. "stub" logs instead of sending until a real provider is chosen.
   SMS_PROVIDER: z.enum(['stub']).default('stub'),
-  EMAIL_PROVIDER: z.enum(['stub', 'smtp']).default('stub'),
-  // Used when EMAIL_PROVIDER=smtp, e.g. smtp://localhost:1025 (Mailpit) or
-  // smtps://user:pass@smtp.provider.com:465.
-  SMTP_URL: z.string().default('smtp://localhost:1025'),
-  EMAIL_FROM: z.string().default('Clinic <no-reply@clinic.local>'),
+  EMAIL_PROVIDER: z.enum(['stub']).default('stub'),
+
+  PRISMA_FIELD_ENCRYPTION_KEY: z
+    .string()
+    .startsWith('k1.aesgcm256.', 'Must start with "k1.aesgcm256."'),
 });
 
 const parsed = envSchema.parse(process.env);
