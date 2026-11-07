@@ -56,6 +56,10 @@ const envSchema = z.object({
   // Gateways. "stub" logs instead of sending until a real provider is chosen.
   SMS_PROVIDER: z.enum(['stub']).default('stub'),
   EMAIL_PROVIDER: z.enum(['stub']).default('stub'),
+
+  PRISMA_FIELD_ENCRYPTION_KEY: z
+    .string()
+    .startsWith('k1.aesgcm256.', 'Must start with "k1.aesgcm256."'),
 });
 
 const parsed = envSchema.parse(process.env);
