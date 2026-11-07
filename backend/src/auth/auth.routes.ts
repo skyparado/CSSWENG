@@ -140,6 +140,22 @@ authRouter.post(
       throw new HttpError(404, 'Clinic not found');
     }
 
+    // Secretaries may only select a clinic they are assigned to via
+    // UserClinic (QA 3 / US-02 / US-06). Doctors can select any active clinic.
+    if (req.session.user.role !== 'DOCTOR') {
+      const assignment = await prisma.userClinic.findUnique({
+        where: {
+          userId_clinicId: {
+            userId: req.session.user.userId,
+            clinicId: clinic.id,
+          },
+        },
+      });
+      if (!assignment) {
+        throw new HttpError(403, 'You are not assigned to that clinic.');
+      }
+    }
+
     req.session.user = {
       ...req.session.user,
       activeClinicId: clinic.id,
