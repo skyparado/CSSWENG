@@ -30,6 +30,7 @@ model Patient {
 
   appointments     Appointment[]
   documents        Document[]
+  images           ClinicalImage[]
   documentRequests DocumentRequest[]
   consents         PatientConsent[]
   followUps        FollowUp[]
@@ -56,6 +57,8 @@ model User {
   updatedAt           DateTime   @updatedAt
 
   documentRequests DocumentRequest[]
+  uploadedImages      ClinicalImage[]
+  createdAnnotations  ImageAnnotation[]
   documentsSigned  Document[]        @relation("DocumentSignedBy")
   documentsSent    Document[]        @relation("DocumentSentBy")
 
@@ -145,6 +148,7 @@ model Appointment {
   clinic    Clinic     @relation(fields: [clinicId], references: [id], onDelete: Restrict)
   patient   Patient    @relation(fields: [patientId], references: [id], onDelete: Restrict)
   followUps FollowUp[]
+  images    ClinicalImage[]
 
   @@index([clinicId, startsAt])
   @@index([patientId, startsAt])
@@ -491,4 +495,61 @@ model AuditLog {
   @@index([action, createdAt])
   @@index([resourceType, resourceId])
   @@index([createdAt])
+}
+
+// ============================= Clinical Images (Dev 4) =======================
+
+/// Soft-delete status for ClinicalImage. Hard delete would compromise the
+/// audit trail; a DELETED row stays in the DB but is hidden from normal reads.
+enum ImageStatus {
+  ACTIVE
+  DELETED
+}
+
+/// A clinical image uploaded by a Doctor for a patient, optionally tied to a
+/// specific appointment (visit). The bytes live in S3-compatible storage under
+/// `storageKey`; only the Doctor's object-storage client ever sees them in the
+/// clear (server-side encryption is applied on upload).
+model ClinicalImage {
+  id            String      @id @default(cuid())
+  patientId     String
+  appointmentId String?
+  uploadedById  String?
+  // S3 object key, unique across the bucket.
+  storageKey    String      @unique
+  fileName      String
+  mimeType      String
+  sizeBytes     Int
+  caption       String?
+  status        ImageStatus @default(ACTIVE)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  patient     Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  appointment Appointment?      @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  uploadedBy  User?             @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  annotations ImageAnnotation[]
+
+  @@index([patientId, createdAt])
+  @@index([appointmentId])
+  @@index([status])
+}
+
+/// A versioned Konva drawing/annotation layer over a ClinicalImage. Saves are
+/// append-only: a new save creates a new row with the next `version` number,
+/// so the previous layer stays in the DB and can be audited or restored.
+model ImageAnnotation {
+  id              String   @id @default(cuid())
+  clinicalImageId String
+  createdById     String?
+  version         Int      @default(1)
+  // Full Konva stage JSON (strokes, text, shapes, their styling).
+  konvaData       Json
+  createdAt       DateTime @default(now())
+
+  clinicalImage ClinicalImage @relation(fields: [clinicalImageId], references: [id], onDelete: Cascade)
+  createdBy     User?         @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([clinicalImageId, version])
+  @@index([clinicalImageId, createdAt])
 }
