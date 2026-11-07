@@ -13,7 +13,7 @@ function isSkipped(path: string): boolean {
 
 /**
  * After every (non-skipped) response finishes, fire-and-forget an audit entry.
- * Failing to write does not fail the request — the error is logged instead so
+ * Failing to write does not fail the request. The error is logged instead so
  * operators notice if the audit chain stops advancing.
  */
 export function auditMiddleware(
@@ -30,19 +30,26 @@ export function auditMiddleware(
     return next();
   }
 
+  // Snapshot everything we need at middleware time, including the user.
+  // Later middleware (refreshSessionUser, logout) may destroy the session
+  // before the response finishes, at which point req.session is undefined.
+  // Capturing early means we log who STARTED the request, which is what
+  // the audit trail actually wants.
+  const sessionUser = req.session?.user;
   const snapshot = {
     method: req.method,
     path: originalUrl,
     ipAddress: req.ip ?? null,
     userAgent: req.get('user-agent') ?? null,
+    userId: sessionUser?.userId ?? null,
+    userRole: sessionUser?.role ?? null,
   };
 
   res.on('finish', () => {
-    const user = req.session.user;
     writeAudit({
-      userId: user?.userId ?? null,
+      userId: snapshot.userId,
       userEmail: null, // middleware does not read the DB; business events set this
-      userRole: user?.role ?? null,
+      userRole: snapshot.userRole,
       action: AuditActions.HTTP_REQUEST,
       resourceType: null,
       resourceId: null,
