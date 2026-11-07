@@ -19,17 +19,17 @@ datasource db {
 
 /// PLACEHOLDER — owned by Developer 2. Keep `id`.
 model Patient {
-  id           String   @id @default(cuid())
-  firstName    String
-  lastName     String
+  id        String @id @default(cuid())
+  firstName String
+  lastName  String
   // Contact details used by reminders. Dev 2: keep these when replacing the
   // stub (the full model stores them encrypted).
-  
-  /// @encrypted
-  mobileNumber  String?
 
-  email        String?
-  createdAt    DateTime @default(now())
+  /// @encrypted
+  mobileNumber String?
+
+  email     String?
+  createdAt DateTime @default(now())
 
   appointments     Appointment[]
   documents        Document[]
@@ -61,11 +61,15 @@ model User {
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt
 
-  documentRequests DocumentRequest[]
-  uploadedImages      ClinicalImage[]
-  createdAnnotations  ImageAnnotation[]
-  documentsSigned  Document[]        @relation("DocumentSignedBy")
-  documentsSent    Document[]        @relation("DocumentSentBy")
+  documentRequests   DocumentRequest[]
+  clinics            UserClinic[]
+  appointmentEvents  AppointmentEvent[]
+  walkInsApproved    Appointment[]      @relation("WalkInApprovedBy")
+  documentDeliveries DocumentDelivery[]
+  uploadedImages     ClinicalImage[]
+  createdAnnotations ImageAnnotation[]
+  documentsSigned    Document[]         @relation("DocumentSignedBy")
+  documentsSent      Document[]         @relation("DocumentSentBy")
 
   consentsRecorded    PatientConsent[] @relation("ConsentRecordedBy")
   consentsWithdrawn   PatientConsent[] @relation("ConsentWithdrawnBy")
@@ -158,20 +162,29 @@ enum AppointmentStatus {
 }
 
 model Appointment {
-  id        String            @id @default(cuid())
-  clinicId  String
-  patientId String
-  startsAt  DateTime
-  endsAt    DateTime
-  reason    String?
-  status    AppointmentStatus @default(SCHEDULED)
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
+  id                 String            @id @default(cuid())
+  clinicId           String
+  patientId          String
+  startsAt           DateTime
+  endsAt             DateTime
+  reason             String?
+  visitType          String?
+  status             AppointmentStatus @default(SCHEDULED)
+  cancelReason       String?
+  // A walk-in is booked for "now", even outside clinic hours, and needs the
+  // Doctor's approval, which is recorded here.
+  walkIn             Boolean           @default(false)
+  walkInApprovedById String?
+  walkInApprovedAt   DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
 
-  clinic    Clinic     @relation(fields: [clinicId], references: [id], onDelete: Restrict)
-  patient   Patient    @relation(fields: [patientId], references: [id], onDelete: Restrict)
-  followUps FollowUp[]
-  images    ClinicalImage[]
+  clinic           Clinic             @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  patient          Patient            @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  walkInApprovedBy User?              @relation("WalkInApprovedBy", fields: [walkInApprovedById], references: [id], onDelete: Restrict)
+  followUps        FollowUp[]
+  events           AppointmentEvent[]
+  images           ClinicalImage[]
 
   @@index([clinicId, startsAt])
   @@index([patientId, startsAt])
@@ -594,22 +607,22 @@ enum ImageStatus {
 /// `storageKey`; only the Doctor's object-storage client ever sees them in the
 /// clear (server-side encryption is applied on upload).
 model ClinicalImage {
-  id            String      @id @default(cuid())
+  id            String  @id @default(cuid())
   patientId     String
   appointmentId String?
   uploadedById  String?
   // S3 object key, unique across the bucket.
-  storageKey    String      @unique
+  storageKey    String  @unique
   fileName      String
   mimeType      String
   sizeBytes     Int
 
   /// @encrypted
-  caption       String?
+  caption String?
 
-  status        ImageStatus @default(ACTIVE)
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  status    ImageStatus @default(ACTIVE)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
 
   patient     Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
   appointment Appointment?      @relation(fields: [appointmentId], references: [id], onDelete: SetNull)

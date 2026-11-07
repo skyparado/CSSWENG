@@ -1,6 +1,11 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
-import { loginSchema, type AuthUser } from '@clinic/schemas';
+import {
+  activeClinicSchema,
+  loginSchema,
+  type ActiveClinicInput,
+  type AuthUser,
+} from '@clinic/schemas';
 import { asyncHandler, validate, HttpError } from '../http.js';
 import { requireAuth } from './middleware.js';
 import { authorizedClinics } from '../clinics/clinics.routes.js';
