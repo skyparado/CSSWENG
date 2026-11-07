@@ -9,6 +9,7 @@ import { clinicsRouter } from './clinics/clinics.routes.js';
 import { appointmentsRouter } from './appointments/appointments.routes.js';
 import { documentsRouter } from './documents/documents.routes.js';
 import { authRouter } from './auth/auth.routes.js';
+import { refreshSessionUser } from './auth/sessionRefresh.js';
 import { usersRouter } from './users/users.routes.js';
 import { consentsRouter } from './consents/consents.routes.js';
 import { followUpsRouter } from './followups/followups.routes.js';
@@ -45,6 +46,11 @@ export function createApp(): Express {
   // BEFORE routes so every route's response is observed. It skips /health
   // and /api/audit itself to avoid noise and recursion.
   app.use(auditMiddleware);
+
+  // On every request that has a session, re-check the user's status and
+  // role against the DB so a doctor's revoke or role change takes effect
+  // on the user's next request (QA 2.1, SDD 7.2).
+  app.use(refreshSessionUser);
 
   app.use('/api/auth', authRouter);
   app.use('/api/users', usersRouter);

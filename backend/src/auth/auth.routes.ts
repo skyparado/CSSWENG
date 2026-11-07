@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
-import { loginSchema, type AuthUser } from '@clinic/schemas';
+import { loginSchema, selectClinicSchema, type AuthUser, type SelectClinicInput } from '@clinic/schemas';
 import { asyncHandler, validate, HttpError } from '../http.js';
 import { prisma } from '../prisma.js';
 import { authenticate, InvalidCredentialsError } from './auth.service.js';
+import { sessionCookieOptions } from './session.js';
 import { env } from '../env.js';
 
 export const authRouter = Router();
@@ -81,7 +82,7 @@ authRouter.post(
     }
     req.session.destroy((err) => {
       if (err) return res.status(500).json({ error: 'Logout error' });
-      res.clearCookie(env.SESSION_COOKIE_NAME);
+      res.clearCookie(env.SESSION_COOKIE_NAME, sessionCookieOptions());
       res.status(204).end();
     });
   }),
@@ -110,5 +111,47 @@ authRouter.get(
       role: user.role,
     };
     res.json({ user: payload });
+  }),
+);
+
+/**
+ * POST /api/auth/select-clinic — set the active clinic on the current session.
+ *
+ * Validates the clinic exists and is active. Per-user clinic ACL (the user is
+ * only allowed clinics they are assigned to) is handled by the UserClinic
+ * model and clinic-scope middleware in the QA 3 branch. For now this endpoint
+ * accepts any active clinic; QA 3 will tighten it to the assigned set.
+ */
+authRouter.post(
+  '/select-clinic',
+  validate(selectClinicSchema, 'body'),
+  asyncHandler(async (req, res) => {
+    if (!req.session.user) {
+      throw new HttpError(401, 'Not authenticated');
+    }
+
+    const { clinicId } = req.body as SelectClinicInput;
+    const clinic = await prisma.clinic.findUnique({
+      where: { id: clinicId },
+      select: { id: true, name: true, isActive: true },
+    });
+
+    if (!clinic || !clinic.isActive) {
+      throw new HttpError(404, 'Clinic not found');
+    }
+
+    req.session.user = {
+      ...req.session.user,
+      activeClinicId: clinic.id,
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      req.session.save((err) => (err ? reject(err) : resolve()));
+    });
+
+    res.json({
+      activeClinicId: clinic.id,
+      clinic: { id: clinic.id, name: clinic.name },
+    });
   }),
 );
