@@ -21,6 +21,11 @@ import { auditRouter } from './audit/audit.routes.js';
 import { auditMiddleware } from './audit/audit.middleware.js';
 import { clinicalImagesRouter } from './clinicalImages/clinicalImages.routes.js';
 import { tabletIntakeRouter } from './tabletIntake/tabletIntake.routes.js';
+import { patientsStubRouter } from './patients/patients.stub.routes.js';
+
+// The built SPA (frontend/dist). Served by this app in production so the site
+// and API share one origin and the session cookie needs no CORS.
+const webDir = fileURLToPath(new URL('../../frontend/dist', import.meta.url));
 
 /**
  * Build the Express app (no network listen). Kept separate from index.ts so
