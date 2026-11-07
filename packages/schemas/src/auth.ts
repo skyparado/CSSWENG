@@ -17,6 +17,8 @@ export const authUserSchema = z.object({
 });
 export type AuthUser = z.infer<typeof authUserSchema>;
 
-/** Body of PUT /api/auth/active-clinic (S02 Clinic Selection). */
-export const activeClinicSchema = z.object({ clinicId: z.string().min(1) });
-export type ActiveClinicInput = z.infer<typeof activeClinicSchema>;
+/** POST /api/auth/select-clinic payload (S02 Clinic Selection). */
+export const selectClinicSchema = z.object({
+  clinicId: z.string().min(1),
+});
+export type SelectClinicInput = z.infer<typeof selectClinicSchema>;

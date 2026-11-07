@@ -2,8 +2,8 @@ import { expect, type Page } from '@playwright/test';
 
 // Seeded by backend/prisma/seed.ts.
 export const USERS = {
-  DOCTOR: { email: 'doctor@mabuhayclinic.local', password: 'DoctorPass123!' },
-  SECRETARY: { email: 'secretary@mabuhayclinic.local', password: 'SecretaryPass123!' },
+  DOCTOR: { email: 'doctor@pacio.clinic.local', password: 'DoctorPass123!' },
+  SECRETARY: { email: 'secretary@pacio.clinic.local', password: 'SecretaryPass123!' },
 };
 export const UERM_ID = 'seed-clinic-uerm'; // Mon 13:00–16:00, Thu 10:00–12:00
 export const PATIENT_ID = 'seed-patient-juan';

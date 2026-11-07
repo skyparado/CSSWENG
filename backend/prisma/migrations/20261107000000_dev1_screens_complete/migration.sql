@@ -1,3 +1,6 @@
+-- UserClinic is created by 20261107112813_add_user_clinic (main), which also
+-- adds assignedAt. Creating it here too would fail on a fresh database.
+
 -- CreateEnum
 CREATE TYPE "AppointmentAction" AS ENUM ('BOOKED', 'RESCHEDULED', 'CANCELLED', 'STATUS_CHANGED', 'WALK_IN_APPROVED');
 
@@ -23,14 +26,6 @@ ALTER TABLE "DocumentRequest" ADD COLUMN     "notes" TEXT,
 ADD COLUMN     "requestedVia" "DocumentRequestChannel",
 ADD COLUMN     "safetyAcknowledgements" JSONB,
 ALTER COLUMN "payload" DROP NOT NULL;
-
--- CreateTable
-CREATE TABLE "UserClinic" (
-    "userId" TEXT NOT NULL,
-    "clinicId" TEXT NOT NULL,
-
-    CONSTRAINT "UserClinic_pkey" PRIMARY KEY ("userId","clinicId")
-);
 
 -- CreateTable
 CREATE TABLE "AppointmentEvent" (
@@ -61,9 +56,6 @@ CREATE TABLE "DocumentDelivery" (
 );
 
 -- CreateIndex
-CREATE INDEX "UserClinic_clinicId_idx" ON "UserClinic"("clinicId");
-
--- CreateIndex
 CREATE INDEX "AppointmentEvent_appointmentId_at_idx" ON "AppointmentEvent"("appointmentId", "at");
 
 -- CreateIndex
@@ -71,12 +63,6 @@ CREATE INDEX "DocumentDelivery_documentId_sentAt_idx" ON "DocumentDelivery"("doc
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Document_previousVersionId_key" ON "Document"("previousVersionId");
-
--- AddForeignKey
-ALTER TABLE "UserClinic" ADD CONSTRAINT "UserClinic_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "UserClinic" ADD CONSTRAINT "UserClinic_clinicId_fkey" FOREIGN KEY ("clinicId") REFERENCES "Clinic"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "Appointment" ADD CONSTRAINT "Appointment_walkInApprovedById_fkey" FOREIGN KEY ("walkInApprovedById") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;

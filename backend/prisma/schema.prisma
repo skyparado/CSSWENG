@@ -126,19 +126,6 @@ model Clinic {
   @@index([isActive])
 }
 
-/// A clinic a Secretary may work in (S02 lists only these). The Doctor works
-/// across every clinic, so needs no rows here.
-model UserClinic {
-  userId   String
-  clinicId String
-
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-
-  @@id([userId, clinicId])
-  @@index([clinicId])
-}
-
 /// One operating-hours window for a clinic on a weekday (0 = Sunday … 6 = Saturday).
 model ClinicSchedule {
   id        String   @id @default(cuid())
@@ -704,4 +691,23 @@ model TabletIntakeSubmission {
   patient Patient             @relation(fields: [patientId], references: [id], onDelete: Cascade)
 
   @@index([patientId])
+}
+
+// ============================= User <-> Clinic (Dev 4) =======================
+
+/// Many-to-many assignment of users to clinics. A user can only act on data
+/// scoped to a clinic they are assigned to (QA 3). The Doctor is typically
+/// assigned to all clinics they own; Secretaries are assigned to one or more
+/// clinics they staff.
+model UserClinic {
+  userId     String
+  clinicId   String
+  assignedAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@id([userId, clinicId])
+  @@index([userId])
+  @@index([clinicId])
 }

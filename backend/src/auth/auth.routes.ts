@@ -1,16 +1,12 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
-import {
-  activeClinicSchema,
-  loginSchema,
-  type ActiveClinicInput,
-  type AuthUser,
-} from '@clinic/schemas';
+import { loginSchema, selectClinicSchema, type AuthUser, type SelectClinicInput } from '@clinic/schemas';
 import { asyncHandler, validate, HttpError } from '../http.js';
 import { requireAuth } from './middleware.js';
 import { authorizedClinics } from '../clinics/clinics.routes.js';
 import { prisma } from '../prisma.js';
 import { authenticate, InvalidCredentialsError } from './auth.service.js';
+import { sessionCookieOptions } from './session.js';
 import { env } from '../env.js';
 
 export const authRouter = Router();
@@ -92,7 +88,7 @@ authRouter.post(
     }
     req.session.destroy((err) => {
       if (err) return res.status(500).json({ error: 'Logout error' });
-      res.clearCookie(env.SESSION_COOKIE_NAME);
+      res.clearCookie(env.SESSION_COOKIE_NAME, sessionCookieOptions());
       res.status(204).end();
     });
   }),
@@ -126,21 +122,59 @@ authRouter.get(
 );
 
 /**
- * PUT /api/auth/active-clinic — S02: choose the clinic this session works in.
- * Clinic-scoped reads and writes (guards.ts) use it from then on.
+ * POST /api/auth/select-clinic — set the active clinic on the current session.
+ *
+ * Validates the clinic exists and is active. Per-user clinic ACL (the user is
+ * only allowed clinics they are assigned to) is handled by the UserClinic
+ * model and clinic-scope middleware in the QA 3 branch. For now this endpoint
+ * accepts any active clinic; QA 3 will tighten it to the assigned set.
  */
-authRouter.put(
-  '/active-clinic',
-  requireAuth,
-  validate(activeClinicSchema),
+authRouter.post(
+  '/select-clinic',
+  validate(selectClinicSchema, 'body'),
   asyncHandler(async (req, res) => {
-    const { clinicId } = req.body as ActiveClinicInput;
-    const clinic = await prisma.clinic.findFirst({
-      where: { id: clinicId, isActive: true, ...authorizedClinics(req) },
+    if (!req.session.user) {
+      throw new HttpError(401, 'Not authenticated');
+    }
+
+    const { clinicId } = req.body as SelectClinicInput;
+    const clinic = await prisma.clinic.findUnique({
+      where: { id: clinicId },
+      select: { id: true, name: true, isActive: true },
     });
-    // 404 rather than 403 so unassigned clinic ids are not confirmed.
-    if (!clinic) throw new HttpError(404, 'Clinic not found');
-    req.session.user!.activeClinicId = clinic.id;
-    res.json({ activeClinicId: clinic.id });
+
+    if (!clinic || !clinic.isActive) {
+      throw new HttpError(404, 'Clinic not found');
+    }
+
+    // Secretaries may only select a clinic they are assigned to via
+    // UserClinic (QA 3 / US-02 / US-06). Doctors can select any active clinic.
+    if (req.session.user.role !== 'DOCTOR') {
+      const assignment = await prisma.userClinic.findUnique({
+        where: {
+          userId_clinicId: {
+            userId: req.session.user.userId,
+            clinicId: clinic.id,
+          },
+        },
+      });
+      if (!assignment) {
+        throw new HttpError(403, 'You are not assigned to that clinic.');
+      }
+    }
+
+    req.session.user = {
+      ...req.session.user,
+      activeClinicId: clinic.id,
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      req.session.save((err) => (err ? reject(err) : resolve()));
+    });
+
+    res.json({
+      activeClinicId: clinic.id,
+      clinic: { id: clinic.id, name: clinic.name },
+    });
   }),
 );

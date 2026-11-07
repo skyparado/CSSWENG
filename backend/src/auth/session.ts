@@ -45,9 +45,7 @@ export function buildSessionMiddleware(): RequestHandler {
     saveUninitialized: false,
     rolling: true, // sliding idle timeout: refresh the cookie expiry each request
     cookie: {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: env.NODE_ENV === 'production',
+      ...sessionCookieOptions(),
       maxAge: idleTimeoutMs,
     },
   });
@@ -61,6 +59,20 @@ export interface AuthSession {
   userId: string;
   role: 'DOCTOR' | 'SECRETARY';
   activeClinicId?: string;
+}
+
+/**
+ * Cookie options shared by the session middleware and the logout
+ * clearCookie — they must match exactly or the browser will not clear the
+ * cookie on logout (QA 2.3).
+ */
+export function sessionCookieOptions() {
+  return {
+    httpOnly: true,
+    sameSite: 'lax' as const,
+    secure: env.NODE_ENV === 'production',
+    path: '/',
+  };
 }
 
 // Augment express-session's SessionData so req.session.user is typed.
