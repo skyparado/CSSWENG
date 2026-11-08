@@ -14,11 +14,15 @@ const db = vi.hoisted(() => ({
   clinic: { findUnique: vi.fn() },
   appointment: { findUnique: vi.fn() },
   patientConsent: { findFirst: vi.fn() },
-  outreachLog: { count: vi.fn(), create: vi.fn(), findMany: vi.fn() },
+  outreachLog: { count: vi.fn(), create: vi.fn(), findMany: vi.fn(), aggregate: vi.fn() },
+  $transaction: vi.fn(),
+  $queryRaw: vi.fn(),
 }));
+const audit = vi.hoisted(() => ({ writeAudit: vi.fn() }));
 const queue = vi.hoisted(() => ({ enqueueReminder: vi.fn() }));
 vi.mock('../prisma.js', () => ({ prisma: db }));
 vi.mock('../reminders/queue.js', () => queue);
+vi.mock('../audit/audit.service.js', () => audit);
 
 import { followUpsRouter } from './followups.routes.js';
 import { outreachRouter } from './outreach.routes.js';
@@ -41,7 +45,17 @@ beforeEach(() => {
   vi.resetAllMocks();
   db.followUp.findMany.mockResolvedValue([]);
   db.followUp.count.mockResolvedValue(0);
+  // Transactions run their callback against the same mock, like a single connection.
+  db.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(db));
+  db.$queryRaw.mockResolvedValue([]);
+  db.outreachLog.aggregate.mockResolvedValue({ _max: { attemptNumber: null } });
+  audit.writeAudit.mockResolvedValue({});
 });
+
+/** The audit entries written during a test. */
+function auditCalls() {
+  return audit.writeAudit.mock.calls.map(([entry]) => entry);
+}
 
 describe('GET /api/follow-ups/due and /overdue', () => {
   it('lists open tasks due in the window, filtered to the active clinic', async () => {
@@ -72,17 +86,31 @@ describe('GET /api/follow-ups/due and /overdue', () => {
     expect(res.body.total).toBe(1);
   });
 
-  it('applies the reason, priority, task type and patient filters', async () => {
+  it('applies the priority, task type and patient filters in the database', async () => {
     await request(doctorApp).get(
-      '/api/follow-ups/overdue?reason=glaucoma&priority=HIGH&taskType=LAB_TEST&patientId=p1',
+      '/api/follow-ups/overdue?priority=HIGH&taskType=LAB_TEST&patientId=p1',
     );
     const { where } = db.followUp.findMany.mock.calls[0][0];
-    expect(where).toMatchObject({
-      priority: 'HIGH',
-      taskType: 'LAB_TEST',
-      patientId: 'p1',
-      reason: { contains: 'glaucoma', mode: 'insensitive' },
-    });
+    expect(where).toMatchObject({ priority: 'HIGH', taskType: 'LAB_TEST', patientId: 'p1' });
+    expect(where.reason).toBeUndefined();
+  });
+
+  it('filters by reason on the decrypted rows, not in the database (the column is encrypted)', async () => {
+    const past = new Date(Date.now() - 5 * 86_400_000);
+    db.followUp.findMany.mockResolvedValue([
+      { ...openTask, id: 'f1', reason: 'Glaucoma pressure check', dueDate: past },
+      { ...openTask, id: 'f2', reason: 'Cataract review', dueDate: past },
+      { ...openTask, id: 'f3', reason: 'GLAUCOMA drops', dueDate: past },
+    ]);
+
+    const res = await request(doctorApp).get('/api/follow-ups/overdue?reason=glaucoma&pageSize=1&page=2');
+
+    expect(res.status).toBe(200);
+    const { where } = db.followUp.findMany.mock.calls[0][0];
+    expect(where.reason).toBeUndefined();
+    expect(db.followUp.count).not.toHaveBeenCalled();
+    expect(res.body.total).toBe(2);
+    expect(res.body.items.map((f: { id: string }) => f.id)).toEqual(['f3']);
   });
 
   it('lets the Doctor filter by another clinic', async () => {
@@ -131,6 +159,45 @@ describe('POST /api/follow-ups', () => {
     });
   });
 
+  it.each([
+    ['another patient', { patientId: 'other', clinicId: 'c1' }],
+    ['another clinic', { patientId: 'p1', clinicId: 'c2' }],
+    ['a missing appointment', null],
+  ])('rejects an appointment that belongs to %s', async (_label, appt) => {
+    db.patient.findUnique.mockResolvedValue({ id: 'p1' });
+    db.clinic.findUnique.mockResolvedValue({ id: 'c1' });
+    db.appointment.findUnique.mockResolvedValue(appt && { id: 'a1', status: 'SCHEDULED', ...appt });
+
+    const res = await request(doctorApp)
+      .post('/api/follow-ups')
+      .send({ ...body, appointmentId: 'a1' });
+
+    expect(res.status).toBe(400);
+    expect(db.followUp.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts an appointment of the same patient at the same clinic and starts SCHEDULED', async () => {
+    db.patient.findUnique.mockResolvedValue({ id: 'p1' });
+    db.clinic.findUnique.mockResolvedValue({ id: 'c1' });
+    db.appointment.findUnique.mockResolvedValue({
+      id: 'a1',
+      patientId: 'p1',
+      clinicId: 'c1',
+      status: 'SCHEDULED',
+    });
+    db.followUp.create.mockImplementation(async ({ data }) => ({ id: 'f9', ...data }));
+
+    const res = await request(doctorApp)
+      .post('/api/follow-ups')
+      .send({ ...body, appointmentId: 'a1' });
+
+    expect(res.status).toBe(201);
+    expect(db.followUp.create.mock.calls[0][0].data).toMatchObject({
+      appointmentId: 'a1',
+      status: 'SCHEDULED',
+    });
+  });
+
   it('forbids the Secretary from setting due dates', async () => {
     const res = await request(secretaryApp).post('/api/follow-ups').send(body);
     expect(res.status).toBe(403);
@@ -168,6 +235,79 @@ describe('POST /api/follow-ups/:id/complete', () => {
     expect(db.followUp.update.mock.calls[0][0].data.completedAt).toBeInstanceOf(Date);
   });
 
+  it('writes the status change to the shared audit log, with who did it', async () => {
+    db.followUp.findUnique.mockResolvedValue(openTask);
+    db.followUp.update.mockImplementation(async ({ data }) => ({ ...openTask, ...data }));
+
+    await request(secretaryApp).post('/api/follow-ups/f1/complete').send({ closureNote: 'Seen today' });
+
+    expect(auditCalls()).toHaveLength(1);
+    expect(auditCalls()[0]).toMatchObject({
+      action: 'FOLLOW_UP_STATUS_CHANGED',
+      resourceType: 'FollowUp',
+      resourceId: 'f1',
+      userId: 'u-sec',
+      userRole: 'SECRETARY',
+      metadata: { from: 'OPEN', to: 'COMPLETED', via: 'COMPLETE', patientId: 'p1', clinicId: 'c1' },
+    });
+    // Free-text clinical notes stay out of the audit trail.
+    expect(JSON.stringify(auditCalls()[0].metadata)).not.toContain('Seen today');
+  });
+
+  it('writes the audit entry inside the same transaction as the status change', async () => {
+    db.followUp.findUnique.mockResolvedValue(openTask);
+    db.followUp.update.mockImplementation(async ({ data }) => ({ ...openTask, ...data }));
+
+    await request(secretaryApp).post('/api/follow-ups/f1/complete').send({});
+
+    expect(db.$transaction).toHaveBeenCalledTimes(1);
+    expect(audit.writeAudit.mock.calls[0][1]).toBe(db); // the tx client was passed through
+  });
+
+  it('fails the request when the audit write fails, so the transaction rolls back', async () => {
+    db.followUp.findUnique.mockResolvedValue(openTask);
+    db.followUp.update.mockImplementation(async ({ data }) => ({ ...openTask, ...data }));
+    audit.writeAudit.mockRejectedValue(new Error('audit down'));
+
+    const res = await request(secretaryApp).post('/api/follow-ups/f1/complete').send({});
+
+    expect(res.status).toBe(500);
+  });
+
+  it.each([
+    ['another patient', { patientId: 'other', clinicId: 'c1' }],
+    ['another clinic', { patientId: 'p1', clinicId: 'c2' }],
+  ])('refuses to complete against an appointment of %s', async (_label, appt) => {
+    db.followUp.findUnique.mockResolvedValue(openTask);
+    db.appointment.findUnique.mockResolvedValue({ id: 'a1', status: 'COMPLETED', ...appt });
+
+    const res = await request(secretaryApp)
+      .post('/api/follow-ups/f1/complete')
+      .send({ appointmentId: 'a1' });
+
+    expect(res.status).toBe(400);
+    expect(db.followUp.update).not.toHaveBeenCalled();
+    expect(audit.writeAudit).not.toHaveBeenCalled();
+  });
+
+  it('links a matching appointment when completing', async () => {
+    db.followUp.findUnique.mockResolvedValue(openTask);
+    db.appointment.findUnique.mockResolvedValue({
+      id: 'a1',
+      patientId: 'p1',
+      clinicId: 'c1',
+      status: 'COMPLETED',
+    });
+    db.followUp.update.mockImplementation(async ({ data }) => ({ ...openTask, ...data }));
+
+    const res = await request(secretaryApp)
+      .post('/api/follow-ups/f1/complete')
+      .send({ appointmentId: 'a1' });
+
+    expect(res.status).toBe(200);
+    expect(db.followUp.update.mock.calls[0][0].data.appointmentId).toBe('a1');
+  });
+
   it('refuses to complete a task that is already closed', async () => {
     db.followUp.findUnique.mockResolvedValue({ ...openTask, status: 'COMPLETED' });
     const res = await request(doctorApp).post('/api/follow-ups/f1/complete').send({});
@@ -202,6 +342,10 @@ describe('POST /api/follow-ups/:id/decline', () => {
       .send({ closureNote: 'Seeing another doctor' });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ status: 'DECLINED', closureNote: 'Seeing another doctor' });
+    expect(auditCalls()[0]).toMatchObject({
+      action: 'FOLLOW_UP_STATUS_CHANGED',
+      metadata: { from: 'OPEN', to: 'DECLINED', via: 'DECLINE' },
+    });
   });
 });
 
@@ -213,6 +357,14 @@ describe('POST /api/follow-ups/:id/schedule', () => {
     expect(res.status).toBe(400);
   });
 
+  it("rejects another clinic's appointment", async () => {
+    db.followUp.findUnique.mockResolvedValue(openTask);
+    db.appointment.findUnique.mockResolvedValue({ id: 'a1', patientId: 'p1', clinicId: 'c2', status: 'SCHEDULED' });
+    const res = await request(secretaryApp).post('/api/follow-ups/f1/schedule').send({ appointmentId: 'a1' });
+    expect(res.status).toBe(400);
+    expect(audit.writeAudit).not.toHaveBeenCalled();
+  });
+
   it('links the appointment and moves the task to SCHEDULED', async () => {
     db.followUp.findUnique.mockResolvedValue(openTask);
     db.appointment.findUnique.mockResolvedValue({ id: 'a1', patientId: 'p1', clinicId: 'c1', status: 'SCHEDULED' });
@@ -220,6 +372,10 @@ describe('POST /api/follow-ups/:id/schedule', () => {
     const res = await request(secretaryApp).post('/api/follow-ups/f1/schedule').send({ appointmentId: 'a1' });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ status: 'SCHEDULED', appointmentId: 'a1' });
+    expect(auditCalls()[0]).toMatchObject({
+      action: 'FOLLOW_UP_STATUS_CHANGED',
+      metadata: { from: 'OPEN', to: 'SCHEDULED', via: 'SCHEDULE', appointmentId: 'a1' },
+    });
   });
 });
 
@@ -258,7 +414,6 @@ describe('POST /api/outreach-logs', () => {
 
   it('logs a call attempt as the signed-in staff member', async () => {
     db.followUp.findUnique.mockResolvedValue(openTask);
-    db.outreachLog.count.mockResolvedValue(0);
     db.outreachLog.create.mockImplementation(async ({ data }) => ({ id: 'o1', ...data }));
 
     const res = await request(outreachApp)
@@ -272,35 +427,50 @@ describe('POST /api/outreach-logs', () => {
       contactedById: 'u-sec',
       clinicId: 'c1',
     });
+    // The attempt number is read while the follow-up row is locked.
+    const order = [db.$queryRaw, db.outreachLog.aggregate, db.outreachLog.create].map(
+      (m) => m.mock.invocationCallOrder[0] as number,
+    );
+    expect(order).toEqual([...order].sort((a, b) => a - b));
   });
 
   it('marks the task unreachable after the configured number of failed calls', async () => {
     db.followUp.findUnique.mockResolvedValue(openTask);
-    db.outreachLog.count.mockResolvedValue(3); // attempts so far, and failed so far
+    db.outreachLog.aggregate.mockResolvedValue({ _max: { attemptNumber: 3 } });
+    db.outreachLog.count.mockResolvedValue(3); // failed attempts so far, this one included
     db.outreachLog.create.mockImplementation(async ({ data }) => ({ id: 'o4', ...data }));
     db.followUp.updateMany.mockResolvedValue({ count: 1 });
 
     await request(outreachApp).post('/api/outreach-logs').send({ followUpId: 'f1', outcome: 'NO_ANSWER' });
 
+    expect(db.outreachLog.create.mock.calls[0][0].data.attemptNumber).toBe(4);
     expect(db.followUp.updateMany.mock.calls[0][0]).toMatchObject({
       where: { id: 'f1', status: 'OPEN' },
       data: { status: 'UNREACHABLE' },
+    });
+    expect(auditCalls()[0]).toMatchObject({
+      action: 'FOLLOW_UP_STATUS_CHANGED',
+      userId: 'u-sec',
+      metadata: { from: 'OPEN', to: 'UNREACHABLE', via: 'OUTREACH_EXHAUSTED' },
     });
   });
 
   it('closes the task as declined when the patient declines', async () => {
     db.followUp.findUnique.mockResolvedValue(openTask);
-    db.outreachLog.count.mockResolvedValue(0);
     db.outreachLog.create.mockImplementation(async ({ data }) => ({ id: 'o1', ...data }));
-    db.followUp.updateMany.mockResolvedValue({ count: 1 });
+    db.followUp.update.mockResolvedValue({});
 
     await request(outreachApp)
       .post('/api/outreach-logs')
       .send({ followUpId: 'f1', outcome: 'DECLINED', patientResponse: 'Not needed' });
 
-    expect(db.followUp.updateMany.mock.calls[0][0].data).toMatchObject({
+    expect(db.followUp.update.mock.calls[0][0].data).toMatchObject({
       status: 'DECLINED',
       closureNote: 'Not needed',
+    });
+    expect(auditCalls()[0]).toMatchObject({
+      action: 'FOLLOW_UP_STATUS_CHANGED',
+      metadata: { from: 'OPEN', to: 'DECLINED', via: 'OUTREACH_DECLINED' },
     });
   });
 

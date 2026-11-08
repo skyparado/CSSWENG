@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import nodemailer from 'nodemailer';
 import type { DeliveryStatus } from '@prisma/client';
 import { env } from '../env.js';
@@ -13,12 +13,20 @@ export interface SendResult {
 export interface SmsMessage {
   to: string;
   body: string;
+  /**
+   * Stable across retries of one reminder. Pass it to the provider as its
+   * idempotency key (header, request id or client reference) when it has one,
+   * so a repeated call is not delivered twice.
+   */
+  idempotencyKey?: string;
 }
 
 export interface EmailMessage {
   to: string;
   subject: string;
   body: string;
+  /** See SmsMessage.idempotencyKey. */
+  idempotencyKey?: string;
   attachments?: Array<{ filename: string; content: Buffer; contentType: string }>;
 }
 
@@ -45,7 +53,11 @@ export class StubSmsGateway implements SmsGateway {
   async send(message: SmsMessage): Promise<SendResult> {
     // eslint-disable-next-line no-console
     console.log(`[sms:stub] to=${mask(message.to)} chars=${message.body.length}`);
-    return { providerMessageId: `stub-sms-${randomUUID()}`, deliveryStatus: 'DELIVERED' };
+    // Like a provider honouring an idempotency key: the same key yields the same id.
+    return {
+      providerMessageId: `stub-sms-${message.idempotencyKey ?? randomUUID()}`,
+      deliveryStatus: 'DELIVERED',
+    };
   }
 }
 
@@ -54,7 +66,10 @@ export class StubEmailGateway implements EmailGateway {
   async send(message: EmailMessage): Promise<SendResult> {
     // eslint-disable-next-line no-console
     console.log(`[email:stub] to=${mask(message.to)} subject="${message.subject}"`);
-    return { providerMessageId: `stub-email-${randomUUID()}`, deliveryStatus: 'DELIVERED' };
+    return {
+      providerMessageId: `stub-email-${message.idempotencyKey ?? randomUUID()}`,
+      deliveryStatus: 'DELIVERED',
+    };
   }
 }
 
@@ -69,6 +84,13 @@ export class SmtpEmailGateway implements EmailGateway {
       subject: message.subject,
       text: message.body,
       attachments: message.attachments,
+      // SMTP has no idempotency key, but a stable Message-ID lets the receiving
+      // server and the recipient's mailbox recognise a repeat of the same reminder.
+      ...(message.idempotencyKey
+        ? {
+            messageId: `<${createHash('sha256').update(message.idempotencyKey).digest('hex').slice(0, 32)}@reminders.local>`,
+          }
+        : {}),
     });
     // The server accepted it; delivery or bounce is only known later.
     return { providerMessageId: info.messageId };

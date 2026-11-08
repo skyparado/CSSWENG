@@ -14,7 +14,7 @@ import {
 } from '@clinic/schemas';
 import { prisma } from '../prisma.js';
 import { env } from '../env.js';
-import { asyncHandler, badRequest, conflict, notFound, validate } from '../http.js';
+import { asyncHandler, conflict, notFound, validate } from '../http.js';
 import {
   assertClinicAccess,
   clinicForRead,
@@ -25,8 +25,16 @@ import {
 } from '../auth/guards.js';
 import { findActiveReminderConsent } from '../consents/consents.service.js';
 import { enqueueReminder } from '../reminders/queue.js';
+import { actorFromRequest } from '../audit/record.js';
 import { addDays, daysOverdue, todayInTimezone, toDateOnly } from './dates.js';
-import { followUpInclude, followUpWhere, type FollowUpFilters } from './followups.service.js';
+import {
+  assertAppointmentMatches,
+  auditFollowUpStatusChange,
+  followUpInclude,
+  followUpWhere,
+  matchesReason,
+  type FollowUpFilters,
+} from './followups.service.js';
 
 export const followUpsRouter = Router();
 
@@ -45,6 +53,21 @@ async function paginate(
     ...followUpWhere({ ...q, clinicId: clinicForRead(req, q.clinicId) }),
     ...extra,
   };
+
+  // `reason` is encrypted at rest, so the database cannot search it: when the
+  // caller filters by reason, load the other matches (already decrypted by the
+  // Prisma extension), filter here, then page the result.
+  if (q.reason) {
+    const all = await prisma.followUp.findMany({ where, include: followUpInclude, orderBy });
+    const matching = all.filter((f) => matchesReason(f, q.reason));
+    return {
+      items: matching.slice((q.page - 1) * q.pageSize, q.page * q.pageSize),
+      total: matching.length,
+      page: q.page,
+      pageSize: q.pageSize,
+    };
+  }
+
   const [items, total] = await Promise.all([
     prisma.followUp.findMany({
       where,
@@ -127,6 +150,31 @@ function assertOpenOrScheduled(followUp: FollowUp) {
   }
 }
 
+/**
+ * Apply a status change and its audit entry in one transaction, so a status can
+ * never change without the shared audit log recording who did it.
+ */
+function changeStatus(
+  req: Request,
+  existing: FollowUp,
+  data: Prisma.FollowUpUncheckedUpdateInput,
+  via: string,
+) {
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.followUp.update({
+      where: { id: existing.id },
+      data,
+      include: followUpInclude,
+    });
+    await auditFollowUpStatusChange(tx, actorFromRequest(req), updated, {
+      from: existing.status,
+      to: updated.status,
+      via,
+    });
+    return updated;
+  });
+}
+
 /** GET /api/follow-ups/:id — one task with its outreach history. */
 followUpsRouter.get(
   '/:id',
@@ -172,9 +220,7 @@ followUpsRouter.post(
 
     if (body.appointmentId) {
       const appt = await prisma.appointment.findUnique({ where: { id: body.appointmentId } });
-      if (!appt || appt.patientId !== body.patientId) {
-        throw badRequest('appointmentId does not belong to this patient');
-      }
+      assertAppointmentMatches(appt, { patientId: body.patientId, clinicId });
     }
 
     const followUp = await prisma.followUp.create({
@@ -237,17 +283,22 @@ followUpsRouter.post(
     const existing = await loadFollowUp(req);
     assertOpenOrScheduled(existing);
     const body = req.body as { appointmentId?: string; closureNote?: string };
-    const updated = await prisma.followUp.update({
-      where: { id: existing.id },
-      data: {
+    if (body.appointmentId) {
+      const appt = await prisma.appointment.findUnique({ where: { id: body.appointmentId } });
+      assertAppointmentMatches(appt, existing);
+    }
+    const updated = await changeStatus(
+      req,
+      existing,
+      {
         status: 'COMPLETED',
         completedAt: new Date(),
         completedById: currentUser(req).userId,
         closureNote: body.closureNote,
         appointmentId: body.appointmentId,
       },
-      include: followUpInclude,
-    });
+      'COMPLETE',
+    );
     res.json(updated);
   }),
 );
@@ -260,11 +311,12 @@ followUpsRouter.post(
   asyncHandler(async (req, res) => {
     const existing = await loadFollowUp(req);
     assertOpenOrScheduled(existing);
-    const updated = await prisma.followUp.update({
-      where: { id: existing.id },
-      data: { status: 'DECLINED', closureNote: (req.body as { closureNote: string }).closureNote },
-      include: followUpInclude,
-    });
+    const updated = await changeStatus(
+      req,
+      existing,
+      { status: 'DECLINED', closureNote: (req.body as { closureNote: string }).closureNote },
+      'DECLINE',
+    );
     res.json(updated);
   }),
 );
@@ -280,18 +332,14 @@ followUpsRouter.post(
     const { appointmentId } = req.body as { appointmentId: string };
 
     const appt = await prisma.appointment.findUnique({ where: { id: appointmentId } });
-    if (!appt || appt.patientId !== existing.patientId || appt.clinicId !== existing.clinicId) {
-      throw badRequest("appointmentId must be this patient's appointment at the task's clinic");
-    }
-    if (appt.status === 'CANCELLED' || appt.status === 'NO_SHOW') {
-      throw badRequest('That appointment is not active');
-    }
+    assertAppointmentMatches(appt, existing);
 
-    const updated = await prisma.followUp.update({
-      where: { id: existing.id },
-      data: { status: 'SCHEDULED', appointmentId },
-      include: followUpInclude,
-    });
+    const updated = await changeStatus(
+      req,
+      existing,
+      { status: 'SCHEDULED', appointmentId },
+      'SCHEDULE',
+    );
     res.json(updated);
   }),
 );

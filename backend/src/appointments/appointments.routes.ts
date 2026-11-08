@@ -13,6 +13,7 @@ import {
 import { prisma } from '../prisma.js';
 import { asyncHandler, badRequest, HttpError, notFound, validate } from '../http.js';
 import { checkWithinOperatingHours, nearestFreeTimes } from './operatingHours.js';
+import { actorFromRequest } from '../audit/record.js';
 import { closeFollowUpsForCompletedAppointment } from '../followups/followups.service.js';
 import { requireAuth, requireDoctor } from '../auth/middleware.js';
 import { assertClinicAccess, clinicForRead, clinicForWrite, currentUser } from '../auth/guards.js';
@@ -251,7 +252,7 @@ appointmentsRouter.patch(
     if (patch.status && patch.status !== existing.status) await eventFor(appt, 'STATUS_CHANGED', userId);
     // A completed visit closes the follow-up tasks linked to it (FR-5.5.9).
     if (patch.status === 'COMPLETED') {
-      await closeFollowUpsForCompletedAppointment(appt.id, userId);
+      await closeFollowUpsForCompletedAppointment(appt.id, userId, actorFromRequest(req));
     }
     res.json(appt);
   }),

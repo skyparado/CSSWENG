@@ -319,6 +319,14 @@ model DocumentDelivery {
 // from the session's active clinic and never re-tagged. Encounter and
 // IntakeSession tables do not exist yet; their optional FKs are added when
 // those modules land.
+//
+// TODO(integration with Dev 2 "encounters" and the intake models): once Encounter
+// is merged, add `encounterId String?` + `encounter Encounter? @relation(...,
+// onDelete: Restrict)` to FollowUp, Medication and Allergy where the design doc
+// requires it, and link PatientConsent / TabletIntakeSubmission to the intake
+// session. Copy the FK style used below (ON DELETE RESTRICT, indexed column).
+// A same-patient / same-clinic check belongs next to each new FK in the routes,
+// like the appointment checks in followups.routes.ts.
 
 enum ConsentType {
   DATA_PROCESSING
@@ -351,10 +359,11 @@ model PatientConsent {
   withdrawnById  String?
   consentVersion String?
 
-  patient      Patient       @relation(fields: [patientId], references: [id], onDelete: Restrict)
-  recordedBy   User          @relation("ConsentRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
-  withdrawnBy  User?         @relation("ConsentWithdrawnBy", fields: [withdrawnById], references: [id], onDelete: Restrict)
+  patient      Patient            @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  recordedBy   User               @relation("ConsentRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+  withdrawnBy  User?              @relation("ConsentWithdrawnBy", fields: [withdrawnById], references: [id], onDelete: Restrict)
   outreachLogs OutreachLog[]
+  deliveries   ReminderDelivery[]
 
   @@index([patientId, consentType, channel])
 }
@@ -389,6 +398,8 @@ model FollowUp {
   clinicId      String
   appointmentId String?
   taskType      FollowUpTaskType
+
+  /// @encrypted
   reason        String
   dueDate       DateTime         @db.Date
   priority      FollowUpPriority @default(NORMAL)
@@ -401,12 +412,13 @@ model FollowUp {
   createdAt     DateTime         @default(now())
   updatedAt     DateTime         @updatedAt
 
-  patient      Patient       @relation(fields: [patientId], references: [id], onDelete: Restrict)
-  clinic       Clinic        @relation(fields: [clinicId], references: [id], onDelete: Restrict)
-  appointment  Appointment?  @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
-  createdBy    User?         @relation("FollowUpCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  completedBy  User?         @relation("FollowUpCompletedBy", fields: [completedById], references: [id], onDelete: Restrict)
+  patient      Patient            @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  clinic       Clinic             @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  appointment  Appointment?       @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+  createdBy    User?              @relation("FollowUpCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  completedBy  User?              @relation("FollowUpCompletedBy", fields: [completedById], references: [id], onDelete: Restrict)
   outreachLogs OutreachLog[]
+  deliveries   ReminderDelivery[]
 
   @@index([clinicId, status, dueDate])
   @@index([patientId])
@@ -438,15 +450,17 @@ enum DeliveryStatus {
 /// One contact attempt for a follow-up. Append-only: rows are never deleted and
 /// only `deliveryStatus` may change (when the SMS/email service reports back).
 model OutreachLog {
-  id                String          @id @default(cuid())
-  followUpId        String
-  patientId         String
-  clinicId          String
-  consentId         String? // required for SMS and EMAIL
-  channel           OutreachChannel
-  attemptNumber     Int
-  attemptedAt       DateTime        @default(now())
-  outcome           OutreachOutcome
+  id            String          @id @default(cuid())
+  followUpId    String
+  patientId     String
+  clinicId      String
+  consentId     String? // required for SMS and EMAIL
+  channel       OutreachChannel
+  attemptNumber Int
+  attemptedAt   DateTime        @default(now())
+  outcome       OutreachOutcome
+
+  /// @encrypted
   patientResponse   String?
   providerMessageId String?
   deliveryStatus    DeliveryStatus?
@@ -458,9 +472,42 @@ model OutreachLog {
   consent     PatientConsent? @relation(fields: [consentId], references: [id], onDelete: Restrict)
   contactedBy User?           @relation(fields: [contactedById], references: [id], onDelete: Restrict)
 
-  @@index([followUpId, attemptNumber])
+  // One number per attempt: the database refuses a duplicate even if two
+  // writers race (see logOutreachAttempt, which also serialises them).
+  @@unique([followUpId, attemptNumber])
   @@index([patientId])
   @@index([providerMessageId])
+}
+
+enum ReminderDeliveryStatus {
+  PENDING // claimed; the provider may or may not have been called yet
+  SENT // the provider accepted the message
+  FAILED // gave up (final attempt failed)
+  CANCELLED // consent withdrawn or task closed before the message went out
+}
+
+/// Persistent send tracking for automated reminders. One row per reminder job
+/// (`idempotencyKey`), written BEFORE the provider is called and updated with
+/// the provider's message id right after. A retry that finds a SENT row never
+/// sends again, so "sent, then the database failed" cannot double-send. The key
+/// is also handed to the SMS/email provider as its idempotency key.
+model ReminderDelivery {
+  id                String                 @id @default(cuid())
+  idempotencyKey    String                 @unique
+  followUpId        String
+  channel           ReminderChannel
+  consentId         String? // the reminder consent that allowed this send
+  status            ReminderDeliveryStatus @default(PENDING)
+  providerMessageId String?
+  deliveryStatus    DeliveryStatus?
+  sentAt            DateTime?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  followUp FollowUp        @relation(fields: [followUpId], references: [id], onDelete: Restrict)
+  consent  PatientConsent? @relation(fields: [consentId], references: [id], onDelete: Restrict)
+
+  @@index([followUpId, channel])
 }
 
 enum MedicationStatus {
@@ -479,16 +526,20 @@ enum MedicationSource {
 /// Versioned medication entry. A change inserts a new row that supersedes the
 /// earlier one (`isCurrent` flips to false); rows are never edited or deleted.
 model Medication {
-  id                     String           @id @default(cuid())
-  patientId              String
-  clinicId               String
-  documentId             String?
-  medicationName         String
-  strength               String?
-  dose                   String
-  frequency              String
-  route                  String
-  instructions           String?
+  id             String  @id @default(cuid())
+  patientId      String
+  clinicId       String
+  documentId     String?
+  medicationName String
+  strength       String?
+  dose           String
+  frequency      String
+  route          String
+
+  /// @encrypted
+  instructions String?
+
+  /// @encrypted
   indication             String?
   startDate              DateTime         @db.Date
   endDate                DateTime?        @db.Date
@@ -496,7 +547,11 @@ model Medication {
   discontinuationReason  String?
   prescribingDoctor      String
   source                 MedicationSource @default(PRESCRIBED_HERE)
+  // Version of the drug reference the safety check ran against.
   lookupVersion          Int?
+  // The safety alerts the Doctor acknowledged when saving this version, exactly
+  // as the server produced them (not as the client claimed). Null = no alerts.
+  safetyAcknowledgements Json?
   isCurrent              Boolean          @default(true)
   supersedesMedicationId String?          @unique
   recordedById           String
@@ -521,10 +576,12 @@ enum AllergySeverity {
 
 /// A recorded allergy. Never hard-deleted: a removed entry is voided with a reason.
 model Allergy {
-  id            String           @id @default(cuid())
-  patientId     String
-  clinicId      String
-  allergenName  String
+  id           String @id @default(cuid())
+  patientId    String
+  clinicId     String
+  allergenName String
+
+  /// @encrypted
   reaction      String?
   severity      AllergySeverity?
   lookupVersion Int?

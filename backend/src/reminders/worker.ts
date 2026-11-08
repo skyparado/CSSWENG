@@ -31,13 +31,18 @@ export async function runScan(): Promise<number> {
 }
 
 /** Route a job to its handler. Exported so it can be tested without Redis. */
-export async function handleJob(job: Pick<Job, 'name' | 'data' | 'attemptsMade' | 'opts'>, gateways: Gateways) {
+export async function handleJob(
+  job: Pick<Job, 'name' | 'data' | 'attemptsMade' | 'opts'> & { id?: string },
+  gateways: Gateways,
+) {
   if (job.name === SCAN_JOB) return runScan();
   if (job.name === SEND_JOB) {
     const attempts = job.opts.attempts ?? 1;
     // attemptsMade counts completed attempts; this run is the next one.
     return processReminder(job.data as ReminderJobData, gateways, {
       isFinalAttempt: job.attemptsMade + 1 >= attempts,
+      // The job id is the same on every retry, so it is the idempotency key.
+      jobKey: job.id,
     });
   }
   throw new Error(`Unknown reminder job: ${job.name}`);

@@ -12,7 +12,9 @@ const db = vi.hoisted(() => ({
   patient: { findUnique: vi.fn() },
   $transaction: vi.fn(),
 }));
+const audit = vi.hoisted(() => ({ writeAudit: vi.fn() }));
 vi.mock('../prisma.js', () => ({ prisma: db }));
+vi.mock('../audit/audit.service.js', () => audit);
 
 import { medicationsRouter } from './medications.routes.js';
 import { allergiesRouter } from './allergies.routes.js';
@@ -56,7 +58,11 @@ beforeEach(() => {
   db.allergy.findMany.mockResolvedValue([]);
   db.medication.findMany.mockResolvedValue([]);
   db.medication.create.mockImplementation(async ({ data }) => ({ id: 'm-new', ...data }));
+  db.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(db));
+  audit.writeAudit.mockResolvedValue({});
 });
+
+const auditEntries = () => audit.writeAudit.mock.calls.map(([entry]) => entry);
 
 describe('access control', () => {
   it('forbids the Secretary from medications and allergies', async () => {
@@ -114,6 +120,109 @@ describe('POST /api/medications', () => {
     expect(db.medication.create.mock.calls[0][0].data).not.toHaveProperty('acknowledgeAlerts');
   });
 
+  it('saves the alerts the Doctor acknowledged, as the server produced them', async () => {
+    db.allergy.findMany.mockResolvedValue([
+      { id: 'a1', allergenName: 'Penicillin', severity: 'SEVERE' },
+    ]);
+
+    const res = await request(medsApp)
+      .post('/api/medications')
+      .send({ ...newMed, acknowledgeAlerts: true });
+
+    expect(res.status).toBe(201);
+    const saved = db.medication.create.mock.calls[0][0].data.safetyAcknowledgements;
+    expect(saved).toMatchObject({
+      acknowledgedById: 'u-doc',
+      referenceVersion: expect.any(Number),
+      alerts: [
+        expect.objectContaining({ type: 'ALLERGY_CONFLICT', severity: 'CRITICAL', relatedId: 'a1' }),
+      ],
+    });
+    expect(new Date(saved.acknowledgedAt).getTime()).not.toBeNaN();
+    expect(db.medication.create.mock.calls[0][0].data.lookupVersion).toBe(saved.referenceVersion);
+  });
+
+  it('writes the acknowledgement to the audit log: doctor, alert details, timestamp', async () => {
+    db.allergy.findMany.mockResolvedValue([
+      { id: 'a1', allergenName: 'Penicillin', severity: 'SEVERE' },
+    ]);
+
+    await request(medsApp).post('/api/medications').send({ ...newMed, acknowledgeAlerts: true });
+
+    expect(auditEntries()).toHaveLength(1);
+    expect(auditEntries()[0]).toMatchObject({
+      action: 'MEDICATION_SAFETY_ALERTS_ACKNOWLEDGED',
+      resourceType: 'Medication',
+      resourceId: 'm-new',
+      userId: 'u-doc',
+      userRole: 'DOCTOR',
+      metadata: {
+        doctorId: 'u-doc',
+        patientId: 'p1',
+        change: 'CREATED',
+        alerts: [expect.objectContaining({ type: 'ALLERGY_CONFLICT', relatedId: 'a1' })],
+      },
+    });
+    expect(new Date(auditEntries()[0].metadata.acknowledgedAt).getTime()).not.toBeNaN();
+    // Written inside the transaction that saves the medication.
+    expect(audit.writeAudit.mock.calls[0][1]).toBe(db);
+  });
+
+  it('writes no acknowledgement when there was nothing to acknowledge', async () => {
+    await request(medsApp).post('/api/medications').send(newMed);
+    expect(audit.writeAudit).not.toHaveBeenCalled();
+    expect(db.medication.create.mock.calls[0][0].data.safetyAcknowledgements).toBeUndefined();
+  });
+
+  it('accepts a list of acknowledged alerts when it covers every alert raised', async () => {
+    db.allergy.findMany.mockResolvedValue([{ id: 'a1', allergenName: 'Penicillin' }]);
+    const res = await request(medsApp)
+      .post('/api/medications')
+      .send({ ...newMed, acknowledgedAlerts: [{ type: 'ALLERGY_CONFLICT', relatedId: 'a1' }] });
+    expect(res.status).toBe(201);
+  });
+
+  it('refuses a list that misses an alert raised now (an allergy added since the Doctor looked)', async () => {
+    db.allergy.findMany.mockResolvedValue([
+      { id: 'a1', allergenName: 'Penicillin' },
+      { id: 'a2', allergenName: 'Amoxicillin' },
+    ]);
+    const res = await request(medsApp)
+      .post('/api/medications')
+      .send({
+        ...newMed,
+        acknowledgeAlerts: true, // a blanket flag does not rescue an incomplete list
+        acknowledgedAlerts: [{ type: 'ALLERGY_CONFLICT', relatedId: 'a1' }],
+      });
+    expect(res.status).toBe(409);
+    expect(res.body.details.alerts).toHaveLength(2);
+    expect(db.medication.create).not.toHaveBeenCalled();
+  });
+
+  it('ignores alert text sent by the client and stores the server version', async () => {
+    db.allergy.findMany.mockResolvedValue([{ id: 'a1', allergenName: 'Penicillin' }]);
+    await request(medsApp)
+      .post('/api/medications')
+      .send({
+        ...newMed,
+        acknowledgedAlerts: [
+          { type: 'ALLERGY_CONFLICT', relatedId: 'a1', message: 'harmless, ignore', severity: 'INFO' },
+        ],
+      });
+    const [alert] = db.medication.create.mock.calls[0][0].data.safetyAcknowledgements.alerts;
+    expect(alert.message).toMatch(/allergic to Penicillin/);
+    expect(alert.severity).toBe('WARNING');
+  });
+
+  it('does not save the medication when the audit write fails', async () => {
+    db.allergy.findMany.mockResolvedValue([{ id: 'a1', allergenName: 'Penicillin' }]);
+    audit.writeAudit.mockRejectedValue(new Error('audit down'));
+    const res = await request(medsApp)
+      .post('/api/medications')
+      .send({ ...newMed, acknowledgeAlerts: true });
+    expect(res.status).toBe(500); // the transaction rolls back with the failed audit write
+  });
+
   it('blocks a duplicate of a current medication', async () => {
     db.medication.findMany.mockResolvedValue([timolol]);
     const res = await request(medsApp)
@@ -165,7 +274,6 @@ describe('PATCH /api/medications/:id', () => {
   beforeEach(() => {
     db.medication.findUnique.mockResolvedValue(timolol);
     db.medication.update.mockResolvedValue({ ...timolol, isCurrent: false });
-    db.$transaction.mockImplementation(async (ops: Promise<unknown>[]) => Promise.all(ops));
   });
 
   it('keeps the old row as history and inserts a superseding version', async () => {
@@ -205,6 +313,99 @@ describe('PATCH /api/medications/:id', () => {
     const res = await request(medsApp).patch('/api/medications/m1').send({ dose: '2 drops' });
     expect(res.status).toBe(409);
     expect(db.medication.create).not.toHaveBeenCalled();
+  });
+
+  it('does not inherit the earlier version\'s acknowledgement', async () => {
+    db.medication.findUnique.mockResolvedValue({
+      ...timolol,
+      safetyAcknowledgements: { alerts: [{ type: 'DUPLICATE_MEDICATION', relatedId: 'x' }] },
+    });
+    await request(medsApp).patch('/api/medications/m1').send({ dose: '2 drops' });
+    // Prisma.DbNull, not the carried-over JSON.
+    const saved = db.medication.create.mock.calls[0][0].data.safetyAcknowledgements;
+    expect(saved).not.toMatchObject({ alerts: expect.anything() });
+  });
+
+  it('saves and audits the alerts acknowledged when the drug is changed', async () => {
+    db.allergy.findMany.mockResolvedValue([{ id: 'a1', allergenName: 'Penicillin' }]);
+    const res = await request(medsApp)
+      .patch('/api/medications/m1')
+      .send({ medicationName: 'Amoxicillin', acknowledgeAlerts: true });
+
+    expect(res.status).toBe(200);
+    expect(db.medication.create.mock.calls[0][0].data.safetyAcknowledgements.alerts).toHaveLength(1);
+    expect(auditEntries()[0]).toMatchObject({
+      action: 'MEDICATION_SAFETY_ALERTS_ACKNOWLEDGED',
+      metadata: { change: 'UPDATED', doctorId: 'u-doc' },
+    });
+  });
+
+  describe('re-checks when a medication starts being taken again', () => {
+    const penicillinAllergy = [{ id: 'a1', allergenName: 'Penicillin' }];
+    const amoxicillinHeld = { ...timolol, medicationName: 'Amoxicillin' };
+
+    it('ON_HOLD -> ACTIVE checks allergies, even though the name did not change', async () => {
+      db.medication.findUnique.mockResolvedValue({ ...amoxicillinHeld, status: 'ON_HOLD' });
+      // The allergy was recorded while the medication was on hold.
+      db.allergy.findMany.mockResolvedValue(penicillinAllergy);
+
+      const res = await request(medsApp).patch('/api/medications/m1').send({ status: 'ACTIVE' });
+
+      expect(res.status).toBe(409);
+      expect(res.body.details.alerts[0]).toMatchObject({ type: 'ALLERGY_CONFLICT', relatedId: 'a1' });
+      expect(db.medication.create).not.toHaveBeenCalled();
+    });
+
+    it('ON_HOLD -> ACTIVE checks duplicates: the same drug was added meanwhile', async () => {
+      db.medication.findUnique.mockResolvedValue({ ...timolol, status: 'ON_HOLD' });
+      db.medication.findMany.mockResolvedValue([
+        { ...timolol, id: 'm1', status: 'ON_HOLD' },
+        { ...timolol, id: 'm2', status: 'ACTIVE' }, // added while m1 was on hold
+      ]);
+
+      const res = await request(medsApp).patch('/api/medications/m1').send({ status: 'ACTIVE' });
+
+      expect(res.status).toBe(409);
+      expect(res.body.details.alerts[0]).toMatchObject({
+        type: 'DUPLICATE_MEDICATION',
+        relatedId: 'm2',
+      });
+    });
+
+    it('ON_HOLD -> ACTIVE goes through once the Doctor acknowledges, and the alerts are saved', async () => {
+      db.medication.findUnique.mockResolvedValue({ ...amoxicillinHeld, status: 'ON_HOLD' });
+      db.allergy.findMany.mockResolvedValue(penicillinAllergy);
+
+      const res = await request(medsApp)
+        .patch('/api/medications/m1')
+        .send({ status: 'ACTIVE', acknowledgeAlerts: true });
+
+      expect(res.status).toBe(200);
+      expect(db.medication.create.mock.calls[0][0].data.safetyAcknowledgements.alerts).toHaveLength(1);
+      expect(auditEntries()).toHaveLength(1);
+    });
+
+    it('DISCONTINUED -> ON_HOLD still checks', async () => {
+      db.medication.findUnique.mockResolvedValue({
+        ...amoxicillinHeld,
+        status: 'DISCONTINUED',
+        discontinuationReason: 'Rash',
+      });
+      db.allergy.findMany.mockResolvedValue(penicillinAllergy);
+      const res = await request(medsApp).patch('/api/medications/m1').send({ status: 'ON_HOLD' });
+      expect(res.status).toBe(409);
+    });
+
+    it('does not check for changes that leave it as it was (ACTIVE -> ON_HOLD, or a dose change)', async () => {
+      db.allergy.findMany.mockResolvedValue(penicillinAllergy);
+      db.medication.findUnique.mockResolvedValue(amoxicillinHeld);
+
+      const hold = await request(medsApp).patch('/api/medications/m1').send({ status: 'ON_HOLD' });
+      const dose = await request(medsApp).patch('/api/medications/m1').send({ dose: '2 drops' });
+
+      expect(hold.status).toBe(200);
+      expect(dose.status).toBe(200);
+    });
   });
 
   it('re-checks allergies when the drug is changed', async () => {

@@ -98,3 +98,22 @@ describe('stub gateways', () => {
     log.mockRestore();
   });
 });
+
+describe('idempotency key', () => {
+  it('passes the BullMQ job id on every retry, so a retry is recognised as the same send', async () => {
+    mocks.processReminder.mockResolvedValue({ status: 'sent', outreachId: 'o1' });
+    const base = {
+      id: 'reminder-f1-SMS',
+      name: 'send-reminder',
+      data: { followUpId: 'f1', channel: 'SMS' },
+      opts: { attempts: 5 },
+    };
+    await handleJob({ ...base, attemptsMade: 0 } as never, gateways);
+    await handleJob({ ...base, attemptsMade: 1 } as never, gateways);
+
+    expect(mocks.processReminder.mock.calls.map((c) => c[2].jobKey)).toEqual([
+      'reminder-f1-SMS',
+      'reminder-f1-SMS',
+    ]);
+  });
+});
