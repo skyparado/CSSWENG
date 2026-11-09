@@ -20,7 +20,7 @@ export const isoDate = z
     return !Number.isNaN(d.getTime()) && d.toISOString().startsWith(s);
   }, "Not a valid date");
 
-const pastDate = isoDate.refine((s) => new Date(`${s}T00:00:00Z`) <= new Date(), "Cannot be in the future");
+export const pastDate = isoDate.refine((s) => new Date(`${s}T00:00:00Z`) <= new Date(), "Cannot be in the future");
 
 /** PH mobile: 09XXXXXXXXX or +639XXXXXXXXX, spaces and dashes allowed. */
 export const phMobile = z

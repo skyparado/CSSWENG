@@ -1,4 +1,3 @@
-import type { PrismaClient } from "@prisma/client";
 import {
   EXAM_LOOKUP_VERSION,
   amendedFindingSchema,
@@ -11,7 +10,7 @@ import { EncounterError, loadEncounter, requireDoctor } from "../encounters/enco
 import type { Actor } from "../patients/patient.service.js";
 import { supersededIds, toFinding } from "./results.mapper.js";
 
-type Db = Pick<PrismaClient, "encounter" | "examFinding">;
+type Db = Pick<typeof import("../prisma.js").prisma, "encounter" | "examFinding">;
 
 const lockedError = () =>
   new EncounterError(409, "FINDINGS_LOCKED", "This visit is signed. Record an amendment instead.");

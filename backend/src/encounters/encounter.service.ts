@@ -1,4 +1,4 @@
-import type { ClinicalNote, PrismaClient } from "@prisma/client";
+import type { ClinicalNote } from "@prisma/client";
 import type { CreateAddendumInput, CreateEncounterInput, SaveNoteDraftInput, SignNoteInput } from "@clinic/schemas";
 import type { Actor } from "../patients/patient.service.js";
 import {
@@ -22,7 +22,7 @@ export class EncounterError extends Error {
   }
 }
 
-type Db = Pick<PrismaClient, "patient" | "appointment" | "encounter" | "clinicalNote" | "user">;
+type Db = Pick<typeof import("../prisma.js").prisma, "patient" | "appointment" | "encounter" | "clinicalNote" | "user">;
 
 /** Visit dates are clinic-local. All clinics are in Manila for now (Clinic.timezone defaults to it). */
 const CLINIC_TZ = "Asia/Manila";
@@ -36,13 +36,13 @@ export function requireDoctor(actor: Actor, what = "write clinical notes") {
   if (actor.role !== "DOCTOR") throw new EncounterError(403, "DOCTOR_ONLY", `Only the doctor can ${what}`);
 }
 
-export async function loadEncounter(db: Pick<PrismaClient, "encounter">, id: string) {
+export async function loadEncounter(db: Pick<typeof import("../prisma.js").prisma, "encounter">, id: string) {
   const enc = await db.encounter.findFirst({ where: { id } });
   if (!enc) throw new EncounterError(404, "NOT_FOUND", "Encounter not found");
   return enc;
 }
 
-export async function loadPatient(db: Pick<PrismaClient, "patient">, id: string) {
+export async function loadPatient(db: Pick<typeof import("../prisma.js").prisma, "patient">, id: string) {
   const patient = await db.patient.findFirst({ where: { id, voidedAt: null } });
   if (!patient) throw new EncounterError(404, "PATIENT_NOT_FOUND", "Patient not found");
   return patient;

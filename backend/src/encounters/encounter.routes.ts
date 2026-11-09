@@ -1,5 +1,4 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
-import type { PrismaClient } from "@prisma/client";
 import { ZodError } from "zod";
 import {
   CreateAddendumSchema,
@@ -38,7 +37,7 @@ const wrap = (fn: Handler) => (req: Request, res: Response, next: NextFunction) 
  * (see results/results.routes.ts).
  */
 export function createEncounterRouter(
-  db: Pick<PrismaClient, "patient" | "appointment" | "encounter" | "clinicalNote" | "user">,
+  db: Pick<typeof import("../prisma.js").prisma, "patient" | "appointment" | "encounter" | "clinicalNote" | "user">,
 ): Router {
   const router = Router();
 

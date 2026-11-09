@@ -5,7 +5,6 @@
  * the encounters migration, so tests fail if a service relies on a write the
  * real database would reject.
  */
-import type { PrismaClient } from "@prisma/client";
 
 type Row = Record<string, unknown> & { id: string };
 type Data = Record<string, unknown>;
@@ -196,7 +195,7 @@ export function createFakeDb() {
   });
 
   return { patient, appointment, user, encounter, clinicalNote, examFinding, labResult } as unknown as Pick<
-    PrismaClient,
+    typeof import("../../prisma.js").prisma,
     Model
   > & { [K in Model]: { rows: Row[] } };
 }

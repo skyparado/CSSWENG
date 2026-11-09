@@ -1,5 +1,4 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
-import type { PrismaClient } from "@prisma/client";
 import {
   AmendExamFindingSchema,
   AmendLabResultSchema,
@@ -27,7 +26,7 @@ const wrap = (fn: Handler) => (req: Request, res: Response, next: NextFunction) 
  *   DELETE /:findingId               remove while OPEN
  *   POST   /:findingId/amendments    correction after signing; body { valueText, unit, method?, amendmentReason }
  */
-export function createFindingRouter(db: Pick<PrismaClient, "encounter" | "examFinding">): Router {
+export function createFindingRouter(db: Pick<typeof import("../prisma.js").prisma, "encounter" | "examFinding">): Router {
   const router = Router({ mergeParams: true });
   const encounterId = (req: Request) => (req.params as Record<string, string>).encounterId!;
 
@@ -85,7 +84,7 @@ export function createFindingRouter(db: Pick<PrismaClient, "encounter" | "examFi
  *   POST  /                          record a result
  *   POST  /:id/amendments            correction; the original is kept
  */
-export function createLabResultRouter(db: Pick<PrismaClient, "patient" | "encounter" | "labResult">): Router {
+export function createLabResultRouter(db: Pick<typeof import("../prisma.js").prisma, "patient" | "encounter" | "labResult">): Router {
   const router = Router();
 
   router.get(
@@ -128,7 +127,7 @@ export function createLabResultRouter(db: Pick<PrismaClient, "patient" | "encoun
  * into a Recharts <LineChart> (see ComparisonChartSchema).
  */
 export function createComparisonRouter(
-  db: Pick<PrismaClient, "patient" | "encounter" | "examFinding" | "labResult">,
+  db: Pick<typeof import("../prisma.js").prisma, "patient" | "encounter" | "examFinding" | "labResult">,
 ): Router {
   const router = Router();
 

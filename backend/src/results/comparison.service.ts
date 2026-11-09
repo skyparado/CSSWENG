@@ -1,4 +1,4 @@
-import type { ExamFinding, LabResult, PrismaClient } from "@prisma/client";
+import type { ExamFinding, LabResult } from "@prisma/client";
 import {
   EXAM_FIELDS,
   evaluateRange,
@@ -15,7 +15,7 @@ import { decrypt } from "../lib/fieldCrypto.js";
 import { loadPatient, requireDoctor } from "../encounters/encounter.service.js";
 import type { Actor } from "../patients/patient.service.js";
 
-type Db = Pick<PrismaClient, "patient" | "encounter" | "examFinding" | "labResult">;
+type Db = Pick<typeof import("../prisma.js").prisma, "patient" | "encounter" | "examFinding" | "labResult">;
 
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
 const round3 = (n: number) => Math.round(n * 1000) / 1000;

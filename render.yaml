@@ -1,0 +1,63 @@
+# Render Blueprint: one Docker web service (API + built frontend), managed
+# PostgreSQL and Redis-compatible Key Value. Deploy from the Render dashboard:
+# New → Blueprint → this repository. Values marked `sync: false` are asked for
+# on first deploy (object storage credentials live outside Render).
+services:
+  - type: web
+    name: clinic-emr
+    runtime: docker
+    plan: free
+    branch: main
+    healthCheckPath: /health/ready
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: clinic-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: clinic-redis
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: CORS_ORIGIN # the public site URL, e.g. https://clinic-emr.onrender.com
+        sync: false
+      - key: CLINIC_TIMEZONE
+        value: Asia/Manila
+      # S3-compatible storage for PDFs and signatures (AWS S3, Cloudflare R2, …).
+      # Leave S3_ENDPOINT empty for AWS; set S3_FORCE_PATH_STYLE=false for AWS.
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_REGION
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_FORCE_PATH_STYLE
+        sync: false
+      # Email for sending documents (and reminders): any SMTP relay, e.g.
+      # smtps://apikey:SECRET@smtp.sendgrid.net:465 or Amazon SES / Brevo SMTP.
+      - key: EMAIL_PROVIDER
+        value: smtp
+      - key: SMTP_URL
+        sync: false
+      - key: EMAIL_FROM # e.g. "Dr. Pacio's Clinic <clinic@yourdomain.ph>"
+        sync: false
+
+  - type: keyvalue
+    name: clinic-redis
+    plan: free
+    maxmemoryPolicy: noeviction # BullMQ must never have its jobs evicted
+    ipAllowList: [] # reachable only from Render's private network
+
+databases:
+  - name: clinic-db
+    plan: free
+    databaseName: clinic
+    user: clinic

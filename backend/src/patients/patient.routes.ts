@@ -1,5 +1,4 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
-import type { PrismaClient } from "@prisma/client";
 import { ZodError } from "zod";
 import { CreatePatientSchema, PatientSearchQuerySchema, UpdatePatientSchema } from "@clinic/schemas";
 import {
@@ -9,6 +8,7 @@ import {
   searchPatients,
   updatePatient,
   type Actor,
+  type Db,
 } from "./patient.service.js";
 
 /**
@@ -39,7 +39,7 @@ const wrap = (fn: Handler) => (req: Request, res: Response, next: NextFunction) 
  *   GET    /api/patients/:id                             record (S06 header / secretary view)
  *   PATCH  /api/patients/:id                             update demographics
  */
-export function createPatientRouter(db: Pick<PrismaClient, "patient">): Router {
+export function createPatientRouter(db: Db): Router {
   const router = Router();
 
   router.get(

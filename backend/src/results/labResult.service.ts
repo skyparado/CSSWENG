@@ -1,4 +1,3 @@
-import type { PrismaClient } from "@prisma/client";
 import {
   LAB_LOOKUP_VERSION,
   amendedLabResultSchema,
@@ -19,7 +18,7 @@ import {
 import type { Actor } from "../patients/patient.service.js";
 import { supersededIds, toLabResult } from "./results.mapper.js";
 
-type Db = Pick<PrismaClient, "patient" | "encounter" | "labResult">;
+type Db = Pick<typeof import("../prisma.js").prisma, "patient" | "encounter" | "labResult">;
 
 /** Test names from the lookup list are stored with its spelling, so "hba1c" and "HbA1c" share a row. */
 const canonicalTestName = (name: string) => labTestDef(name)?.name ?? name.trim();
