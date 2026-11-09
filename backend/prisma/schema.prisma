@@ -1,8 +1,9 @@
 // Prisma schema — clinic management system.
 //
 // Developer 1 owns: Clinic, ClinicSchedule, Appointment, Document, DocumentRequest.
-// Developer 2 owns: Patient (full model below).
-// User (Dev 4) is still a placeholder; keep its `id` stable.
+// Developer 2 owns: Patient, Encounter, ClinicalNote, ExamFinding, LabResult.
+// Developer 3 owns: follow-ups, outreach, consents, medications, allergies.
+// Developer 4 owns: User, UserClinic, AuditLog, ClinicalImage, tablet intake.
 
 generator client {
   provider = "prisma-client-js"
@@ -230,21 +231,21 @@ model ExamFinding {
   /// Derived from visual acuity so different notations can be compared.
   logmarValue     Decimal? @db.Decimal(6, 3)
   lookupVersion   Int
-  amendsFindingId String?
+  /// Unique: a finding can be corrected once; later corrections amend the latest row.
+  amendsFindingId String?  @unique
   amendmentReason String?  @db.VarChar(500)
   recordedById    String
   recordedAt      DateTime @default(now())
 
-  patient    Patient       @relation(fields: [patientId], references: [id], onDelete: Restrict)
-  encounter  Encounter     @relation(fields: [encounterId], references: [id], onDelete: Restrict)
-  clinic     Clinic        @relation(fields: [clinicId], references: [id], onDelete: Restrict)
-  amends     ExamFinding?  @relation("FindingAmendments", fields: [amendsFindingId], references: [id], onDelete: Restrict)
-  amendedBy  ExamFinding[] @relation("FindingAmendments")
-  recordedBy User          @relation("FindingRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+  patient    Patient      @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  encounter  Encounter    @relation(fields: [encounterId], references: [id], onDelete: Restrict)
+  clinic     Clinic       @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  amends     ExamFinding? @relation("FindingAmendments", fields: [amendsFindingId], references: [id], onDelete: Restrict)
+  amendedBy  ExamFinding? @relation("FindingAmendments")
+  recordedBy User         @relation("FindingRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
 
   @@index([patientId, fieldName])
   @@index([encounterId])
-  @@index([amendsFindingId])
 }
 
 /// Laboratory or diagnostic result, usually from an outside laboratory (S08
@@ -268,21 +269,21 @@ model LabResult {
   /// Object key of the scanned report in the encrypted document store.
   reportFileRef     String?  @db.VarChar(255)
   lookupVersion     Int
-  amendsLabResultId String?
+  /// Unique: a result can be corrected once; later corrections amend the latest row.
+  amendsLabResultId String?  @unique
   amendmentReason   String?  @db.VarChar(500)
   recordedById      String
   recordedAt        DateTime @default(now())
 
-  patient    Patient     @relation(fields: [patientId], references: [id], onDelete: Restrict)
-  encounter  Encounter?  @relation(fields: [encounterId], references: [id], onDelete: Restrict)
-  clinic     Clinic      @relation(fields: [clinicId], references: [id], onDelete: Restrict)
-  amends     LabResult?  @relation("LabResultAmendments", fields: [amendsLabResultId], references: [id], onDelete: Restrict)
-  amendedBy  LabResult[] @relation("LabResultAmendments")
-  recordedBy User        @relation("LabResultRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+  patient    Patient    @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  encounter  Encounter? @relation(fields: [encounterId], references: [id], onDelete: Restrict)
+  clinic     Clinic     @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  amends     LabResult? @relation("LabResultAmendments", fields: [amendsLabResultId], references: [id], onDelete: Restrict)
+  amendedBy  LabResult? @relation("LabResultAmendments")
+  recordedBy User       @relation("LabResultRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
 
   @@index([patientId, testName, collectionDate])
   @@index([encounterId])
-  @@index([amendsLabResultId])
 }
 
 /// Staff account. Only the Doctor can approve, change, revoke accounts and the
@@ -569,9 +570,9 @@ model DocumentDelivery {
 //
 // Per the Database Design doc (1.4.5, 1.4.13-1.4.16, 1.5): foreign keys are
 // ON DELETE RESTRICT, clinical rows are never hard-deleted, and clinicId is set
-// from the session's active clinic and never re-tagged. Encounter and
-// IntakeSession tables do not exist yet; their optional FKs are added when
-// those modules land.
+// from the session's active clinic and never re-tagged. The Encounter and
+// TabletIntakeSession tables now exist; the optional FKs from these models
+// to them are still to be added (Dev 3).
 
 enum ConsentType {
   DATA_PROCESSING

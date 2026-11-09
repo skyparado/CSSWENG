@@ -162,6 +162,7 @@ export function createFakeDb() {
   const encounterSigned = (id: unknown) => encounter.rows.find((e) => e.id === id)?.status === "SIGNED";
   const examFinding = table("find", {
     defaults: (now) => ({ amendsFindingId: null, amendmentReason: null, logmarValue: null, recordedAt: now }),
+    unique: [{ key: "amendsFindingId" }],
     beforeInsert: (r) => {
       if ((r.amendsFindingId == null) !== (r.amendmentReason == null)) throw triggerError("ExamFinding_amendment_reason");
       if (encounterSigned(r.encounterId) && r.amendsFindingId == null) throw triggerError("Findings are locked");
@@ -183,6 +184,7 @@ export function createFakeDb() {
       amendmentReason: null,
       recordedAt: now,
     }),
+    unique: [{ key: "amendsLabResultId" }],
     beforeInsert: (r) => {
       if ((r.amendsLabResultId == null) !== (r.amendmentReason == null)) throw triggerError("LabResult_amendment_reason");
     },

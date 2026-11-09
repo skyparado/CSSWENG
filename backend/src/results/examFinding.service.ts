@@ -6,7 +6,7 @@ import {
   type ExamFindingInput,
 } from "@clinic/schemas";
 import { encrypt } from "../lib/fieldCrypto.js";
-import { EncounterError, loadEncounter, requireDoctor } from "../encounters/encounter.service.js";
+import { EncounterError, isUniqueViolation, loadEncounter, requireDoctor } from "../encounters/encounter.service.js";
 import type { Actor } from "../patients/patient.service.js";
 import { supersededIds, toFinding } from "./results.mapper.js";
 
@@ -26,15 +26,28 @@ async function lockedIfSigned(db: Db, encounterId: string, err: unknown): Promis
   throw err;
 }
 
-function valueData(f: Pick<ExamFindingInput, "fieldName" | "valueText" | "unit" | "method" | "measuredAt">) {
+/**
+ * Encrypted value columns. `keepMeasuredAt` is the time already on the row:
+ * autosave usually omits measuredAt, and that must not move the measurement
+ * to "now" on every keystroke.
+ */
+function valueData(
+  f: Pick<ExamFindingInput, "fieldName" | "valueText" | "unit" | "method" | "measuredAt">,
+  keepMeasuredAt?: Date,
+) {
   return {
     valueText: encrypt(f.valueText),
     unit: f.unit,
     method: f.method,
-    measuredAt: f.measuredAt ? new Date(f.measuredAt) : new Date(),
+    measuredAt: f.measuredAt ? new Date(f.measuredAt) : (keepMeasuredAt ?? new Date()),
     logmarValue: f.fieldName === "VA" ? toLogMAR(f.valueText, f.unit) : null,
   };
 }
+
+const alreadyAmended = (latestId?: string) =>
+  new EncounterError(409, "ALREADY_AMENDED", "This finding was already corrected. Amend the latest value.", {
+    ...(latestId ? { latestId } : {}),
+  });
 
 async function loadFinding(db: Db, encounterId: string, findingId: string) {
   const f = await db.examFinding.findFirst({ where: { id: findingId, encounterId } });
@@ -90,13 +103,18 @@ export async function replaceFinding(
 ) {
   requireDoctor(actor, "record examination findings");
   const enc = await loadEncounter(db, encounterId);
-  await loadFinding(db, encounterId, findingId);
+  const existing = await loadFinding(db, encounterId, findingId);
   if (enc.status === "SIGNED") throw lockedError();
 
   try {
     await db.examFinding.updateMany({
       where: { id: findingId, encounterId },
-      data: { eye: input.eye, fieldName: input.fieldName, recordedById: actor.id, ...valueData(input) },
+      data: {
+        eye: input.eye,
+        fieldName: input.fieldName,
+        recordedById: actor.id,
+        ...valueData(input, existing.measuredAt),
+      },
     });
   } catch (err) {
     return lockedIfSigned(db, encounterId, err);
@@ -139,28 +157,34 @@ export async function amendFinding(
     throw new EncounterError(409, "ENCOUNTER_OPEN", "This visit is not signed yet. Edit the finding directly.");
   }
   const later = await db.examFinding.findFirst({ where: { amendsFindingId: findingId } });
-  if (later) {
-    throw new EncounterError(409, "ALREADY_AMENDED", "This finding was already corrected. Amend the latest value.", {
-      latestId: later.id,
-    });
-  }
+  if (later) throw alreadyAmended(later.id);
   // Unit and value rules depend on the original's field and eye.
   const checked = amendedFindingSchema(original).parse(input);
 
-  const created = await db.examFinding.create({
-    data: {
-      patientId: original.patientId,
-      encounterId,
-      clinicId: original.clinicId,
-      eye: original.eye,
-      fieldName: original.fieldName,
-      lookupVersion: original.lookupVersion,
-      amendsFindingId: original.id,
-      amendmentReason: checked.amendmentReason,
-      recordedById: actor.id,
-      ...valueData({ ...checked, fieldName: original.fieldName }),
-    },
-  });
+  let created;
+  try {
+    created = await db.examFinding.create({
+      data: {
+        patientId: original.patientId,
+        encounterId,
+        clinicId: original.clinicId,
+        eye: original.eye,
+        fieldName: original.fieldName,
+        lookupVersion: original.lookupVersion,
+        amendsFindingId: original.id,
+        amendmentReason: checked.amendmentReason,
+        recordedById: actor.id,
+        ...valueData({ ...checked, fieldName: original.fieldName }),
+      },
+    });
+  } catch (err) {
+    // Two amendments raced past the check above; the unique index kept one.
+    if (isUniqueViolation(err)) {
+      const winner = await db.examFinding.findFirst({ where: { amendsFindingId: findingId } });
+      throw alreadyAmended(winner?.id);
+    }
+    throw err;
+  }
   // AUDIT (Lance): "result.amended"
   return toFinding(created);
 }

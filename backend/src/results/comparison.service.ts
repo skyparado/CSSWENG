@@ -47,16 +47,20 @@ interface RowAcc extends Omit<ComparisonRow, "cells" | "unitDiffers"> {
   points: Point[];
 }
 
-/** Rows that a later amendment replaces are dropped; the amendment shows the original value. */
+/**
+ * Rows that a later amendment replaces are dropped. Each kept row comes with
+ * `previous`, the version it corrected (null if never amended), so a value
+ * corrected twice shows the second value, not the first.
+ */
 function latestVersions<T extends { id: string }>(rows: T[], amendsKey: (r: T) => string | null) {
   const byId = new Map(rows.map((r) => [r.id, r]));
   const superseded = new Set(rows.map(amendsKey).filter((id): id is string => id !== null));
-  const rootOf = (r: T): T => {
-    let cur = r;
-    for (let parent = amendsKey(cur); parent && byId.has(parent); parent = amendsKey(cur)) cur = byId.get(parent)!;
-    return cur;
-  };
-  return rows.filter((r) => !superseded.has(r.id)).map((r) => ({ row: r, root: rootOf(r) }));
+  return rows
+    .filter((r) => !superseded.has(r.id))
+    .map((r) => {
+      const parentId = amendsKey(r);
+      return { row: r, previous: parentId ? (byId.get(parentId) ?? null) : null };
+    });
 }
 
 function examRows(
@@ -65,7 +69,7 @@ function examRows(
   fields: string[] | undefined,
 ): RowAcc[] {
   const rows = new Map<string, RowAcc>();
-  for (const { row: f, root } of latestVersions(findings, (r) => r.amendsFindingId)) {
+  for (const { row: f, previous } of latestVersions(findings, (r) => r.amendsFindingId)) {
     const date = visitDateOf.get(f.encounterId);
     if (!date) continue;
     if (fields && !fields.includes(f.fieldName)) continue;
@@ -111,7 +115,7 @@ function examRows(
         numericValue,
         method: f.method,
         amended: f.amendsFindingId !== null,
-        originalValue: f.amendsFindingId !== null ? decrypt(root.valueText) : null,
+        originalValue: previous ? decrypt(previous.valueText) : null,
         outOfRange: false,
         flag: null,
         referenceRange: null,
@@ -124,7 +128,7 @@ function examRows(
 function labRows(results: LabResult[], keep: (r: LabResult) => boolean, tests: string[] | undefined): RowAcc[] {
   const wanted = tests?.map((t) => (labTestDef(t)?.name ?? t).toLowerCase());
   const rows = new Map<string, RowAcc>();
-  for (const { row: r, root } of latestVersions(results, (x) => x.amendsLabResultId)) {
+  for (const { row: r, previous } of latestVersions(results, (x) => x.amendsLabResultId)) {
     if (!keep(r)) continue;
     if (wanted && !wanted.includes(r.testName.toLowerCase())) continue;
 
@@ -156,7 +160,7 @@ function labRows(results: LabResult[], keep: (r: LabResult) => boolean, tests: s
         numericValue: parseNumeric(value),
         method: null,
         amended: r.amendsLabResultId !== null,
-        originalValue: r.amendsLabResultId !== null ? decrypt(root.resultValue) : null,
+        originalValue: previous ? decrypt(previous.resultValue) : null,
         outOfRange: r.outOfRange,
         flag: evaluateRange(value, r.referenceRange) ?? null,
         referenceRange: r.referenceRange,

@@ -56,6 +56,24 @@ const sign = async (id: string) => {
 
 const addFinding = (id: string, body: object) => request(doc).post(`/api/encounters/${id}/findings`).send(body);
 
+/**
+ * Simulate two simultaneous amendments: the "already amended?" lookup misses
+ * the other request's row once, as if it had not committed yet, so the write
+ * reaches the unique index.
+ */
+function missAmendmentCheckOnce(delegate: unknown, key: string) {
+  const d = delegate as { findFirst: (args: { where?: Record<string, unknown> }) => Promise<unknown> };
+  const real = d.findFirst.bind(d);
+  let missed = false;
+  d.findFirst = async (args) => {
+    if (!missed && args.where && key in args.where) {
+      missed = true;
+      return null;
+    }
+    return real(args);
+  };
+}
+
 const lab = (body: object = {}) =>
   request(doc)
     .post("/api/lab-results")
@@ -160,6 +178,41 @@ describe("examination findings", () => {
     ]);
   });
 
+  it("returns 409 ALREADY_AMENDED when a simultaneous amendment wins", async () => {
+    const f = (await addFinding(id, { eye: "OD", fieldName: "IOP", valueText: "18", unit: "mmHg" })).body;
+    await sign(id);
+    const first = await request(doc)
+      .post(`/api/encounters/${id}/findings/${f.id}/amendments`)
+      .send({ valueText: "19", unit: "mmHg", amendmentReason: "Misread" });
+    expect(first.status).toBe(201);
+
+    missAmendmentCheckOnce(db.examFinding, "amendsFindingId");
+    const second = await request(doc)
+      .post(`/api/encounters/${id}/findings/${f.id}/amendments`)
+      .send({ valueText: "20", unit: "mmHg", amendmentReason: "Misread" });
+    expect(second.status).toBe(409);
+    expect(second.body).toMatchObject({ error: "ALREADY_AMENDED", details: { latestId: first.body.id } });
+    expect(db.examFinding.rows.filter((r) => r.amendsFindingId === f.id)).toHaveLength(1);
+  });
+
+  it("keeps the measurement time when autosave does not send one", async () => {
+    const measuredAt = "2026-11-09T01:15:00.000Z";
+    const f = (
+      await addFinding(id, { eye: "OD", fieldName: "IOP", valueText: "18", unit: "mmHg", measuredAt })
+    ).body;
+
+    const autosave = await request(doc)
+      .put(`/api/encounters/${id}/findings/${f.id}`)
+      .send({ eye: "OD", fieldName: "IOP", valueText: "19", unit: "mmHg" });
+    expect(autosave.status).toBe(200);
+    expect(autosave.body).toMatchObject({ valueText: "19", measuredAt });
+
+    const retimed = await request(doc)
+      .put(`/api/encounters/${id}/findings/${f.id}`)
+      .send({ eye: "OD", fieldName: "IOP", valueText: "19", unit: "mmHg", measuredAt: "2026-11-09T02:00:00.000Z" });
+    expect(retimed.body.measuredAt).toBe("2026-11-09T02:00:00.000Z");
+  });
+
   it("is doctor only", async () => {
     expect((await request(sec).get(`/api/encounters/${id}/findings`)).status).toBe(403);
     const res = await request(sec)
@@ -214,6 +267,26 @@ describe("laboratory results", () => {
     ]);
     await expect(db.labResult.updateMany({ where: { id: original.id }, data: { resultUnit: "x" } })).rejects.toThrow();
     await expect(db.labResult.deleteMany({ where: { id: original.id } })).rejects.toThrow();
+  });
+
+  it("returns 409 ALREADY_AMENDED when a simultaneous amendment wins", async () => {
+    const original = (await lab()).body;
+    const correction = (value: string) => ({
+      resultValue: value,
+      resultUnit: "%",
+      referenceRange: "4.0-5.6",
+      collectionDate: "2026-10-10",
+      laboratoryName: "Hi-Precision Diagnostics",
+      amendmentReason: "Corrected report",
+    });
+    const first = await request(doc).post(`/api/lab-results/${original.id}/amendments`).send(correction("6.2"));
+    expect(first.status).toBe(201);
+
+    missAmendmentCheckOnce(db.labResult, "amendsLabResultId");
+    const second = await request(doc).post(`/api/lab-results/${original.id}/amendments`).send(correction("6.0"));
+    expect(second.status).toBe(409);
+    expect(second.body).toMatchObject({ error: "ALREADY_AMENDED", details: { latestId: first.body.id } });
+    expect(db.labResult.rows.filter((r) => r.amendsLabResultId === original.id)).toHaveLength(1);
   });
 
   it("is doctor only", async () => {
@@ -301,6 +374,23 @@ describe("comparison across visits", () => {
       value: "15",
       amended: true,
       originalValue: "17",
+    });
+  });
+
+  it("shows the value before the latest correction when amended twice", async () => {
+    const original = db.examFinding.rows.find((r) => r.encounterId === first && r.fieldName === "IOP" && r.eye === "OS")!;
+    const once = await request(doc)
+      .post(`/api/encounters/${first}/findings/${original.id}/amendments`)
+      .send({ valueText: "15", unit: "mmHg", amendmentReason: "Transcription error" });
+    await request(doc)
+      .post(`/api/encounters/${first}/findings/${once.body.id}/amendments`)
+      .send({ valueText: "14", unit: "mmHg", amendmentReason: "Rechecked the chart" });
+
+    const { rows } = (await compare({ fields: "IOP", show: "exam" })).body as { rows: { key: string; cells: unknown[] }[] };
+    expect(rows.find((r) => r.key === "exam_iop_os_mmhg")!.cells[0]).toMatchObject({
+      value: "14",
+      amended: true,
+      originalValue: "15",
     });
   });
 

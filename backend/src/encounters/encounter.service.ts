@@ -1,3 +1,4 @@
+import { todayInClinic } from "@clinic/schemas";
 import type { ClinicalNote } from "@prisma/client";
 import type { CreateAddendumInput, CreateEncounterInput, SaveNoteDraftInput, SignNoteInput } from "@clinic/schemas";
 import type { Actor } from "../patients/patient.service.js";
@@ -25,9 +26,8 @@ export class EncounterError extends Error {
 type Db = Pick<typeof import("../prisma.js").prisma, "patient" | "appointment" | "encounter" | "clinicalNote" | "user">;
 
 /** Visit dates are clinic-local. All clinics are in Manila for now (Clinic.timezone defaults to it). */
-const CLINIC_TZ = "Asia/Manila";
-export const todayInClinic = (now = new Date()) =>
-  new Intl.DateTimeFormat("en-CA", { timeZone: CLINIC_TZ }).format(now); // "YYYY-MM-DD"
+// Shared with the patients module; re-exported for the results services.
+export { todayInClinic };
 
 export const isUniqueViolation = (err: unknown) =>
   typeof err === "object" && err !== null && (err as { code?: string }).code === "P2002";

@@ -304,7 +304,7 @@ export const ComparisonCellSchema = z.object({
   change: z.number().nullable(),
   method: z.string().nullable(),
   amended: z.boolean(),
-  /** Value before the latest correction, when amended. */
+  /** Value before the latest correction, when amended (the version it replaced, not the first). */
   originalValue: z.string().nullable(),
   outOfRange: z.boolean(),
   /** "High" / "Low" label for lab results outside the reference range. */

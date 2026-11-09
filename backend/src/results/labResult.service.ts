@@ -10,6 +10,7 @@ import {
 import { encrypt } from "../lib/fieldCrypto.js";
 import {
   EncounterError,
+  isUniqueViolation,
   loadEncounter,
   loadPatient,
   requireDoctor,
@@ -37,6 +38,11 @@ function valueData(r: Omit<AmendLabResultInput, "amendmentReason">) {
     reportFileRef: r.reportFileRef,
   };
 }
+
+const alreadyAmended = (latestId?: string) =>
+  new EncounterError(409, "ALREADY_AMENDED", "This result was already corrected. Amend the latest value.", {
+    ...(latestId ? { latestId } : {}),
+  });
 
 /** Record an outside laboratory result (S08 "Add Lab Result"). Doctor only. */
 export async function createLabResult(db: Db, input: CreateLabResultInput, actor: Actor) {
@@ -86,26 +92,32 @@ export async function amendLabResult(db: Db, id: string, input: AmendLabResultIn
   const original = await db.labResult.findFirst({ where: { id } });
   if (!original) throw new EncounterError(404, "LAB_RESULT_NOT_FOUND", "Laboratory result not found");
   const later = await db.labResult.findFirst({ where: { amendsLabResultId: id } });
-  if (later) {
-    throw new EncounterError(409, "ALREADY_AMENDED", "This result was already corrected. Amend the latest value.", {
-      latestId: later.id,
-    });
-  }
+  if (later) throw alreadyAmended(later.id);
   const { amendmentReason, ...value } = amendedLabResultSchema(original).parse(input);
 
-  const created = await db.labResult.create({
-    data: {
-      patientId: original.patientId,
-      encounterId: original.encounterId,
-      clinicId: actor.activeClinicId,
-      testName: original.testName,
-      lookupVersion: original.lookupVersion,
-      amendsLabResultId: original.id,
-      amendmentReason,
-      recordedById: actor.id,
-      ...valueData(value),
-    },
-  });
+  let created;
+  try {
+    created = await db.labResult.create({
+      data: {
+        patientId: original.patientId,
+        encounterId: original.encounterId,
+        clinicId: actor.activeClinicId,
+        testName: original.testName,
+        lookupVersion: original.lookupVersion,
+        amendsLabResultId: original.id,
+        amendmentReason,
+        recordedById: actor.id,
+        ...valueData(value),
+      },
+    });
+  } catch (err) {
+    // Two amendments raced past the check above; the unique index kept one.
+    if (isUniqueViolation(err)) {
+      const winner = await db.labResult.findFirst({ where: { amendsLabResultId: id } });
+      throw alreadyAmended(winner?.id);
+    }
+    throw err;
+  }
   // AUDIT (Lance): "result.amended"
   return toLabResult(created);
 }
