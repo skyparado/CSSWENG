@@ -1,3 +1,5 @@
+import { todayInClinic } from "@clinic/schemas";
+
 /**
  * Normalisation rules for blind indexes. Search input and stored values MUST
  * pass through the same function, or exact matches will be missed.
@@ -60,11 +62,11 @@ export function maskPhone(phone: string): string {
   return `${n.slice(0, 4)} *** ${n.slice(-4)}`;
 }
 
-/** Whole years between birth date and today (Asia/Manila calendar). */
-export function ageFrom(dobIso: string, today = new Date()): number {
-  const manila = new Date(today.toLocaleString("en-US", { timeZone: "Asia/Manila" }));
+/** Whole years between birth date and today ("YYYY-MM-DD", clinic calendar). */
+export function ageFrom(dobIso: string, todayIso: string = todayInClinic()): number {
   const [y, m, d] = dobIso.split("-").map(Number) as [number, number, number];
-  let age = manila.getFullYear() - y;
-  if (manila.getMonth() + 1 < m || (manila.getMonth() + 1 === m && manila.getDate() < d)) age--;
+  const [ty, tm, td] = todayIso.split("-").map(Number) as [number, number, number];
+  let age = ty - y;
+  if (tm < m || (tm === m && td < d)) age--;
   return age;
 }

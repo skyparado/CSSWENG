@@ -1,11 +1,15 @@
 import { randomBytes } from "node:crypto";
 import express from "express";
 import request from "supertest";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { PatientSearchQuerySchema, CreatePatientSchema } from "@clinic/schemas";
 import { decrypt, encrypt, resetKeyCache } from "../../lib/fieldCrypto.js";
-import { maskPhone, normalizeDate, normalizeName, normalizePhone, parsePatientNumber } from "../patient.normalize.js";
+import { ageFrom, maskPhone, normalizeDate, normalizeName, normalizePhone, parsePatientNumber } from "../patient.normalize.js";
 import { createPatientRouter } from "../patient.routes.js";
 import { createFakeDb } from "./fakeDb.js";
+
+// The void endpoint writes to the shared audit log; these tests run without a database.
+vi.mock("../../audit/audit.service.js", () => ({ writeAudit: vi.fn().mockResolvedValue(undefined) }));
 
 beforeAll(() => {
   process.env.FIELD_ENCRYPTION_KEY = randomBytes(32).toString("base64");
@@ -57,6 +61,11 @@ describe("normalisation", () => {
     expect(parsePatientNumber("P-00231")).toBe(231);
     expect(parsePatientNumber("p231")).toBe(231);
     expect(parsePatientNumber("Maria")).toBeNull();
+  });
+  it("computes age on the clinic calendar", () => {
+    expect(ageFrom("1966-03-04", "2026-03-03")).toBe(59);
+    expect(ageFrom("1966-03-04", "2026-03-04")).toBe(60);
+    expect(ageFrom("2000-02-29", "2026-02-28")).toBe(25);
   });
   it("masks phones", () => {
     expect(maskPhone("+639175551234")).toBe("0917 *** 1234");
@@ -249,5 +258,113 @@ describe("GET/PATCH /api/patients/:id", () => {
   it("returns 404 for an unknown patient", async () => {
     const { app } = makeApp(doctor);
     expect((await request(app).get("/api/patients/nope")).status).toBe(404);
+  });
+});
+
+describe("birth date validation (Manila calendar)", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("accepts a same-day birth between midnight and 8 AM Manila time", () => {
+    // 01:00 on 2 Jan in Manila is still 1 Jan in UTC.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T17:00:00Z"));
+    const parsed = CreatePatientSchema.safeParse({ ...maria, dateOfBirth: "2026-01-02" });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("still rejects tomorrow", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T17:00:00Z"));
+    const parsed = CreatePatientSchema.safeParse({ ...maria, dateOfBirth: "2026-01-03" });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe("search scope", () => {
+  it("accepts the follow-up filter", () => {
+    expect(PatientSearchQuerySchema.parse({ scope: "followup" }).scope).toBe("followup");
+  });
+});
+
+describe("PATCH /api/patients/:id duplicate check", () => {
+  it("flags a rename that matches another patient, then allows confirming", async () => {
+    const { app } = makeApp(secretary);
+    await request(app).post("/api/patients").send(maria);
+    const other = await request(app)
+      .post("/api/patients")
+      .send({ ...maria, firstName: "Mariel", lastName: "Reyes", mobileNumber: "0918 111 5678" });
+    const id = other.body.patient.id;
+
+    // Becoming "Santos" with the same birth date matches Maria Santos.
+    const flagged = await request(app).patch(`/api/patients/${id}`).send({ lastName: "Santos" });
+    expect(flagged.status).toBe(409);
+    expect(flagged.body.error).toBe("POSSIBLE_DUPLICATE");
+    expect(flagged.body.details.candidates).toHaveLength(1);
+    expect(flagged.body.details.candidates[0].firstName).toBe("Maria");
+
+    const confirmed = await request(app)
+      .patch(`/api/patients/${id}`)
+      .send({ lastName: "Santos", confirmNotDuplicate: true });
+    expect(confirmed.status).toBe(200);
+    expect(confirmed.body.lastName).toBe("Santos");
+  });
+
+  it("does not flag the patient against their own record", async () => {
+    const { app } = makeApp(secretary);
+    const created = await request(app).post("/api/patients").send(maria);
+    const res = await request(app)
+      .patch(`/api/patients/${created.body.patient.id}`)
+      .send({ firstName: "Maria", middleName: "R." });
+    expect(res.status).toBe(200);
+  });
+
+  it("skips the check when no name or birth date changes", async () => {
+    const { app } = makeApp(secretary);
+    await request(app).post("/api/patients").send(maria);
+    const twin = await request(app)
+      .post("/api/patients")
+      .send({ ...maria, mobileNumber: "0918 111 5678", confirmNotDuplicate: true });
+    const res = await request(app).patch(`/api/patients/${twin.body.patient.id}`).send({ occupation: "Nurse" });
+    expect(res.status).toBe(200);
+  });
+
+  it("rejects a body with only confirmNotDuplicate", async () => {
+    const { app } = makeApp(secretary);
+    const created = await request(app).post("/api/patients").send(maria);
+    const res = await request(app)
+      .patch(`/api/patients/${created.body.patient.id}`)
+      .send({ confirmNotDuplicate: true });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /api/patients/:id/void", () => {
+  it("lets the doctor void a record, which then disappears from reads", async () => {
+    const { app } = makeApp(doctor);
+    const created = await request(app).post("/api/patients").send(maria);
+    const id = created.body.patient.id;
+
+    const res = await request(app).post(`/api/patients/${id}/void`).send({ reason: "Duplicate of P-00231" });
+    expect(res.status).toBe(200);
+    expect(res.body.voidReason).toBe("Duplicate of P-00231");
+    expect(res.body.voidedAt).toBeTruthy();
+
+    expect((await request(app).get(`/api/patients/${id}`)).status).toBe(404);
+    expect((await request(app).get("/api/patients").query({ q: "Maria Santos" })).body.total).toBe(0);
+    expect((await request(app).post(`/api/patients/${id}/void`).send({ reason: "again" })).status).toBe(404);
+  });
+
+  it("blocks the secretary", async () => {
+    const { app } = makeApp(secretary);
+    const created = await request(app).post("/api/patients").send(maria);
+    const res = await request(app).post(`/api/patients/${created.body.patient.id}/void`).send({ reason: "Mistake" });
+    expect(res.status).toBe(403);
+  });
+
+  it("requires a reason", async () => {
+    const { app } = makeApp(doctor);
+    const created = await request(app).post("/api/patients").send(maria);
+    const res = await request(app).post(`/api/patients/${created.body.patient.id}/void`).send({ reason: "  " });
+    expect(res.status).toBe(400);
   });
 });

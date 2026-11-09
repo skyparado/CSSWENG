@@ -1,10 +1,13 @@
-import type { Patient, Prisma, PrismaClient } from "@prisma/client";
+import type { Patient, Prisma } from "@prisma/client";
 import type {
   CreatePatientInput,
   DuplicateCandidate,
   PatientSearchQuery,
   UpdatePatientInput,
+  VoidPatientInput,
 } from "@clinic/schemas";
+import { todayInClinic } from "@clinic/schemas";
+import { decrypt } from "../lib/fieldCrypto.js";
 import { DOCTOR_ONLY_FIELDS, indexes, toDbData, toDetail, toListItem, type Role } from "./patient.mapper.js";
 import { normalizeDate, normalizeName, parsePatientNumber } from "./patient.normalize.js";
 
@@ -98,9 +101,48 @@ export async function updatePatient(db: Db, id: string, input: UpdatePatientInpu
   const existing = await db.patient.findFirst({ where: { id, ...notVoided } });
   if (!existing) throw new PatientError(404, "NOT_FOUND", "Patient not found");
 
-  const updated = await db.patient.update({ where: { id }, data: toDbData(input) });
+  const { confirmNotDuplicate, ...fields } = input;
+
+  // Renaming a patient or fixing a birth date can turn them into a duplicate
+  // of someone else, so re-run the registration check, skipping this record.
+  if (fields.firstName !== undefined || fields.lastName !== undefined || fields.dateOfBirth !== undefined) {
+    const duplicates = await findDuplicates(
+      db,
+      {
+        firstName: fields.firstName ?? decrypt(existing.firstName),
+        lastName: fields.lastName ?? decrypt(existing.lastName),
+        dateOfBirth: fields.dateOfBirth ?? decrypt(existing.dateOfBirth),
+      },
+      id,
+    );
+    if (duplicates.length && !confirmNotDuplicate) {
+      throw new PatientError(409, "POSSIBLE_DUPLICATE", "A patient with this name and birth date already exists", {
+        candidates: duplicates,
+      });
+    }
+  }
+
+  const updated = await db.patient.update({ where: { id }, data: toDbData(fields) });
   // AUDIT (Lance): "patient.updated" with before/after of the changed fields only.
   return toDetail(updated, actor.role);
+}
+
+/**
+ * Void a record registered by mistake (e.g. a confirmed duplicate). Doctor
+ * only. The row is kept for the audit trail; every read already skips it.
+ */
+export async function voidPatient(db: Db, id: string, input: VoidPatientInput, actor: Actor) {
+  if (actor.role !== "DOCTOR") {
+    throw new PatientError(403, "FORBIDDEN", "Only the doctor can void a patient record");
+  }
+  const existing = await db.patient.findFirst({ where: { id, ...notVoided } });
+  if (!existing) throw new PatientError(404, "NOT_FOUND", "Patient not found");
+
+  const voided = await db.patient.update({
+    where: { id },
+    data: { voidedAt: new Date(), voidReason: input.reason },
+  });
+  return { id: voided.id, voidedAt: voided.voidedAt, voidReason: voided.voidReason };
 }
 
 // ------------------------------- Search ------------------------------------
@@ -186,6 +228,19 @@ export async function searchPatients(db: Db, query: PatientSearchQuery, actor: A
         { appointments: { some: { clinicId: actor.activeClinicId } } },
         { encounters: { some: { clinicId: actor.activeClinicId } } },
       ],
+    });
+  }
+  if (query.scope === "followup") {
+    // "Due for follow-up": an open task at this clinic due today or overdue,
+    // the same set as the follow-up due and overdue lists.
+    and.push({
+      followUps: {
+        some: {
+          clinicId: actor.activeClinicId,
+          status: "OPEN",
+          dueDate: { lte: new Date(`${todayInClinic()}T00:00:00Z`) },
+        },
+      },
     });
   }
   if (and.length) where.AND = and;

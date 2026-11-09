@@ -116,6 +116,7 @@ export async function findFollowUpsNeedingReminder(
       status: 'OPEN',
       dueDate: { lte: toDateOnly(horizon) },
       patient: {
+        voidedAt: null,
         consents: {
           some: { consentType: 'REMINDER', channel, isGranted: true, withdrawnAt: null },
         },

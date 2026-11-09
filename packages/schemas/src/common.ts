@@ -1,6 +1,24 @@
 import { z } from 'zod';
 
 /** A CUID/CUID2-style id as produced by Prisma's default `cuid()`. */
+/** All clinics run on Philippine time. */
+export const CLINIC_TIME_ZONE = 'Asia/Manila';
+
+/**
+ * Today's calendar date ("YYYY-MM-DD") on the clinic's clock. Use this rather
+ * than `new Date()` for date-only checks: UTC is still on yesterday between
+ * midnight and 8 AM in Manila.
+ */
+export function todayInClinic(now: Date = new Date(), timeZone: string = CLINIC_TIME_ZONE): string {
+  // en-CA formats as YYYY-MM-DD.
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now);
+}
+
 export const idSchema = z.string().min(1, 'id is required');
 
 /** Route param `{ id }`. */
