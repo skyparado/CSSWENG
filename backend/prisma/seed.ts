@@ -118,6 +118,8 @@ async function main() {
         dateOfBirth: '1980-05-14',
         sex: 'MALE',
         mobileNumber: '+639171234567',
+        email: 'juan.delacruz@example.com',
+        address: '123 Mabini St., Manila',
       }) as Prisma.PatientUncheckedCreateInput),
       registeredClinicId: 'seed-clinic-uerm',
       createdById: doctor.id,
