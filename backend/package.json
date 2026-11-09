@@ -15,7 +15,8 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:seed": "tsx prisma/seed.ts",
+    "db:encrypt-existing": "tsx prisma/encryptExisting.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

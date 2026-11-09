@@ -13,39 +13,45 @@ export type AuditInput = Omit<HashableEntry, 'createdAt'>;
  */
 const WRITE_LOCK_KEY = 723842137;
 
+/** A transaction client, so an audit row can commit or roll back with the change it records. */
+export type AuditTx = Omit<
+  typeof prisma,
+  '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'
+>;
+
 /**
  * Append a row to the audit log, computing previousHash and entryHash under a
  * transactional advisory lock so concurrent writers chain in a serial order.
+ *
+ * Pass `tx` to write inside the caller's transaction: the audit row then
+ * commits or rolls back together with the business change it describes.
  */
-export async function writeAudit(input: AuditInput) {
-  return prisma.$transaction(
-    async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${WRITE_LOCK_KEY})`;
+export async function writeAudit(input: AuditInput, tx?: AuditTx) {
+  const run = async (db: AuditTx) => {
+    await db.$executeRaw`SELECT pg_advisory_xact_lock(${WRITE_LOCK_KEY})`;
 
-      const latest = await tx.auditLog.findFirst({
-        orderBy: { createdAt: 'desc' },
-        select: { entryHash: true },
-      });
-      const previousHash = latest?.entryHash ?? '';
-      const createdAt = new Date();
+    const latest = await db.auditLog.findFirst({
+      orderBy: { createdAt: 'desc' },
+      select: { entryHash: true },
+    });
+    const previousHash = latest?.entryHash ?? '';
+    const createdAt = new Date();
 
-      const entryHash = computeEntryHash(
-        { ...input, createdAt },
+    const entryHash = computeEntryHash({ ...input, createdAt }, previousHash);
+
+    return db.auditLog.create({
+      data: {
+        ...input,
+        metadata: (input.metadata ?? null) as any,
+        createdAt,
         previousHash,
-      );
+        entryHash,
+      },
+    });
+  };
 
-      return tx.auditLog.create({
-        data: {
-          ...input,
-          metadata: (input.metadata ?? null) as any,
-          createdAt,
-          previousHash,
-          entryHash,
-        },
-      });
-    },
-    { timeout: 15000 },
-  );
+  if (tx) return run(tx);
+  return prisma.$transaction(run, { timeout: 15000 });
 }
 
 /**

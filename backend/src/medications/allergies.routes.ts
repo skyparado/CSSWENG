@@ -11,6 +11,7 @@ import { prisma } from '../prisma.js';
 import { asyncHandler, conflict, notFound, validate } from '../http.js';
 import { clinicForWrite, currentUser, requireAuth, requireRole } from '../auth/guards.js';
 import { findAllergyConflicts } from './medicationSafety.js';
+import { getDrugReference } from './drugReference.js';
 
 export const allergiesRouter = Router();
 
@@ -61,7 +62,12 @@ allergiesRouter.post(
     if (!patient) throw notFound('Patient not found');
 
     const allergy = await prisma.allergy.create({
-      data: { ...body, clinicId, recordedById: currentUser(req).userId },
+      data: {
+        ...body,
+        clinicId,
+        recordedById: currentUser(req).userId,
+        lookupVersion: getDrugReference().version,
+      },
     });
     const alerts = await conflictingMedications(body.patientId, allergy);
     res.status(201).json({ allergy, alerts });
