@@ -1,12 +1,15 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { ZodError } from "zod";
-import { CreatePatientSchema, PatientSearchQuerySchema, UpdatePatientSchema } from "@clinic/schemas";
+import { CreatePatientSchema, PatientSearchQuerySchema, UpdatePatientSchema, VoidPatientSchema } from "@clinic/schemas";
+import { writeAudit } from "../audit/audit.service.js";
+import { AuditActions } from "../audit/actions.js";
 import {
   PatientError,
   getPatient,
   registerPatient,
   searchPatients,
   updatePatient,
+  voidPatient,
   type Actor,
   type Db,
 } from "./patient.service.js";
@@ -37,7 +40,8 @@ const wrap = (fn: Handler) => (req: Request, res: Response, next: NextFunction) 
  *   GET    /api/patients?q=&by=&scope=&page=&pageSize=   search / list (S04)
  *   POST   /api/patients                                 register (S05); 409 POSSIBLE_DUPLICATE
  *   GET    /api/patients/:id                             record (S06 header / secretary view)
- *   PATCH  /api/patients/:id                             update demographics
+ *   PATCH  /api/patients/:id                             update demographics; 409 POSSIBLE_DUPLICATE
+ *   POST   /api/patients/:id/void                        void a record (Doctor only)
  */
 export function createPatientRouter(db: Db): Router {
   const router = Router();
@@ -74,6 +78,30 @@ export function createPatientRouter(db: Db): Router {
       const actor = getActor(req);
       const input = UpdatePatientSchema.parse(req.body);
       res.json(await updatePatient(db, req.params.id!, input, actor));
+    }),
+  );
+
+  router.post(
+    "/:id/void",
+    wrap(async (req, res) => {
+      const actor = getActor(req);
+      const input = VoidPatientSchema.parse(req.body);
+      const result = await voidPatient(db, req.params.id!, input, actor);
+      await writeAudit({
+        userId: actor.id,
+        userEmail: null,
+        userRole: actor.role,
+        action: AuditActions.PATIENT_VOIDED,
+        resourceType: "PATIENT",
+        resourceId: result.id,
+        method: req.method,
+        path: req.originalUrl,
+        statusCode: 200,
+        ipAddress: req.ip ?? null,
+        userAgent: req.get("user-agent") ?? null,
+        metadata: { reason: input.reason, clinicId: actor.activeClinicId },
+      });
+      res.json(result);
     }),
   );
 

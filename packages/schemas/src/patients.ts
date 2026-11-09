@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { todayInClinic } from "./common.js";
 
 const trimmed = (max: number) => z.string().trim().min(1).max(max);
 const optionalText = (max: number) =>
@@ -20,7 +21,8 @@ export const isoDate = z
     return !Number.isNaN(d.getTime()) && d.toISOString().startsWith(s);
   }, "Not a valid date");
 
-export const pastDate = isoDate.refine((s) => new Date(`${s}T00:00:00Z`) <= new Date(), "Cannot be in the future");
+/** Compared as "YYYY-MM-DD" strings against today in Manila, so same-day births pass. */
+export const pastDate = isoDate.refine((s) => s <= todayInClinic(), "Cannot be in the future");
 
 /** PH mobile: 09XXXXXXXXX or +639XXXXXXXXX, spaces and dashes allowed. */
 export const phMobile = z
@@ -43,6 +45,8 @@ const demographics = {
   mobileNumber: phMobile,
   alternatePhone: optionalText(30),
   email: z.string().trim().email().max(254).optional().nullable().or(z.literal("").transform(() => null)),
+  // Required on S05 (Home address *). Nullable in the database only because
+  // tablet intake can create a patient before the address is collected.
   address: trimmed(500),
   emergencyContactName: optionalText(150),
   emergencyContactPhone: optionalText(30),
@@ -60,30 +64,43 @@ const clinicalHistory = {
   ophthalmicHistory: optionalText(10_000),
 };
 
+/**
+ * Set to true when the user chose "Continue as new" on the possible-duplicate
+ * banner. Without it, a name + birth date match returns 409 with candidates.
+ */
+const confirmNotDuplicate = z.boolean().optional().default(false);
+
 export const CreatePatientSchema = z.object({
   ...demographics,
   ...clinicalHistory,
-  /**
-   * Set to true when the user chose "Continue as new" on the possible-duplicate
-   * banner. Without it, a name + birth date match returns 409 with candidates.
-   */
-  confirmNotDuplicate: z.boolean().optional().default(false),
+  confirmNotDuplicate,
 });
 export type CreatePatientInput = z.infer<typeof CreatePatientSchema>;
 
 export const UpdatePatientSchema = z
   .object({ ...demographics, ...clinicalHistory })
   .partial()
-  .refine((o) => Object.keys(o).length > 0, "Nothing to update");
+  // Same duplicate check as registration when a name or birth date changes.
+  .extend({ confirmNotDuplicate })
+  .refine(({ confirmNotDuplicate: _c, ...fields }) => Object.keys(fields).length > 0, "Nothing to update");
 export type UpdatePatientInput = z.infer<typeof UpdatePatientSchema>;
+
+/** POST /api/patients/:id/void (Doctor only). */
+export const VoidPatientSchema = z.object({
+  reason: z.string().trim().min(1, "Give a reason").max(500),
+});
+export type VoidPatientInput = z.infer<typeof VoidPatientSchema>;
 
 export const PatientSearchBySchema = z.enum(["all", "name", "birthDate", "phone", "patientId"]);
 
 export const PatientSearchQuerySchema = z.object({
   q: z.string().trim().max(150).default(""),
   by: PatientSearchBySchema.default("all"),
-  /** S04 filter buttons. "followup" needs Developer 3's follow-up model. */
-  scope: z.enum(["all", "clinic"]).default("all"),
+  /**
+   * S04 filter buttons: everyone, "Seen at this clinic", and "Due for
+   * follow-up" (an open follow-up at this clinic due today or overdue).
+   */
+  scope: z.enum(["all", "clinic", "followup"]).default("all"),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(50).default(20),
 });

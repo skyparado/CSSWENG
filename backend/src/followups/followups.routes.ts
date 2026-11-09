@@ -164,7 +164,8 @@ followUpsRouter.post(
     const clinicId = clinicForWrite(req, body.clinicId);
 
     const [patient, clinic] = await Promise.all([
-      prisma.patient.findUnique({ where: { id: body.patientId } }),
+      // Voided records are mistakes or duplicates; never plan care against them.
+      prisma.patient.findFirst({ where: { id: body.patientId, voidedAt: null } }),
       prisma.clinic.findUnique({ where: { id: clinicId } }),
     ]);
     if (!patient) throw notFound('Patient not found');

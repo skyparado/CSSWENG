@@ -10,7 +10,7 @@ const db = vi.hoisted(() => ({
     update: vi.fn(),
     updateMany: vi.fn(),
   },
-  patient: { findUnique: vi.fn() },
+  patient: { findFirst: vi.fn() },
   clinic: { findUnique: vi.fn() },
   appointment: { findUnique: vi.fn() },
   patientConsent: { findFirst: vi.fn() },
@@ -119,7 +119,7 @@ describe('POST /api/follow-ups', () => {
   };
 
   it('lets the Doctor create a task in the active clinic', async () => {
-    db.patient.findUnique.mockResolvedValue({ id: 'p1' });
+    db.patient.findFirst.mockResolvedValue({ id: 'p1' });
     db.clinic.findUnique.mockResolvedValue({ id: 'c1' });
     db.followUp.create.mockImplementation(async ({ data }) => ({ id: 'f9', ...data, patient: openTask.patient }));
 
@@ -150,10 +150,17 @@ describe('POST /api/follow-ups', () => {
   });
 
   it('404s for an unknown patient', async () => {
-    db.patient.findUnique.mockResolvedValue(null);
+    db.patient.findFirst.mockResolvedValue(null);
     db.clinic.findUnique.mockResolvedValue({ id: 'c1' });
     const res = await request(doctorApp).post('/api/follow-ups').send(body);
     expect(res.status).toBe(404);
+  });
+
+  it('only looks up patients that have not been voided', async () => {
+    db.patient.findFirst.mockResolvedValue(null);
+    db.clinic.findUnique.mockResolvedValue({ id: 'c1' });
+    await request(doctorApp).post('/api/follow-ups').send(body);
+    expect(db.patient.findFirst).toHaveBeenLastCalledWith({ where: { id: 'p1', voidedAt: null } });
   });
 });
 

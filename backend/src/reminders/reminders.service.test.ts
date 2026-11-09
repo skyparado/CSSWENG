@@ -218,6 +218,7 @@ describe('findFollowUpsNeedingReminder', () => {
     expect(ids).toEqual(['f1', 'f2']);
     const { where } = db.followUp.findMany.mock.calls[0][0];
     expect(where.status).toBe('OPEN');
+    expect(where.patient.voidedAt).toBeNull();
     expect(where.patient.consents.some).toMatchObject({
       consentType: 'REMINDER',
       channel: 'SMS',
