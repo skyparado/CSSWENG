@@ -10,7 +10,7 @@ const db = vi.hoisted(() => ({
     update: vi.fn(),
     updateMany: vi.fn(),
   },
-  patient: { findUnique: vi.fn() },
+  patient: { findFirst: vi.fn() },
   clinic: { findUnique: vi.fn() },
   appointment: { findUnique: vi.fn() },
   patientConsent: { findFirst: vi.fn() },
@@ -23,6 +23,7 @@ vi.mock('../reminders/queue.js', () => queue);
 import { followUpsRouter } from './followups.routes.js';
 import { outreachRouter } from './outreach.routes.js';
 import { appWith, doctor, secretary } from '../testing/appWith.js';
+import { encrypt } from '../lib/fieldCrypto.js';
 
 const doctorApp = appWith('/api/follow-ups', followUpsRouter, doctor);
 const secretaryApp = appWith('/api/follow-ups', followUpsRouter, secretary);
@@ -35,6 +36,8 @@ const openTask = {
   status: 'OPEN',
   taskType: 'CHECK_UP',
   dueDate: new Date('2026-11-01T00:00:00Z'),
+  // Patient fields are stored encrypted; the API must decrypt them.
+  patient: { id: 'p1', firstName: encrypt('Juan'), lastName: encrypt('Dela Cruz'), mobileNumber: encrypt('+639171234567') },
 };
 
 beforeEach(() => {
@@ -116,13 +119,15 @@ describe('POST /api/follow-ups', () => {
   };
 
   it('lets the Doctor create a task in the active clinic', async () => {
-    db.patient.findUnique.mockResolvedValue({ id: 'p1' });
+    db.patient.findFirst.mockResolvedValue({ id: 'p1' });
     db.clinic.findUnique.mockResolvedValue({ id: 'c1' });
-    db.followUp.create.mockImplementation(async ({ data }) => ({ id: 'f9', ...data }));
+    db.followUp.create.mockImplementation(async ({ data }) => ({ id: 'f9', ...data, patient: openTask.patient }));
 
     const res = await request(doctorApp).post('/api/follow-ups').send(body);
 
     expect(res.status).toBe(201);
+    // Patient name comes back decrypted, not as ciphertext.
+    expect(res.body.patient).toMatchObject({ firstName: 'Juan', lastName: 'Dela Cruz' });
     expect(db.followUp.create.mock.calls[0][0].data).toMatchObject({
       clinicId: 'c1',
       priority: 'NORMAL',
@@ -145,10 +150,17 @@ describe('POST /api/follow-ups', () => {
   });
 
   it('404s for an unknown patient', async () => {
-    db.patient.findUnique.mockResolvedValue(null);
+    db.patient.findFirst.mockResolvedValue(null);
     db.clinic.findUnique.mockResolvedValue({ id: 'c1' });
     const res = await request(doctorApp).post('/api/follow-ups').send(body);
     expect(res.status).toBe(404);
+  });
+
+  it('only looks up patients that have not been voided', async () => {
+    db.patient.findFirst.mockResolvedValue(null);
+    db.clinic.findUnique.mockResolvedValue({ id: 'c1' });
+    await request(doctorApp).post('/api/follow-ups').send(body);
+    expect(db.patient.findFirst).toHaveBeenLastCalledWith({ where: { id: 'p1', voidedAt: null } });
   });
 });
 

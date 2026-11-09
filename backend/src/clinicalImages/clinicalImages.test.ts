@@ -4,6 +4,7 @@ import type request from 'supertest';
 import { createApp } from '../app.js';
 import { prisma } from '../prisma.js';
 import { loginAgent } from '../test-utils/authAgent.js';
+import { testPatientData } from '../test-utils/patientData.js';
 
 /**
  * Mock the S3 wrapper so tests exercise the full request → service → DB path
@@ -30,6 +31,7 @@ let doctorCleanup: () => Promise<void>;
 let secretaryCleanup: () => Promise<void>;
 
 let patientId = '';
+let clinicId = '';
 const createdImageIds: string[] = [];
 
 /** A valid tiny PNG header + body — enough bytes that the file isn't empty. */
@@ -47,8 +49,10 @@ beforeAll(async () => {
   secretaryAgent = secretary.agent;
   secretaryCleanup = secretary.cleanup;
 
+  const clinic = await prisma.clinic.create({ data: { name: 'Clinical Images Test Clinic' } });
+  clinicId = clinic.id;
   const patient = await prisma.patient.create({
-    data: { firstName: 'Image', lastName: 'Subject' },
+    data: testPatientData(clinicId, doctor.userId, { firstName: 'Image', lastName: 'Subject' }),
   });
   patientId = patient.id;
 });
@@ -68,6 +72,7 @@ afterAll(async () => {
   if (patientId) {
     await prisma.patient.delete({ where: { id: patientId } }).catch(() => undefined);
   }
+  if (clinicId) await prisma.clinic.delete({ where: { id: clinicId } }).catch(() => undefined);
   await doctorCleanup();
   await secretaryCleanup();
   await prisma.$disconnect();

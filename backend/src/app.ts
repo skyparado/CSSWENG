@@ -18,11 +18,13 @@ import { followUpsRouter } from './followups/followups.routes.js';
 import { outreachRouter } from './followups/outreach.routes.js';
 import { medicationsRouter } from './medications/medications.routes.js';
 import { allergiesRouter } from './medications/allergies.routes.js';
+import { requireAuth } from './auth/middleware.js';
+import { createPatientRouter } from './patients/patient.routes.js';
+import { prisma } from './prisma.js';
 import { auditRouter } from './audit/audit.routes.js';
 import { auditMiddleware } from './audit/audit.middleware.js';
 import { clinicalImagesRouter } from './clinicalImages/clinicalImages.routes.js';
 import { tabletIntakeRouter } from './tabletIntake/tabletIntake.routes.js';
-import { patientsStubRouter } from './patients/patients.stub.routes.js';
 
 // The built SPA (frontend/dist). Served by this app in production so the site
 // and API share one origin and the session cookie needs no CORS.
@@ -82,7 +84,8 @@ export function createApp(): Express {
   app.use('/api/outreach-logs', outreachRouter);
   app.use('/api/medications', medicationsRouter);
   app.use('/api/allergies', allergiesRouter);
-  app.use('/api/patients', patientsStubRouter);
+  // Patient registration, search and demographics (Doctor and Secretary).
+  app.use('/api/patients', requireAuth, createPatientRouter(prisma));
 
   if (existsSync(webDir)) app.use(express.static(webDir));
 

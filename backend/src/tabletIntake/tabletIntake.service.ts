@@ -9,6 +9,8 @@ import {
 } from '@clinic/schemas';
 import { writeAudit } from '../audit/audit.service.js';
 import { AuditActions } from '../audit/actions.js';
+import { indexes, toDbData } from '../patients/patient.mapper.js';
+import type { Prisma } from '@prisma/client';
 
 const INTAKE_RESOURCE = 'TABLET_INTAKE_SESSION';
 
@@ -105,24 +107,41 @@ export async function getSessionByToken(token: string): Promise<TabletIntakeSess
 
 /* ------------------------------- Submit ----------------------------------- */
 
-async function findOrCreatePatient(payload: IntakeFormSubmit) {
-  // Dedup on first + last + mobileNumber (case-insensitive on name). If no
-  // mobile is given, we skip dedup to avoid merging two different people.
-  if (payload.mobileNumber) {
-    const match = await prisma.patient.findFirst({
-      where: {
-        firstName: { equals: payload.firstName, mode: 'insensitive' },
-        lastName: { equals: payload.lastName, mode: 'insensitive' },
-        mobileNumber: payload.mobileNumber,
-      },
-    });
-    if (match) return { patient: match, created: false };
+async function findOrCreatePatient(
+  payload: IntakeFormSubmit,
+  session: { clinicId: string; startedBySecretaryId: string | null },
+) {
+  // Patient columns are encrypted with a random IV, so dedup matches on the
+  // blind indexes (normalised first + last name + mobile) instead.
+  const match = await prisma.patient.findFirst({
+    where: {
+      firstNameIdx: indexes.firstName(payload.firstName),
+      lastNameIdx: indexes.lastName(payload.lastName),
+      mobileIdx: indexes.mobile(payload.mobileNumber),
+      voidedAt: null,
+    },
+  });
+  if (match) return { patient: match, created: false };
+
+  // Every Patient records who registered it. The secretary who started the
+  // session stands in; a session whose starter was deleted cannot register.
+  if (!session.startedBySecretaryId) {
+    throw badRequest('This intake session has no registering staff member; start a new one');
   }
   const patient = await prisma.patient.create({
     data: {
-      firstName: payload.firstName,
-      lastName: payload.lastName,
-      ...(payload.mobileNumber ? { mobileNumber: payload.mobileNumber } : {}),
+      ...(toDbData({
+        firstName: payload.firstName,
+        lastName: payload.lastName,
+        dateOfBirth: payload.dateOfBirth,
+        sex: payload.sex,
+        mobileNumber: payload.mobileNumber,
+        email: payload.email,
+        address: payload.address,
+        medicalHistory: payload.medicalHistory,
+      }) as Prisma.PatientUncheckedCreateInput),
+      registeredClinicId: session.clinicId,
+      createdById: session.startedBySecretaryId,
     },
   });
   return { patient, created: true };
@@ -143,7 +162,7 @@ export async function submitSession(token: string, payload: IntakeFormSubmit) {
     throw badRequest('Session has expired');
   }
 
-  const { patient, created } = await findOrCreatePatient(payload);
+  const { patient, created } = await findOrCreatePatient(payload, session);
 
   // Submission + status flip in one transaction so a crashed submit never
   // leaves us with a submission row and an ACTIVE session (which would allow

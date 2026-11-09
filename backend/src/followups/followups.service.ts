@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../prisma.js';
+import { decrypt } from '../lib/fieldCrypto.js';
 
 /** Task types that stay open until staff record completion (FR-5.5.9). */
 const STAYS_OPEN_ON_APPOINTMENT = ['LAB_TEST', 'INJECTION', 'PROCEDURE'] as const;
@@ -48,3 +49,19 @@ export const followUpInclude = {
   patient: { select: { id: true, firstName: true, lastName: true, mobileNumber: true } },
   clinic: { select: { id: true, name: true } },
 } satisfies Prisma.FollowUpInclude;
+
+type EncryptedPatientSummary = { firstName: string; lastName: string; mobileNumber: string };
+
+/** Patient names and phone are stored encrypted; decrypt them before responding. */
+export function withPlainPatient<T extends { patient: EncryptedPatientSummary }>(row: T): T {
+  const p = row.patient;
+  return {
+    ...row,
+    patient: {
+      ...p,
+      firstName: decrypt(p.firstName),
+      lastName: decrypt(p.lastName),
+      mobileNumber: decrypt(p.mobileNumber),
+    },
+  };
+}

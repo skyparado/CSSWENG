@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SexSchema, pastDate, phMobile } from './patients.js';
 
 /* ------------------------------- Enums ----------------------------------- */
 
@@ -29,9 +30,11 @@ export type IntakeSessionCreate = z.infer<typeof intakeSessionCreateSchema>;
 export const intakeFormSubmitSchema = z.object({
   firstName: z.string().trim().min(1).max(80),
   lastName: z.string().trim().min(1).max(80),
-  dateOfBirth: z.coerce.date().optional(),
-  sex: z.enum(['MALE', 'FEMALE', 'OTHER', 'PREFER_NOT_TO_SAY']).optional(),
-  mobileNumber: z.string().trim().min(1).max(32).optional(),
+  // Required: the Patient record needs them, and they drive dedup. Same rules
+  // as staff registration (S05) so the two paths cannot drift.
+  dateOfBirth: pastDate,
+  sex: SexSchema,
+  mobileNumber: phMobile,
   email: z.string().email().max(254).optional(),
   address: z.string().trim().max(500).optional(),
   medicalHistory: z.string().trim().max(5000).optional(),

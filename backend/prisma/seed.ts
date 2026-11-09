@@ -1,4 +1,6 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, type Prisma } from '@prisma/client';
+import 'dotenv/config';
+import { toDbData } from '../src/patients/patient.mapper.js';
 import argon2 from 'argon2';
 
 const prisma = new PrismaClient();
@@ -69,16 +71,10 @@ async function main() {
     });
   }
 
-  await prisma.patient.upsert({
-    where: { id: 'seed-patient-juan' },
-    update: { email: 'juan.delacruz@example.com' },
-    create: { id: 'seed-patient-juan', firstName: 'Juan', lastName: 'Dela Cruz', email: 'juan.delacruz@example.com' },
-  });
-
   const doctorEmail = 'doctor@pacio.clinic.local';
   const doctorPassword = 'DoctorPass123!';
   const doctorHash = await argon2.hash(doctorPassword, { type: argon2.argon2id });
-  await prisma.user.upsert({
+  const doctor = await prisma.user.upsert({
     where: { email: doctorEmail },
     update: {},
     create: {
@@ -108,6 +104,26 @@ async function main() {
   await prisma.userClinic.createMany({
     data: CLINICS.map((c) => ({ userId: secretary.id, clinicId: c.id })),
     skipDuplicates: true,
+  });
+
+  // Patient fields are encrypted, so build the row the same way the API does.
+  await prisma.patient.upsert({
+    where: { id: 'seed-patient-juan' },
+    update: {},
+    create: {
+      id: 'seed-patient-juan',
+      ...(toDbData({
+        firstName: 'Juan',
+        lastName: 'Dela Cruz',
+        dateOfBirth: '1980-05-14',
+        sex: 'MALE',
+        mobileNumber: '+639171234567',
+        email: 'juan.delacruz@example.com',
+        address: '123 Mabini St., Manila',
+      }) as Prisma.PatientUncheckedCreateInput),
+      registeredClinicId: 'seed-clinic-uerm',
+      createdById: doctor.id,
+    },
   });
 
   // eslint-disable-next-line no-console

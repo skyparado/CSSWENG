@@ -188,12 +188,9 @@ describe('POST /api/tablet-intake/tablet/:token/submit', () => {
     expect(res.status).toBe(400);
   });
 
-    it('cannot dedup on an encrypted mobileNumber — creates a new patient (known trade-off)', async () => {
-    // Encrypting mobileNumber (see field-encryption PR) means every write
-    // produces a fresh ciphertext (random nonce), so findFirst({ where: {
-    // mobileNumber } }) cannot match an existing row. A searchable sidecar
-    // column (mobileNumberHash = HMAC-SHA-256) would be needed to restore
-    // dedup — tracked for a future chore PR.
+  it('dedups on blind indexes: same name + mobile reuses the existing patient', async () => {
+    // Patient columns are encrypted with a random IV, so dedup matches the
+    // HMAC blind indexes (firstNameIdx/lastNameIdx/mobileIdx) instead.
     const mobile = '+63-917-555-0199';
     const start1 = await secretaryAgent
       .post('/api/tablet-intake/sessions')
@@ -211,10 +208,10 @@ describe('POST /api/tablet-intake/tablet/:token/submit', () => {
     createdSessionIds.push(start2.body.id);
     const second = await supertest(app)
       .post(`/api/tablet-intake/tablet/${start2.body.token}/submit`)
-      .send(fullPayload({ firstName: 'Dedup', lastName: 'Target', mobileNumber: mobile }));
+      .send(fullPayload({ firstName: 'dedup', lastName: 'TARGET', mobileNumber: '+63 917 555 0199' }));
     expect(second.status).toBe(201);
-    expect(second.body.patientCreated).toBe(true);
-    createdPatientIds.push(second.body.patientId);
+    expect(second.body.patientCreated).toBe(false);
+    expect(second.body.patientId).toBe(first.body.patientId);
   });
 });
 

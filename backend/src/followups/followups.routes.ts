@@ -26,7 +26,7 @@ import {
 import { findActiveReminderConsent } from '../consents/consents.service.js';
 import { enqueueReminder } from '../reminders/queue.js';
 import { addDays, daysOverdue, todayInTimezone, toDateOnly } from './dates.js';
-import { followUpInclude, followUpWhere, type FollowUpFilters } from './followups.service.js';
+import { followUpInclude, followUpWhere, withPlainPatient, type FollowUpFilters } from './followups.service.js';
 
 export const followUpsRouter = Router();
 
@@ -55,7 +55,7 @@ async function paginate(
     }),
     prisma.followUp.count({ where }),
   ]);
-  return { items, total, page: q.page, pageSize: q.pageSize };
+  return { items: items.map(withPlainPatient), total, page: q.page, pageSize: q.pageSize };
 }
 
 const byDueThenPriority: Prisma.FollowUpOrderByWithRelationInput[] = [
@@ -141,7 +141,7 @@ followUpsRouter.get(
     });
     if (!followUp) throw notFound('Follow-up not found');
     assertClinicAccess(req, followUp.clinicId);
-    res.json(followUp);
+    res.json(withPlainPatient(followUp));
   }),
 );
 
@@ -164,7 +164,8 @@ followUpsRouter.post(
     const clinicId = clinicForWrite(req, body.clinicId);
 
     const [patient, clinic] = await Promise.all([
-      prisma.patient.findUnique({ where: { id: body.patientId } }),
+      // Voided records are mistakes or duplicates; never plan care against them.
+      prisma.patient.findFirst({ where: { id: body.patientId, voidedAt: null } }),
       prisma.clinic.findUnique({ where: { id: clinicId } }),
     ]);
     if (!patient) throw notFound('Patient not found');
@@ -192,7 +193,7 @@ followUpsRouter.post(
       },
       include: followUpInclude,
     });
-    res.status(201).json(followUp);
+    res.status(201).json(withPlainPatient(followUp));
   }),
 );
 
@@ -221,7 +222,7 @@ followUpsRouter.patch(
       },
       include: followUpInclude,
     });
-    res.json(updated);
+    res.json(withPlainPatient(updated));
   }),
 );
 
@@ -248,7 +249,7 @@ followUpsRouter.post(
       },
       include: followUpInclude,
     });
-    res.json(updated);
+    res.json(withPlainPatient(updated));
   }),
 );
 
@@ -265,7 +266,7 @@ followUpsRouter.post(
       data: { status: 'DECLINED', closureNote: (req.body as { closureNote: string }).closureNote },
       include: followUpInclude,
     });
-    res.json(updated);
+    res.json(withPlainPatient(updated));
   }),
 );
 
@@ -292,7 +293,7 @@ followUpsRouter.post(
       data: { status: 'SCHEDULED', appointmentId },
       include: followUpInclude,
     });
-    res.json(updated);
+    res.json(withPlainPatient(updated));
   }),
 );
 
