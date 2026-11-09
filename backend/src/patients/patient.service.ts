@@ -25,7 +25,8 @@ export class PatientError extends Error {
   }
 }
 
-type Db = Pick<PrismaClient, "patient">;
+/** Anything with a `patient` delegate: the app's extended client or a test fake. */
+export type Db = Pick<typeof import("../prisma.js").prisma, "patient">;
 
 const notVoided = { voidedAt: null } satisfies Prisma.PatientWhereInput;
 

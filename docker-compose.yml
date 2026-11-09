@@ -1,4 +1,4 @@
-# Local development services: PostgreSQL + Redis.
+# Local development services: PostgreSQL, Redis and S3-compatible storage.
 # Bring up with `npm run db:up` (docker compose up -d).
 services:
   postgres:
@@ -34,27 +34,32 @@ services:
       retries: 5
 
   # S3-compatible object storage for local dev (clinical images, generated PDFs).
-  # Console at http://localhost:9001 (minioadmin / minioadmin).
-  minio:
-    image: minio/minio:latest
-    container_name: clinic-minio
+  # MinIO images are no longer pullable from Docker Hub or quay.io, so this is
+  # Adobe's S3 mock. Files persist in the s3-data volume.
+  s3:
+    image: adobe/s3mock:latest
+    container_name: clinic-s3
+    user: "0" # the named volume is root-owned
     restart: unless-stopped
-    command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: clinic-documents
+      COM_ADOBE_TESTING_S3MOCK_STORE_ROOT: /data
+      COM_ADOBE_TESTING_S3MOCK_STORE_RETAIN_FILES_ON_EXIT: "true"
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "9000:9090"
     volumes:
-      - minio-data:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      - s3-data:/data
+
+  # Catches every email the app sends (EMAIL_PROVIDER=smtp). Inbox at http://localhost:8025.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: clinic-mailpit
+    restart: unless-stopped
+    ports:
+      - "1025:1025"
+      - "8025:8025"
 
 volumes:
   postgres-data:
   redis-data:
-  minio-data:
+  s3-data:

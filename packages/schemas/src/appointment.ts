@@ -22,6 +22,7 @@ export const appointmentCreateSchema = z
     startsAt: z.coerce.date(),
     endsAt: z.coerce.date(),
     reason: z.string().max(500).optional(),
+    visitType: z.string().max(60).optional(),
     status: appointmentStatusSchema.default('SCHEDULED'),
   })
   .refine((a) => a.endsAt.getTime() > a.startsAt.getTime(), {
@@ -55,3 +56,20 @@ export const appointmentQuerySchema = z.object({
   to: z.coerce.date().optional(),
 });
 export type AppointmentQuery = z.infer<typeof appointmentQuerySchema>;
+
+/** Cancel an appointment. The reason is required; the booking is kept in its history. */
+export const appointmentCancelSchema = z.object({
+  reason: z.string().trim().min(1, 'a reason is required').max(500),
+});
+export type AppointmentCancel = z.infer<typeof appointmentCancelSchema>;
+
+/**
+ * Book a walk-in for now. It may fall outside clinic hours, so it needs the
+ * Doctor's approval (automatic when the Doctor books it).
+ */
+export const walkInCreateSchema = z.object({
+  clinicId: idSchema,
+  patientId: idSchema,
+  reason: z.string().max(500).optional(),
+});
+export type WalkInCreate = z.infer<typeof walkInCreateSchema>;

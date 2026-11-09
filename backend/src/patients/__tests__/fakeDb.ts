@@ -56,5 +56,5 @@ export function createFakeDb() {
     },
   };
 
-  return { patient, rows } as unknown as { patient: import("@prisma/client").PrismaClient["patient"]; rows: Row[] };
+  return { patient, rows } as unknown as import("../patient.service.js").Db & { rows: Row[] };
 }
