@@ -21,6 +21,7 @@ vi.mock('argon2', () => ({ default: argon }));
 vi.mock('../reminders/gateway.js', () => ({ createGateways: () => ({ email }) }));
 
 import { createDocument, sendDocument, signDocument } from './documents.service.js';
+import { encrypt } from '../lib/fieldCrypto.js';
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
 const payload = {
@@ -56,7 +57,8 @@ beforeEach(() => {
   db.user.findUnique.mockResolvedValue({ id: 'u-doc', passwordHash: 'hash', fullName: 'Angeline Pacio, MD' });
   argon.verify.mockResolvedValue(true);
   db.clinic.findUnique.mockResolvedValue({ id: 'c1', name: 'Happy Eyes', address: null, isActive: true });
-  db.patient.findUnique.mockResolvedValue({ firstName: 'Maria', lastName: 'Santos' });
+  // Patient names are stored encrypted (patients module).
+  db.patient.findUnique.mockResolvedValue({ firstName: encrypt('Maria'), lastName: encrypt('Santos') });
   db.$transaction.mockImplementation(async (ops: unknown[]) => Promise.all(ops));
 });
 

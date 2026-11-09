@@ -1,3 +1,4 @@
+import { toPatientRef } from '../patients/patient.mapper.js';
 import { randomBytes, randomInt } from 'node:crypto';
 import argon2 from 'argon2';
 import { PDFDocument } from '@cantoo/pdf-lib';
@@ -39,7 +40,8 @@ export async function withClinicLetterhead(input: DocumentRequestCreate, userId:
   if (!clinic || !clinic.isActive) throw notFound('Clinic not found');
   if (!patient) throw notFound('Patient not found');
   if (!doctor) throw notFound('User not found');
-  input.payload.patientName = `${patient.firstName} ${patient.lastName}`;
+  const { firstName, lastName } = toPatientRef(patient);
+  input.payload.patientName = `${firstName} ${lastName}`;
   input.payload.prescriberName = doctor.fullName;
   input.payload.clinicName = clinic.name;
   input.payload.clinicAddress = clinic.address ?? undefined;
@@ -255,7 +257,13 @@ export async function listQueue(q: DocumentQueueQuery) {
     ...tabs.map((t) => prisma.documentRequest.count({ where: { ...base, ...TABS[t] } })),
   ]);
   const tabCounts = Object.fromEntries(tabs.map((t, i) => [t, counts[i]]));
-  return { items, total, page: q.page, pageSize: q.pageSize, counts: tabCounts };
+  return {
+    items: items.map((r) => ({ ...r, patient: toPatientRef(r.patient) })),
+    total,
+    page: q.page,
+    pageSize: q.pageSize,
+    counts: tabCounts,
+  };
 }
 
 /* ---------------------------------- Send ------------------------------------ */

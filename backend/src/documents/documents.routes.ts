@@ -27,6 +27,7 @@ import {
 import { renderHtmlToPdf } from './pdf.service.js';
 import { requireAuth, requireDoctor } from '../auth/middleware.js';
 import { assertClinicAccess, clinicForRead, clinicForWrite, currentUser } from '../auth/guards.js';
+import { toPatientRef } from '../patients/patient.mapper.js';
 
 export const documentsRouter = Router();
 
@@ -98,7 +99,7 @@ documentsRouter.get(
     });
     if (!request) throw notFound('Document request not found');
     assertClinicAccess(req, request.clinicId);
-    res.json(request);
+    res.json({ ...request, patient: toPatientRef(request.patient) });
   }),
 );
 
@@ -162,7 +163,7 @@ documentsRouter.get(
       orderBy: { createdAt: 'desc' },
       take: 500,
     });
-    res.json({ items });
+    res.json({ items: items.map((d) => ({ ...d, patient: toPatientRef(d.patient) })) });
   }),
 );
 

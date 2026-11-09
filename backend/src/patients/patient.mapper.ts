@@ -66,6 +66,20 @@ export function toDbData(input: Writable): Prisma.PatientUncheckedUpdateInput {
   return data as Prisma.PatientUncheckedUpdateInput;
 }
 
+/**
+ * The patient summary other modules embed (appointments, documents):
+ * `include: { patient: { select: { id, firstName, lastName, email } } }`.
+ * Those columns are encrypted, so decrypt them before responding.
+ */
+export function toPatientRef<T extends { firstName: string; lastName: string; email?: string | null }>(p: T): T {
+  return {
+    ...p,
+    firstName: decrypt(p.firstName),
+    lastName: decrypt(p.lastName),
+    ...("email" in p ? { email: decryptOpt(p.email) } : {}),
+  };
+}
+
 /** Row for the S04 search results table. */
 export function toListItem(p: Patient): PatientListItem {
   const dob = decrypt(p.dateOfBirth);

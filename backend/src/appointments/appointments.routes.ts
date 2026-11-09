@@ -16,6 +16,7 @@ import { checkWithinOperatingHours, nearestFreeTimes } from './operatingHours.js
 import { closeFollowUpsForCompletedAppointment } from '../followups/followups.service.js';
 import { requireAuth, requireDoctor } from '../auth/middleware.js';
 import { assertClinicAccess, clinicForRead, clinicForWrite, currentUser } from '../auth/guards.js';
+import { toPatientRef } from '../patients/patient.mapper.js';
 
 export const appointmentsRouter = Router();
 
@@ -119,7 +120,7 @@ appointmentsRouter.get(
       include: { patient: { select: { id: true, firstName: true, lastName: true } } },
       orderBy: { startsAt: 'asc' },
     });
-    res.json({ items });
+    res.json({ items: items.map((a) => ({ ...a, patient: toPatientRef(a.patient) })) });
   }),
 );
 
