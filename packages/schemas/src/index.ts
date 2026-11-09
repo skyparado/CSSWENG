@@ -12,6 +12,8 @@ export * from './users.js';
 export * from './followup.js';
 export * from './medication.js';
 export * from './patients.js';
+export * from './encounters.js';
+export * from './results.js';
 export * from './audit.js';
 export * from './clinicalImage.js';
 export * from './tabletIntake.js';
