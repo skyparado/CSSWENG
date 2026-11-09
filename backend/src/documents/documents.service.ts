@@ -26,10 +26,21 @@ export function htmlFor(input: DocumentRequestCreate, signatureDataUri?: string)
   }
 }
 
-/** Fill the letterhead from the stored clinic, never from what the client sent. */
-export async function withClinicLetterhead(input: DocumentRequestCreate): Promise<DocumentRequestCreate> {
-  const clinic = await prisma.clinic.findUnique({ where: { id: input.clinicId } });
+/**
+ * Fill the letterhead, patient name and prescriber from stored records, never
+ * from what the client sent. The prescriber is always the signed-in Doctor.
+ */
+export async function withClinicLetterhead(input: DocumentRequestCreate, userId: string): Promise<DocumentRequestCreate> {
+  const [clinic, patient, doctor] = await Promise.all([
+    prisma.clinic.findUnique({ where: { id: input.clinicId } }),
+    prisma.patient.findUnique({ where: { id: input.patientId }, select: { firstName: true, lastName: true } }),
+    prisma.user.findUnique({ where: { id: userId }, select: { fullName: true } }),
+  ]);
   if (!clinic || !clinic.isActive) throw notFound('Clinic not found');
+  if (!patient) throw notFound('Patient not found');
+  if (!doctor) throw notFound('User not found');
+  input.payload.patientName = `${patient.firstName} ${patient.lastName}`;
+  input.payload.prescriberName = doctor.fullName;
   input.payload.clinicName = clinic.name;
   input.payload.clinicAddress = clinic.address ?? undefined;
   return input;
@@ -160,7 +171,7 @@ export async function generateDocument(
  * document when `previousVersionId` is given (signed documents are locked).
  */
 export async function createDocument(input: DocumentRequestCreate, userId: string) {
-  await withClinicLetterhead(input);
+  await withClinicLetterhead(input, userId);
 
   let version = 1;
   if (input.previousVersionId) {

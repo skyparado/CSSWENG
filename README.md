@@ -38,8 +38,8 @@ npm run dev:frontend    # http://localhost:5173
 ```
 
 Then open http://localhost:5173 and sign in with a seeded account
-(`doctor@mabuhayclinic.local` / `DoctorPass123!` or
-`secretary@mabuhayclinic.local` / `SecretaryPass123!`).
+(`doctor@pacio.clinic.local` / `DoctorPass123!` or
+`secretary@pacio.clinic.local` / `SecretaryPass123!`).
 
 Email the app sends (documents, reminders) goes to **Mailpit**, a local inbox at
 http://localhost:8025 (`EMAIL_PROVIDER=smtp`, `SMTP_URL=smtp://localhost:1025`).
@@ -49,7 +49,8 @@ port 9000 (MinIO images are no longer pullable from Docker Hub or quay.io). It
 creates the `clinic-documents` bucket and keeps files in the `s3-data` volume.
 Any S3-compatible server works: point the `S3_*` variables in `backend/.env` at it.
 
-> **Windows:** if a native PostgreSQL install also listens on `localhost:5432`,
+> **Windows:** use `copy` instead of `cp` in cmd (step 3). Stop any local
+> PostgreSQL service using port 5432 before `npm run db:up`: if a native PostgreSQL install also listens on `localhost:5432`,
 > it answers instead of the Docker one ("authentication failed"). Stop it, or
 > change the published port in `docker-compose.yml` and `DATABASE_URL`.
 

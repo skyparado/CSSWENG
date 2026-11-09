@@ -6,7 +6,9 @@
       "Bash(curl -s -I localhost:9000/clinic-documents)",
       "Bash(DATABASE_URL=\"postgresql://clinic:clinic@192.168.56.1:5432/clinic_test?schema=public\" npm test)",
       "Bash(curl -s localhost:4100/health/ready)",
-      "Bash(curl -s -i localhost:4100/)"
+      "Bash(curl -s -i localhost:4100/)",
+      "Bash(\"/c/Program Files/GitHub CLI/gh.exe\" run view --log-failed)",
+      "Bash(command -v gh.exe)"
     ]
   }
 }

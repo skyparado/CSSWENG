@@ -4,6 +4,7 @@ import { PDFDocument } from '@cantoo/pdf-lib';
 const db = vi.hoisted(() => ({
   user: { findUnique: vi.fn() },
   clinic: { findUnique: vi.fn() },
+  patient: { findUnique: vi.fn() },
   document: { findUnique: vi.fn(), updateMany: vi.fn(), findUniqueOrThrow: vi.fn(), create: vi.fn(), update: vi.fn() },
   documentRequest: { create: vi.fn(), update: vi.fn(), findUnique: vi.fn() },
   documentDelivery: { create: vi.fn() },
@@ -52,9 +53,10 @@ beforeEach(() => {
   vi.resetAllMocks();
   pdf.renderHtmlToPdf.mockResolvedValue(Buffer.from('%PDF'));
   s3.putObject.mockImplementation(async (key: string) => ({ key, size: 4 }));
-  db.user.findUnique.mockResolvedValue({ id: 'u-doc', passwordHash: 'hash' });
+  db.user.findUnique.mockResolvedValue({ id: 'u-doc', passwordHash: 'hash', fullName: 'Angeline Pacio, MD' });
   argon.verify.mockResolvedValue(true);
   db.clinic.findUnique.mockResolvedValue({ id: 'c1', name: 'Happy Eyes', address: null, isActive: true });
+  db.patient.findUnique.mockResolvedValue({ firstName: 'Maria', lastName: 'Santos' });
   db.$transaction.mockImplementation(async (ops: unknown[]) => Promise.all(ops));
 });
 

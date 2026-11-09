@@ -40,6 +40,12 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
+// A Monday in the future: the booking guard rejects past start times, so a
+// hardcoded date would rot. 13:00–16:00 Manila == 05:00–08:00Z on that day.
+const d = new Date();
+d.setUTCDate(d.getUTCDate() + (((1 - d.getUTCDay() + 7) % 7) || 7));
+const monday = d.toISOString().slice(0, 10);
+
 describe('clinics + appointments (DB)', () => {
   it('creates a clinic', async () => {
     const res = await agent
@@ -64,12 +70,12 @@ describe('clinics + appointments (DB)', () => {
   });
 
   it('books an appointment inside operating hours (201)', async () => {
-    // 2026-01-05 is a Monday; 05:00Z == 13:00 Manila.
+    // A future Monday; 05:00Z == 13:00 Manila.
     const res = await agent.post('/api/appointments').send({
       clinicId,
       patientId,
-      startsAt: '2026-01-05T05:00:00Z',
-      endsAt: '2026-01-05T06:00:00Z',
+      startsAt: `${monday}T05:00:00Z`,
+      endsAt: `${monday}T06:00:00Z`,
       reason: 'Checkup',
     });
     expect(res.status).toBe(201);
@@ -81,8 +87,8 @@ describe('clinics + appointments (DB)', () => {
       clinicId,
       patientId,
       // Monday 10:00 Manila: UERM is closed Monday mornings.
-      startsAt: '2026-01-05T02:00:00Z',
-      endsAt: '2026-01-05T03:00:00Z',
+      startsAt: `${monday}T02:00:00Z`,
+      endsAt: `${monday}T03:00:00Z`,
     });
     expect(res.status).toBe(400);
   });
@@ -91,8 +97,8 @@ describe('clinics + appointments (DB)', () => {
     const res = await agent.post('/api/appointments').send({
       clinicId,
       patientId,
-      startsAt: '2026-01-05T05:30:00Z',
-      endsAt: '2026-01-05T06:30:00Z',
+      startsAt: `${monday}T05:30:00Z`,
+      endsAt: `${monday}T06:30:00Z`,
     });
     expect(res.status).toBe(409);
   });

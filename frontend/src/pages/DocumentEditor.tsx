@@ -62,7 +62,7 @@ export default function DocumentEditor() {
     params.get('type') === 'MEDICAL_CERTIFICATE' ? 'MEDICAL_CERTIFICATE' : 'PRESCRIPTION',
   );
   const [patient, setPatient] = useState<PatientRef | undefined>(() => patientFromRoute(route));
-  const [prescriberName, setPrescriberName] = useState(user.fullName);
+  const prescriberName = user.fullName; // server always uses the signed-in Doctor
   const [fields, setFields] = useState<Fields>(blank);
   const [previous, setPrevious] = useState<{ id: string; version: number }>();
   const [savedAt, setSavedAt] = useState<string>();
@@ -86,7 +86,6 @@ export default function DocumentEditor() {
       if (reviseId && r.payload && r.document) {
         const p = r.payload as Record<string, unknown> & { items?: Array<Partial<Item>> };
         setPrevious({ id: r.document.id, version: r.document.version });
-        setPrescriberName(String(p.prescriberName ?? user.fullName));
         setFields({
           items: p.items?.map((it) => ({ ...blankItem, ...it, notes: it.notes ?? '' })) ?? blank.items,
           diagnosis: String(p.diagnosis ?? ''),
@@ -103,7 +102,7 @@ export default function DocumentEditor() {
   const key = patient && draftKey(clinic!.id, patient.id, type);
   useEffect(() => {
     if (!key || reviseId) return;
-    const saved = localStorage.getItem(key);
+    const saved = sessionStorage.getItem(key);
     if (saved) {
       const d = JSON.parse(saved) as Fields & { savedAt: string };
       setFields({ ...blank, ...d });
@@ -116,7 +115,7 @@ export default function DocumentEditor() {
     if (!key || reviseId || JSON.stringify(fields) === JSON.stringify(blank)) return;
     const t = setTimeout(() => {
       const at = new Date().toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' });
-      localStorage.setItem(key, JSON.stringify({ ...fields, savedAt: at }));
+      sessionStorage.setItem(key, JSON.stringify({ ...fields, savedAt: at }));
       setSavedAt(at);
     }, 800);
     return () => clearTimeout(t);
@@ -189,7 +188,7 @@ export default function DocumentEditor() {
   }, [bodyKey]);
 
   const finish = () => {
-    if (key) localStorage.removeItem(key);
+    if (key) sessionStorage.removeItem(key);
     go('/documents');
   };
   const create = async () => {
@@ -342,8 +341,8 @@ export default function DocumentEditor() {
           <h2 style={{ marginTop: 24 }}>Prescriber</h2>
           <div className="grid2">
             <div>
-              <label htmlFor="prescriber">Name *</label>
-              <input id="prescriber" value={prescriberName} onChange={(e) => setPrescriberName(e.target.value)} />
+              <label htmlFor="prescriber">Name</label>
+              <input id="prescriber" value={prescriberName} readOnly />
             </div>
             <div>
               <label htmlFor="license">License No.</label>

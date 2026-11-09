@@ -43,6 +43,7 @@ export default function App() {
     },
     logout: async () => {
       await api.logout();
+      sessionStorage.clear(); // recent patients + drafts must not outlive the session on shared PCs
       setUser(null);
       go('/dashboard');
     },
@@ -134,6 +135,7 @@ function Layout({ route, children }: { route: string; children: ReactNode }) {
 function Login({ onLogin }: { onLogin: (u: User) => void }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState<string>();
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -154,7 +156,21 @@ function Login({ onLogin }: { onLogin: (u: User) => void }) {
         <label htmlFor="email">Email</label>
         <input id="email" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
         <label htmlFor="password">Password</label>
-        <input id="password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+        <div style={{ position: 'relative' }}>
+          <input id="password" type={showPw ? 'text' : 'password'} autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required style={{ paddingRight: 52 }} />
+          <button
+            type="button"
+            aria-label={showPw ? 'Hide password' : 'Show password'}
+            onClick={() => setShowPw(!showPw)}
+            style={{ position: 'absolute', right: 0, top: 0, bottom: 0, minWidth: 44, minHeight: 44, background: 'none', border: 0 }}
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+              <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" />
+              <circle cx="12" cy="12" r="3" />
+              {showPw && <line x1="3" y1="3" x2="21" y2="21" />}
+            </svg>
+          </button>
+        </div>
         {error && <p className="error" role="alert">{error}</p>}
         <button className="primary" style={{ marginTop: 16, width: '100%' }}>
           Sign in

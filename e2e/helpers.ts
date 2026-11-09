@@ -22,7 +22,7 @@ export const SIGNATURE_PNG = Buffer.from(
 export async function signIn(page: Page, role: keyof typeof USERS, clinic = 'UERM') {
   await page.goto('/');
   await page.getByLabel('Email').fill(USERS[role].email);
-  await page.getByLabel('Password').fill(USERS[role].password);
+  await page.getByLabel('Password', { exact: true }).fill(USERS[role].password);
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page.getByRole('heading', { name: 'Select Active Clinic' })).toBeVisible();
   await page.getByRole('radio', { name: new RegExp(clinic) }).click();
