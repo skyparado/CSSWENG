@@ -6,7 +6,7 @@ services:
   - type: web
     name: clinic-emr
     runtime: docker
-    plan: starter
+    plan: free
     branch: main
     healthCheckPath: /health/ready
     envVars:
@@ -52,12 +52,12 @@ services:
 
   - type: keyvalue
     name: clinic-redis
-    plan: starter
+    plan: free
     maxmemoryPolicy: noeviction # BullMQ must never have its jobs evicted
     ipAllowList: [] # reachable only from Render's private network
 
 databases:
   - name: clinic-db
-    plan: basic-256mb
+    plan: free
     databaseName: clinic
     user: clinic
