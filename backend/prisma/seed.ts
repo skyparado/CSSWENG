@@ -15,6 +15,7 @@ const CLINICS = [
   {
     id: 'seed-clinic-uerm',
     name: 'UERM',
+    address: 'Rm 302, Aurora Blvd, Quezon City',
     hours: [
       { dayOfWeek: 1, openTime: '13:00', closeTime: '16:00' },
       { dayOfWeek: 4, openTime: '10:00', closeTime: '12:00' },
@@ -23,11 +24,13 @@ const CLINICS = [
   {
     id: 'seed-clinic-tamesis',
     name: 'Clinica Tamesis',
+    address: 'UDMC, Sampaloc',
     hours: [{ dayOfWeek: 3, openTime: '13:00', closeTime: '16:00' }],
   },
   {
     id: 'seed-clinic-happy-eyes',
     name: 'Happy Eyes',
+    address: 'Doña Soledad Ave, Parañaque',
     hours: [
       { dayOfWeek: 5, openTime: '13:00', closeTime: '16:00' },
       { dayOfWeek: 6, openTime: '13:00', closeTime: '16:00' },
@@ -57,7 +60,7 @@ async function main() {
   for (const { hours, ...clinic } of CLINICS) {
     await prisma.clinic.upsert({
       where: { id: clinic.id },
-      update: { name: clinic.name },
+      update: { name: clinic.name, address: clinic.address },
       create: { ...clinic, timezone: 'Asia/Manila' },
     });
     await prisma.clinicSchedule.deleteMany({ where: { clinicId: clinic.id } });

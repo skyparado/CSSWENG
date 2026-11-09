@@ -17,6 +17,7 @@ function fmtDate(d: Date): string {
     year: 'numeric',
     month: 'long',
     day: 'numeric',
+    timeZone: 'Asia/Manila',
   }).format(d);
 }
 

@@ -31,8 +31,8 @@ export const prescriptionPayloadSchema = z.object({
     .array(
       z.object({
         drug: z.string().min(1).max(200),
-        dosage: z.string().max(100),
-        frequency: z.string().max(100),
+        dosage: z.string().trim().min(1, 'dose is required').max(100),
+        frequency: z.string().trim().min(1, 'frequency is required').max(100),
         duration: z.string().max(100),
         notes: z.string().max(300).optional(),
       }),
@@ -97,7 +97,16 @@ const requestLinks = {
 export const documentRequestCreateSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('PRESCRIPTION'), ...requestLinks, payload: prescriptionPayloadSchema }),
   z.object({ type: z.literal('MEDICAL_CERTIFICATE'), ...requestLinks, payload: medicalCertificatePayloadSchema }),
-]);
+]).superRefine((v, ctx) => {
+  if (v.type !== 'MEDICAL_CERTIFICATE') return;
+  const { restFromDate: from, restToDate: to } = v.payload;
+  // Rest dates go together (both or neither), and the end can't precede the start.
+  if (from && !to) ctx.addIssue({ code: 'custom', path: ['payload', 'restToDate'], message: 'rest to is required' });
+  if (to && !from) ctx.addIssue({ code: 'custom', path: ['payload', 'restFromDate'], message: 'rest from is required' });
+  if (from && to && to < from) {
+    ctx.addIssue({ code: 'custom', path: ['payload', 'restToDate'], message: 'rest to must be on or after rest from' });
+  }
+});
 export type DocumentRequestCreate = z.infer<typeof documentRequestCreateSchema>;
 
 export const documentRequestChannelSchema = z.enum(['PHONE', 'IN_PERSON', 'EMAIL']);

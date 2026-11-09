@@ -111,7 +111,7 @@ documentsRouter.post(
   requireDoctor,
   validate(documentRequestCreateSchema),
   asyncHandler(async (req, res) => {
-    const input = await withClinicLetterhead(req.body as DocumentRequestCreate);
+    const input = await withClinicLetterhead(req.body as DocumentRequestCreate, currentUser(req).userId);
     const pdf = await renderHtmlToPdf(htmlFor(input));
     res.setHeader('Content-Type', 'application/pdf');
     res.send(pdf);

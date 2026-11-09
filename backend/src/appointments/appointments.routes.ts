@@ -162,6 +162,8 @@ appointmentsRouter.post(
       status: Prisma.AppointmentCreateInput['status'];
     };
     const clinicId = clinicForWrite(req, data.clinicId);
+    // Walk-ins go through /walk-in, which books "now" and skips this check.
+    if (data.startsAt.getTime() < Date.now()) throw badRequest('Start time is in the past');
     await assertBookable(clinicId, data.startsAt, data.endsAt);
 
     const appt = await prisma.appointment.create({ data: { ...data, clinicId } });
