@@ -168,6 +168,28 @@ describe('POST /api/medications', () => {
     expect(audit.writeAudit.mock.calls[0][1]).toBe(db);
   });
 
+  it('saves the Doctor reason with the acknowledgement, but keeps its wording out of the audit log', async () => {
+    db.allergy.findMany.mockResolvedValue([{ id: 'a1', allergenName: 'Penicillin' }]);
+
+    const res = await request(medsApp)
+      .post('/api/medications')
+      .send({ ...newMed, acknowledgeAlerts: true, acknowledgementReason: 'Tolerated amoxicillin in 2019' });
+
+    expect(res.status).toBe(201);
+    const data = db.medication.create.mock.calls[0][0].data;
+    expect(data.safetyAcknowledgements.reason).toBe('Tolerated amoxicillin in 2019');
+    expect(data).not.toHaveProperty('acknowledgementReason'); // not a column
+    expect(auditEntries()[0].metadata.reasonGiven).toBe(true);
+    expect(JSON.stringify(auditEntries()[0])).not.toContain('Tolerated');
+  });
+
+  it('works without a reason', async () => {
+    db.allergy.findMany.mockResolvedValue([{ id: 'a1', allergenName: 'Penicillin' }]);
+    await request(medsApp).post('/api/medications').send({ ...newMed, acknowledgeAlerts: true });
+    expect(db.medication.create.mock.calls[0][0].data.safetyAcknowledgements).not.toHaveProperty('reason');
+    expect(auditEntries()[0].metadata.reasonGiven).toBe(false);
+  });
+
   it('writes no acknowledgement when there was nothing to acknowledge', async () => {
     await request(medsApp).post('/api/medications').send(newMed);
     expect(audit.writeAudit).not.toHaveBeenCalled();

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { Suspense, lazy, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { api, type Clinic, type User } from './api';
 import { SessionContext, go, useRoute, useSession, type Session } from './session';
 import ClinicSelect from './pages/ClinicSelect';
@@ -6,12 +6,18 @@ import Dashboard from './pages/Dashboard';
 import Calendar from './pages/Calendar';
 import DocumentEditor from './pages/DocumentEditor';
 import Documents from './pages/Documents';
+import FollowUps from './pages/FollowUps';
+import Outreach, { followUpIdFromOutreachRoute } from './pages/Outreach';
+import Medications, { MedicationsLanding, patientIdFromMedicationsRoute } from './pages/Medications';
+// Recharts is large; load it only when the Reports page is opened.
+const Reports = lazy(() => import('./pages/Reports'));
 
 /** Sidebar entries; `doctorOnly` items are hidden from the Secretary (SDD role matrix). */
 const MENU: Array<{ label: string; path: string; doctorOnly?: boolean }> = [
   { label: 'Dashboard', path: '/dashboard' },
   { label: 'Patients', path: '/patients' },
   { label: 'Follow-Ups', path: '/follow-ups' },
+  { label: 'Medications', path: '/medications', doctorOnly: true },
   { label: 'Appointments', path: '/appointments' },
   { label: 'Documents', path: '/documents' },
   { label: 'Reports', path: '/reports' },
@@ -66,8 +72,25 @@ function Routes() {
   const doctor = user.role === 'DOCTOR';
   let page: ReactNode;
   if (route === '/dashboard') page = <Dashboard />;
-  else if (route === '/appointments') page = <Calendar />;
-  else if (route === '/documents') page = <Documents />;
+  // Match on the path only: links such as #/appointments?patientId=... carry a query string.
+  else if (route.split('?')[0] === '/appointments') page = <Calendar />;
+  else if (route.split('?')[0] === '/documents') page = <Documents />;
+  else if (followUpIdFromOutreachRoute(route)) page = <Outreach key={route} followUpId={followUpIdFromOutreachRoute(route)!} />;
+  else if (route === '/follow-ups' || route.startsWith('/follow-ups?')) page = <FollowUps />;
+  else if (route.startsWith('/reports'))
+    page = (
+      <Suspense fallback={<p>Loading…</p>}>
+        <Reports />
+      </Suspense>
+    );
+  else if (patientIdFromMedicationsRoute(route))
+    page = doctor ? (
+      <Medications key={route} patientId={patientIdFromMedicationsRoute(route)!} />
+    ) : (
+      <p>Only the Doctor can view medications and allergies.</p>
+    );
+  else if (route.startsWith('/medications'))
+    page = doctor ? <MedicationsLanding /> : <p>Only the Doctor can view medications and allergies.</p>;
   else if (route.startsWith('/documents/new'))
     page = doctor ? <DocumentEditor /> : <p>Only the Doctor can prepare and sign documents.</p>;
   else {

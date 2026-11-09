@@ -27,6 +27,8 @@ import { auditRouter } from './audit/audit.routes.js';
 import { auditMiddleware } from './audit/audit.middleware.js';
 import { clinicalImagesRouter } from './clinicalImages/clinicalImages.routes.js';
 import { tabletIntakeRouter } from './tabletIntake/tabletIntake.routes.js';
+import { reportsRouter } from './reports/reports.routes.js';
+import { smsWebhooksRouter } from './reminders/webhooks.routes.js';
 
 // The built SPA (frontend/dist). Served by this app in production so the site
 // and API share one origin and the session cookie needs no CORS.
@@ -86,6 +88,10 @@ export function createApp(): Express {
   app.use('/api/outreach-logs', outreachRouter);
   app.use('/api/medications', medicationsRouter);
   app.use('/api/allergies', allergiesRouter);
+  // Management reports (S17): five read-only reports and background exports.
+  app.use('/api/reports', reportsRouter);
+  // Delivery reports from the SMS provider; authenticated by signature or shared secret, not by session.
+  app.use('/api/webhooks/sms', smsWebhooksRouter);
   // Patient registration, search and demographics (Doctor and Secretary).
   app.use('/api/patients', requireAuth, createPatientRouter(prisma));
   // Visits, consultation notes, signing and addenda.

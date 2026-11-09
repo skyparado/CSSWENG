@@ -38,6 +38,13 @@ CREATE INDEX "ReminderDelivery_followUpId_channel_idx" ON "ReminderDelivery"("fo
 -- AddForeignKey
 ALTER TABLE "ReminderDelivery" ADD CONSTRAINT "ReminderDelivery_followUpId_fkey" FOREIGN KEY ("followUpId") REFERENCES "FollowUp"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
+-- Visit and intake-session links (Encounter and TabletIntakeSession now exist)
+ALTER TABLE "FollowUp" ADD COLUMN "encounterId" TEXT;
+ALTER TABLE "PatientConsent" ADD COLUMN "intakeSessionId" TEXT;
+CREATE INDEX "FollowUp_encounterId_idx" ON "FollowUp"("encounterId");
+ALTER TABLE "FollowUp" ADD CONSTRAINT "FollowUp_encounterId_fkey" FOREIGN KEY ("encounterId") REFERENCES "Encounter"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "PatientConsent" ADD CONSTRAINT "PatientConsent_intakeSessionId_fkey" FOREIGN KEY ("intakeSessionId") REFERENCES "TabletIntakeSession"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
 -- AddForeignKey
 ALTER TABLE "ReminderDelivery" ADD CONSTRAINT "ReminderDelivery_consentId_fkey" FOREIGN KEY ("consentId") REFERENCES "PatientConsent"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 

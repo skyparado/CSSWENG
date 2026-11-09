@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import nodemailer from 'nodemailer';
 import type { DeliveryStatus } from '@prisma/client';
 import { env } from '../env.js';
+import { createSmsProvider } from './providers.js';
 
 export interface SendResult {
   /** Message id returned by the provider; stored on the outreach log. */
@@ -108,7 +109,7 @@ export interface Gateways {
  */
 export function createGateways(): Gateways {
   return {
-    sms: new StubSmsGateway(),
+    sms: createSmsProvider() ?? new StubSmsGateway(),
     email: env.EMAIL_PROVIDER === 'smtp' ? new SmtpEmailGateway() : new StubEmailGateway(),
   };
 }

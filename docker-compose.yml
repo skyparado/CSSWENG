@@ -42,7 +42,7 @@ services:
     user: "0" # the named volume is root-owned
     restart: unless-stopped
     environment:
-      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: clinic-documents
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: clinic-documents,clinic-backups
       COM_ADOBE_TESTING_S3MOCK_STORE_ROOT: /data
       COM_ADOBE_TESTING_S3MOCK_STORE_RETAIN_FILES_ON_EXIT: "true"
     ports:

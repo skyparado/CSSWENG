@@ -74,7 +74,22 @@ export async function verifyChain(): Promise<{
     orderBy: { createdAt: 'asc' },
   });
 
+  // After a retention purge (maintenance/purge.ts) the oldest surviving entry
+  // points at a deleted one. The purge records the last deleted entry's hash in
+  // its own audit entry, so the chain is accepted from that anchor, and only
+  // if the anchor really is on record: an arbitrary previousHash is still a break.
   let previousHash = '';
+  const first = entries[0];
+  if (first && first.previousHash !== '') {
+    const anchors = new Set(
+      entries
+        .filter((e) => e.action === 'RETENTION_PURGE')
+        .map((e) => e.metadata as { target?: string; lastPurgedEntryHash?: string } | null)
+        .filter((m) => m?.target === 'audit' && typeof m.lastPurgedEntryHash === 'string')
+        .map((m) => m?.lastPurgedEntryHash as string),
+    );
+    if (anchors.has(first.previousHash)) previousHash = first.previousHash;
+  }
   const breakages: ChainBreakage[] = [];
 
   for (const entry of entries) {
