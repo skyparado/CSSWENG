@@ -23,6 +23,10 @@ services:
           property: connectionString
       - key: SESSION_SECRET
         generateValue: true
+      # Encrypts sensitive DB columns (prisma-field-encryption). Must start with
+      # "k1.aesgcm256." and stay STABLE — changing it makes existing data undecryptable.
+      - key: PRISMA_FIELD_ENCRYPTION_KEY
+        sync: false
       - key: CORS_ORIGIN # the public site URL, e.g. https://clinic-emr.onrender.com
         sync: false
       - key: CLINIC_TIMEZONE
