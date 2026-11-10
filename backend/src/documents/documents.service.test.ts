@@ -4,6 +4,7 @@ import { PDFDocument } from '@cantoo/pdf-lib';
 const db = vi.hoisted(() => ({
   user: { findUnique: vi.fn() },
   clinic: { findUnique: vi.fn() },
+  patient: { findUnique: vi.fn() },
   document: { findUnique: vi.fn(), updateMany: vi.fn(), findUniqueOrThrow: vi.fn(), create: vi.fn(), update: vi.fn() },
   documentRequest: { create: vi.fn(), update: vi.fn(), findUnique: vi.fn() },
   documentDelivery: { create: vi.fn() },
@@ -20,6 +21,7 @@ vi.mock('argon2', () => ({ default: argon }));
 vi.mock('../reminders/gateway.js', () => ({ createGateways: () => ({ email }) }));
 
 import { createDocument, sendDocument, signDocument } from './documents.service.js';
+import { encrypt } from '../lib/fieldCrypto.js';
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
 const payload = {
@@ -52,9 +54,11 @@ beforeEach(() => {
   vi.resetAllMocks();
   pdf.renderHtmlToPdf.mockResolvedValue(Buffer.from('%PDF'));
   s3.putObject.mockImplementation(async (key: string) => ({ key, size: 4 }));
-  db.user.findUnique.mockResolvedValue({ id: 'u-doc', passwordHash: 'hash' });
+  db.user.findUnique.mockResolvedValue({ id: 'u-doc', passwordHash: 'hash', fullName: 'Angeline Pacio, MD' });
   argon.verify.mockResolvedValue(true);
   db.clinic.findUnique.mockResolvedValue({ id: 'c1', name: 'Happy Eyes', address: null, isActive: true });
+  // Patient names are stored encrypted (patients module).
+  db.patient.findUnique.mockResolvedValue({ firstName: encrypt('Maria'), lastName: encrypt('Santos') });
   db.$transaction.mockImplementation(async (ops: unknown[]) => Promise.all(ops));
 });
 

@@ -9,6 +9,7 @@ vi.mock('../prisma.js', () => ({ prisma: db }));
 
 import { buildReminderMessage, findFollowUpsNeedingReminder, processReminder } from './reminders.service.js';
 import type { Gateways } from './gateway.js';
+import { encrypt } from '../lib/fieldCrypto.js';
 
 const followUp = {
   id: 'f1',
@@ -18,7 +19,8 @@ const followUp = {
   taskType: 'CHECK_UP',
   reason: 'glaucoma pressure check',
   dueDate: new Date('2026-11-10T00:00:00Z'),
-  patient: { id: 'p1', mobileNumber: '+639171234567', email: 'juan@example.com' },
+  // Stored encrypted, as the patients module writes them.
+  patient: { id: 'p1', mobileNumber: encrypt('+639171234567'), email: encrypt('juan@example.com') },
   clinic: { id: 'c1', name: 'UERM', phone: '+63 2 8715 0861' },
 };
 
@@ -216,6 +218,7 @@ describe('findFollowUpsNeedingReminder', () => {
     expect(ids).toEqual(['f1', 'f2']);
     const { where } = db.followUp.findMany.mock.calls[0][0];
     expect(where.status).toBe('OPEN');
+    expect(where.patient.voidedAt).toBeNull();
     expect(where.patient.consents.some).toMatchObject({
       consentType: 'REMINDER',
       channel: 'SMS',

@@ -6,7 +6,7 @@ services:
   - type: web
     name: clinic-emr
     runtime: docker
-    plan: starter
+    plan: free
     branch: main
     healthCheckPath: /health/ready
     envVars:
@@ -27,6 +27,15 @@ services:
         sync: false
       - key: CLINIC_TIMEZONE
         value: Asia/Manila
+      # Patient field encryption and blind-index keys (backend/src/lib/fieldCrypto.ts).
+      # Each must be exactly 32 random bytes, base64, so Render's generateValue
+      # won't do. Generate each with:
+      #   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+      # Back both up: losing either makes stored patient data unreadable or unsearchable.
+      - key: FIELD_ENCRYPTION_KEY
+        sync: false
+      - key: BLIND_INDEX_KEY
+        sync: false
       # S3-compatible storage for PDFs and signatures (AWS S3, Cloudflare R2, …).
       # Leave S3_ENDPOINT empty for AWS; set S3_FORCE_PATH_STYLE=false for AWS.
       - key: S3_ENDPOINT
@@ -52,12 +61,12 @@ services:
 
   - type: keyvalue
     name: clinic-redis
-    plan: starter
+    plan: free
     maxmemoryPolicy: noeviction # BullMQ must never have its jobs evicted
     ipAllowList: [] # reachable only from Render's private network
 
 databases:
   - name: clinic-db
-    plan: basic-256mb
+    plan: free
     databaseName: clinic
     user: clinic

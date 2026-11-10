@@ -3,10 +3,10 @@ import { api, patientName, type PatientRef } from './api';
 
 const RECENT_KEY = 'recentPatients';
 
-/** Up to 5 patients most recently picked on this device (shown on the dashboard). */
+/** Up to 5 patients most recently picked in this browser tab (shown on the dashboard). */
 export function recentPatients(): PatientRef[] {
   try {
-    return JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]') as PatientRef[];
+    return JSON.parse(sessionStorage.getItem(RECENT_KEY) ?? '[]') as PatientRef[];
   } catch {
     return [];
   }
@@ -14,7 +14,7 @@ export function recentPatients(): PatientRef[] {
 
 function remember(p: PatientRef) {
   const list = [p, ...recentPatients().filter((r) => r.id !== p.id)].slice(0, 5);
-  localStorage.setItem(RECENT_KEY, JSON.stringify(list));
+  sessionStorage.setItem(RECENT_KEY, JSON.stringify(list));
 }
 
 /** Search-as-you-type patient results. */

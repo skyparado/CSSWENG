@@ -123,6 +123,11 @@ jobs:
       # default via vitest.config.ts; the e2e backend is a real server, so it
       # needs the variable here. Throwaway all-zero key, CI data only.
       PRISMA_FIELD_ENCRYPTION_KEY: k1.aesgcm256.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      # Patient field encryption and blind indexes (lib/fieldCrypto.ts): 32
+      # bytes, base64. The seed encrypts its patient with them. Same throwaway
+      # values as vitest.config.ts; CI data only.
+      FIELD_ENCRYPTION_KEY: dml0ZXN0LWZpZWxkLWVuY3J5cHRpb24ta2V5LTMyYiE=
+      BLIND_INDEX_KEY: dml0ZXN0LWJsaW5kLWluZGV4LWtleS0tLS0tLTMyYiE=
 
     steps:
       - uses: actions/checkout@v4
@@ -135,8 +140,9 @@ jobs:
       - run: npm ci
       - run: npm run prisma:generate --workspace backend
       - run: npm run prisma:migrate:deploy --workspace backend
-      - run: npm run db:seed --workspace @clinic/backend
+      # Build before seeding: the seed imports backend code that uses @clinic/schemas at runtime.
       - run: npm run build --workspace @clinic/schemas
+      - run: npm run db:seed --workspace @clinic/backend
       # Installs the system libraries Puppeteer's Chrome needs as well.
       - run: npx playwright install --with-deps chromium
 

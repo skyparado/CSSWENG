@@ -3,6 +3,7 @@ import type request from 'supertest';
 import { createApp } from '../app.js';
 import { prisma } from '../prisma.js';
 import { loginAgent } from '../test-utils/authAgent.js';
+import { testPatientData } from '../test-utils/patientData.js';
 
 /**
  * Integration tests that hit the real database through the HTTP layer.
@@ -18,14 +19,18 @@ let agent: ReturnType<typeof request.agent>;
 let authCleanup: () => Promise<void>;
 let clinicId = '';
 let patientId = '';
+let patientClinicId = '';
 
 beforeAll(async () => {
   const session = await loginAgent(app, 'DOCTOR');
   agent = session.agent;
   authCleanup = session.cleanup;
 
+  // A patient must be registered under a clinic by a staff user.
+  const patientClinic = await prisma.clinic.create({ data: { name: 'Patient Registration Clinic' } });
+  patientClinicId = patientClinic.id;
   const patient = await prisma.patient.create({
-    data: { firstName: 'Test', lastName: 'Patient' },
+    data: testPatientData(patientClinicId, session.userId),
   });
   patientId = patient.id;
 });
@@ -36,9 +41,16 @@ afterAll(async () => {
   if (patientId) await prisma.appointment.deleteMany({ where: { patientId } });
   if (clinicId) await prisma.clinic.delete({ where: { id: clinicId } }).catch(() => undefined);
   if (patientId) await prisma.patient.delete({ where: { id: patientId } }).catch(() => undefined);
+  if (patientClinicId) await prisma.clinic.delete({ where: { id: patientClinicId } }).catch(() => undefined);
   if (authCleanup) await authCleanup();
   await prisma.$disconnect();
 });
+
+// A Monday in the future: the booking guard rejects past start times, so a
+// hardcoded date would rot. 13:00–16:00 Manila == 05:00–08:00Z on that day.
+const d = new Date();
+d.setUTCDate(d.getUTCDate() + (((1 - d.getUTCDay() + 7) % 7) || 7));
+const monday = d.toISOString().slice(0, 10);
 
 describe('clinics + appointments (DB)', () => {
   it('creates a clinic', async () => {
@@ -64,12 +76,12 @@ describe('clinics + appointments (DB)', () => {
   });
 
   it('books an appointment inside operating hours (201)', async () => {
-    // 2026-01-05 is a Monday; 05:00Z == 13:00 Manila.
+    // A future Monday; 05:00Z == 13:00 Manila.
     const res = await agent.post('/api/appointments').send({
       clinicId,
       patientId,
-      startsAt: '2026-01-05T05:00:00Z',
-      endsAt: '2026-01-05T06:00:00Z',
+      startsAt: `${monday}T05:00:00Z`,
+      endsAt: `${monday}T06:00:00Z`,
       reason: 'Checkup',
     });
     expect(res.status).toBe(201);
@@ -81,8 +93,8 @@ describe('clinics + appointments (DB)', () => {
       clinicId,
       patientId,
       // Monday 10:00 Manila: UERM is closed Monday mornings.
-      startsAt: '2026-01-05T02:00:00Z',
-      endsAt: '2026-01-05T03:00:00Z',
+      startsAt: `${monday}T02:00:00Z`,
+      endsAt: `${monday}T03:00:00Z`,
     });
     expect(res.status).toBe(400);
   });
@@ -91,8 +103,8 @@ describe('clinics + appointments (DB)', () => {
     const res = await agent.post('/api/appointments').send({
       clinicId,
       patientId,
-      startsAt: '2026-01-05T05:30:00Z',
-      endsAt: '2026-01-05T06:30:00Z',
+      startsAt: `${monday}T05:30:00Z`,
+      endsAt: `${monday}T06:30:00Z`,
     });
     expect(res.status).toBe(409);
   });

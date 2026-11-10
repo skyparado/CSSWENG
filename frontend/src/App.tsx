@@ -6,6 +6,35 @@ import Dashboard from './pages/Dashboard';
 import Calendar from './pages/Calendar';
 import DocumentEditor from './pages/DocumentEditor';
 import Documents from './pages/Documents';
+import Patients from './pages/Patients';
+import PatientRegister from './pages/PatientRegister';
+import PatientChart from './pages/PatientChart';
+import ConsultationNote from './pages/ConsultationNote';
+import Comparison from './pages/Comparison';
+
+/**
+ * Patient routes (S04–S08):
+ *   /patients                                   S04 search and list
+ *   /patients/new                               S05 registration
+ *   /patients/:id                               S06 chart summary
+ *   /patients/:id/visits/:encounterId           S07 consultation note
+ *   /patients/:id/compare[?current=:encounterId] S08 comparison
+ */
+function patientPage(route: string): ReactNode | undefined {
+  const [path, query = ''] = route.split('?');
+  const parts = path!.split('/').filter(Boolean);
+  if (parts[0] !== 'patients') return undefined;
+  if (parts.length === 1) return <Patients />;
+  if (parts[1] === 'new' && parts.length === 2) return <PatientRegister />;
+  const id = parts[1]!;
+  if (parts.length === 2) return <PatientChart key={id} patientId={id} />;
+  if (parts[2] === 'visits' && parts[3]) return <ConsultationNote key={parts[3]} patientId={id} encounterId={parts[3]} />;
+  if (parts[2] === 'compare') {
+    const current = new URLSearchParams(query).get('current') ?? undefined;
+    return <Comparison key={id} patientId={id} currentEncounterId={current} />;
+  }
+  return undefined;
+}
 
 /** Sidebar entries; `doctorOnly` items are hidden from the Secretary (SDD role matrix). */
 const MENU: Array<{ label: string; path: string; doctorOnly?: boolean }> = [
@@ -43,6 +72,7 @@ export default function App() {
     },
     logout: async () => {
       await api.logout();
+      sessionStorage.clear(); // recent patients + drafts must not outlive the session on shared PCs
       setUser(null);
       go('/dashboard');
     },
@@ -64,7 +94,9 @@ function Routes() {
 
   const doctor = user.role === 'DOCTOR';
   let page: ReactNode;
-  if (route === '/dashboard') page = <Dashboard />;
+  const patient = patientPage(route);
+  if (patient) page = patient;
+  else if (route === '/dashboard') page = <Dashboard />;
   else if (route === '/appointments') page = <Calendar />;
   else if (route === '/documents') page = <Documents />;
   else if (route.startsWith('/documents/new'))
@@ -134,6 +166,7 @@ function Layout({ route, children }: { route: string; children: ReactNode }) {
 function Login({ onLogin }: { onLogin: (u: User) => void }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState<string>();
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -154,7 +187,21 @@ function Login({ onLogin }: { onLogin: (u: User) => void }) {
         <label htmlFor="email">Email</label>
         <input id="email" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
         <label htmlFor="password">Password</label>
-        <input id="password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+        <div style={{ position: 'relative' }}>
+          <input id="password" type={showPw ? 'text' : 'password'} autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required style={{ paddingRight: 52 }} />
+          <button
+            type="button"
+            aria-label={showPw ? 'Hide password' : 'Show password'}
+            onClick={() => setShowPw(!showPw)}
+            style={{ position: 'absolute', right: 0, top: 0, bottom: 0, minWidth: 44, minHeight: 44, background: 'none', border: 0 }}
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+              <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" />
+              <circle cx="12" cy="12" r="3" />
+              {showPw && <line x1="3" y1="3" x2="21" y2="21" />}
+            </svg>
+          </button>
+        </div>
         {error && <p className="error" role="alert">{error}</p>}
         <button className="primary" style={{ marginTop: 16, width: '100%' }}>
           Sign in

@@ -1,8 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { prisma } from '../prisma.js';
+import { decrypt } from '../lib/fieldCrypto.js';
+import { testPatientData } from '../test-utils/patientData.js';
 
 /**
  * Field-level encryption integration tests.
+ *
+ * Two schemes coexist: Patient columns are encrypted in app code by
+ * lib/fieldCrypto (so they can carry blind indexes for search), and other
+ * `/// @encrypted` columns such as ClinicalImage.caption use
+ * prisma-field-encryption.
  *
  * Writes to marked columns via Prisma (should be encrypted on the wire out),
  * reads via Prisma (should decrypt transparently), and uses $queryRaw to prove
@@ -15,6 +22,7 @@ const PLAINTEXT_CAPTION =
   'Fundus photograph OD baseline for diabetic retinopathy screening';
 
 let clinicId = '';
+let userId = '';
 let patientId = '';
 let imageId = '';
 
@@ -24,12 +32,23 @@ beforeAll(async () => {
   });
   clinicId = clinic.id;
 
-  const patient = await prisma.patient.create({
+  const user = await prisma.user.create({
     data: {
+      email: `encryption-test-${Date.now()}@test.local`,
+      fullName: 'Encryption Test User',
+      passwordHash: 'not-a-real-hash',
+      role: 'DOCTOR',
+      status: 'ACTIVE',
+    },
+  });
+  userId = user.id;
+
+  const patient = await prisma.patient.create({
+    data: testPatientData(clinicId, userId, {
       firstName: 'Encrypted',
       lastName: 'Patient',
       mobileNumber: PLAINTEXT_MOBILE,
-    },
+    }),
   });
   patientId = patient.id;
 
@@ -58,13 +77,17 @@ afterAll(async () => {
   if (clinicId) {
     await prisma.clinic.delete({ where: { id: clinicId } }).catch(() => undefined);
   }
+  if (userId) {
+    await prisma.user.delete({ where: { id: userId } }).catch(() => undefined);
+  }
   await prisma.$disconnect();
 });
 
-describe('Patient.mobileNumber (encrypted)', () => {
-  it('round-trips: write ciphertext, Prisma read returns plaintext', async () => {
+describe('Patient.mobileNumber (app-encrypted via fieldCrypto)', () => {
+  it('round-trips: Prisma returns ciphertext, decrypt() returns plaintext', async () => {
     const read = await prisma.patient.findUniqueOrThrow({ where: { id: patientId } });
-    expect(read.mobileNumber).toBe(PLAINTEXT_MOBILE);
+    expect(read.mobileNumber).not.toBe(PLAINTEXT_MOBILE);
+    expect(decrypt(read.mobileNumber)).toBe(PLAINTEXT_MOBILE);
   });
 
   it('is stored as ciphertext in Postgres (verified via $queryRaw)', async () => {
@@ -75,8 +98,8 @@ describe('Patient.mobileNumber (encrypted)', () => {
     const stored = rows[0].mobileNumber;
     expect(stored).toBeTruthy();
     expect(stored).not.toBe(PLAINTEXT_MOBILE);
-    // prisma-field-encryption serialises values as `k<n>.aesgcm256.<nonce>.<ct>`.
-    expect(stored).toMatch(/^v\d+\.aesgcm256\./);
+    // fieldCrypto serialises values as `<version>:<iv>:<tag>:<ct>`.
+    expect(stored!.split(':')).toHaveLength(4);
   });
 });
 
@@ -132,8 +155,8 @@ describe('cross-field independence', () => {
       where: { id: patientId },
       select: { id: true, firstName: true, lastName: true, mobileNumber: true },
     });
-    expect(list[0].firstName).toBe('Encrypted');
-    expect(list[0].lastName).toBe('Patient');
-    expect(list[0].mobileNumber).toBe(PLAINTEXT_MOBILE);
+    expect(decrypt(list[0].firstName)).toBe('Encrypted');
+    expect(decrypt(list[0].lastName)).toBe('Patient');
+    expect(decrypt(list[0].mobileNumber)).toBe(PLAINTEXT_MOBILE);
   });
 });
