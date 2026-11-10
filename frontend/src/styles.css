@@ -112,3 +112,66 @@ tr.selected td { background: #eaf1fb; }
 .pager { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; }
 .badge { white-space: nowrap; }
 td .row { flex-wrap: nowrap; }
+
+/* Patients and clinical screens (S04-S08) */
+.between { justify-content: space-between; }
+.end { justify-content: flex-end; }
+.grow { flex: 1; min-width: 0; }
+.auto { width: auto; }
+.small { font-size: 13px; }
+.pre { white-space: pre-wrap; margin: 4px 0; }
+.stack-gap { gap: 20px; margin-bottom: 20px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.crumbs { color: var(--muted); margin-bottom: 12px; }
+.crumbs a { text-decoration: none; }
+.search-bar { margin: 16px 0 0; }
+.field-error { margin: 4px 0 0; font-size: 13px; }
+input[aria-invalid='true'], select[aria-invalid='true'] { border-color: var(--red); }
+label.check { display: flex; gap: 8px; align-items: center; font-weight: 400; }
+label.check input { width: auto; }
+button.link { border: 0; background: none; padding: 4px 0; color: var(--navy); }
+.alert.duplicate { margin: 12px 0 20px; }
+.alert.duplicate .row + .row { margin-top: 8px; }
+.alert.allergy { color: var(--red); margin: 16px 0; }
+.notice { margin: 16px 0; }
+.patient-head { display: flex; align-items: center; gap: 20px; margin-bottom: 16px; }
+.patient-head h1 { font-size: 26px; }
+.patient-head p { margin: 4px 0 0; }
+.avatar { width: 64px; height: 64px; border-radius: 50%; background: #eaf1fb; color: var(--navy); font-weight: 700; font-size: 22px; display: grid; place-items: center; flex: none; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: 8px 0 20px; }
+.tabs button { border: 0; border-bottom: 3px solid transparent; border-radius: 0; background: none; color: var(--muted); padding: 10px 16px; }
+.tabs button[aria-selected='true'] { color: var(--navy); border-bottom-color: var(--navy); }
+.chart-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; align-items: start; }
+.chart-grid h3, .card h3 { font-size: 15px; margin: 12px 0 4px; }
+.spread { justify-content: space-between; max-width: 320px; }
+ul.plain { list-style: none; padding: 0; margin: 8px 0 0; }
+ul.plain li { padding: 8px 0; border-top: 1px solid var(--line); }
+ul.plain li:first-child { border-top: 0; }
+.note-grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 20px; align-items: start; }
+table.findings th[scope='row'] { color: var(--text); font-size: 15px; }
+table.findings input { max-width: 160px; }
+table.findings .unit { width: auto; margin-left: 8px; padding: 4px 6px; font-size: 13px; }
+.changed, input.changed { color: var(--red); font-weight: 700; }
+.diagnoses { margin-bottom: 8px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; background: #eaf1fb; color: var(--navy); border: 1px solid #c9d8ee; border-radius: 999px; padding: 6px 14px; font-weight: 600; }
+.chip-x { border: 0; background: none; padding: 0 2px; color: var(--navy); }
+.chip-toggle { border-radius: 999px; padding: 6px 14px; }
+.chip-toggle[aria-pressed='true'] { background: #eaf1fb; }
+.footer-bar.sticky { position: sticky; bottom: 0; background: var(--bg); padding: 16px 0; margin-top: 20px; border-top: 1px solid var(--line); }
+.filters { display: grid; grid-template-columns: 220px 1fr 160px 160px auto; gap: 16px; align-items: end; margin-bottom: 20px; }
+.filters fieldset { border: 0; padding: 0; margin: 0; }
+.filters legend { font-weight: 600; margin-bottom: 6px; }
+.compare-grid { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 20px; align-items: start; }
+.scroll-x { overflow-x: auto; }
+table.compare th.current, table.compare td.current { background: #eaf1fb; font-weight: 700; }
+table.compare td { white-space: nowrap; }
+.tag { display: block; width: fit-content; font-size: 12px; padding: 1px 8px; margin-top: 2px; border: 1px solid currentColor; }
+.legend dl { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; align-items: center; margin: 0; }
+.legend dd { margin: 0; color: var(--muted); }
+.chart { margin: 8px 0 0; }
+@media (max-width: 1200px) {
+  .chart-grid, .note-grid, .compare-grid, .filters { grid-template-columns: 1fr; }
+}
+.card > .row.between:first-child { flex-wrap: nowrap; align-items: baseline; margin-bottom: 12px; }
+.card > .row.between:first-child h2 { margin: 0; }
+tr.nowrap td { white-space: nowrap; }

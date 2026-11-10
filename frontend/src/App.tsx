@@ -6,6 +6,35 @@ import Dashboard from './pages/Dashboard';
 import Calendar from './pages/Calendar';
 import DocumentEditor from './pages/DocumentEditor';
 import Documents from './pages/Documents';
+import Patients from './pages/Patients';
+import PatientRegister from './pages/PatientRegister';
+import PatientChart from './pages/PatientChart';
+import ConsultationNote from './pages/ConsultationNote';
+import Comparison from './pages/Comparison';
+
+/**
+ * Patient routes (S04–S08):
+ *   /patients                                   S04 search and list
+ *   /patients/new                               S05 registration
+ *   /patients/:id                               S06 chart summary
+ *   /patients/:id/visits/:encounterId           S07 consultation note
+ *   /patients/:id/compare[?current=:encounterId] S08 comparison
+ */
+function patientPage(route: string): ReactNode | undefined {
+  const [path, query = ''] = route.split('?');
+  const parts = path!.split('/').filter(Boolean);
+  if (parts[0] !== 'patients') return undefined;
+  if (parts.length === 1) return <Patients />;
+  if (parts[1] === 'new' && parts.length === 2) return <PatientRegister />;
+  const id = parts[1]!;
+  if (parts.length === 2) return <PatientChart key={id} patientId={id} />;
+  if (parts[2] === 'visits' && parts[3]) return <ConsultationNote key={parts[3]} patientId={id} encounterId={parts[3]} />;
+  if (parts[2] === 'compare') {
+    const current = new URLSearchParams(query).get('current') ?? undefined;
+    return <Comparison key={id} patientId={id} currentEncounterId={current} />;
+  }
+  return undefined;
+}
 
 /** Sidebar entries; `doctorOnly` items are hidden from the Secretary (SDD role matrix). */
 const MENU: Array<{ label: string; path: string; doctorOnly?: boolean }> = [
@@ -65,7 +94,9 @@ function Routes() {
 
   const doctor = user.role === 'DOCTOR';
   let page: ReactNode;
-  if (route === '/dashboard') page = <Dashboard />;
+  const patient = patientPage(route);
+  if (patient) page = patient;
+  else if (route === '/dashboard') page = <Dashboard />;
   else if (route === '/appointments') page = <Calendar />;
   else if (route === '/documents') page = <Documents />;
   else if (route.startsWith('/documents/new'))

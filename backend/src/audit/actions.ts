@@ -20,6 +20,7 @@ export const AuditActions = {
 
   // Patients
   PATIENT_VOIDED: 'PATIENT_VOIDED',
+  PATIENT_CHART_VIEWED: 'PATIENT_CHART_VIEWED',
 
   // Clinical images
   CLINICAL_IMAGE_UPLOADED: 'CLINICAL_IMAGE_UPLOADED',
