@@ -8,7 +8,9 @@
       "Bash(curl -s localhost:4100/health/ready)",
       "Bash(curl -s -i localhost:4100/)",
       "Bash(\"/c/Program Files/GitHub CLI/gh.exe\" run view --log-failed)",
-      "Bash(command -v gh.exe)"
+      "Bash(command -v gh.exe)",
+      "Bash(env)",
+      "Bash(DBURL=* node step2.js)"
     ]
   }
 }
