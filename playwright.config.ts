@@ -14,6 +14,11 @@ export default defineConfig({
   use: {
     baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:5173',
     trace: 'retain-on-failure',
+    // Set E2E_USE_SYSTEM_CHROME=1 to drive the Chrome already installed on
+    // the machine instead of Playwright's own 190MB Chromium build. Handy on
+    // a slow connection. Left off by default so CI keeps using the pinned
+    // Chromium, which is the version the suite is actually verified against.
+    ...(process.env.E2E_USE_SYSTEM_CHROME ? { channel: 'chrome' as const } : {}),
   },
   webServer: process.env.E2E_BASE_URL
     ? undefined

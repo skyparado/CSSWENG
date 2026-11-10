@@ -146,8 +146,45 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public details?: { suggestions?: string[] } | null,
+    /**
+     * How many sign-in attempts are left before the account locks. Only set
+     * on a 401 from /api/auth/login, and only when the server recognised the
+     * email. Null on the unknown-email and non-active paths, so the UI never
+     * reveals whether an account exists (S01, QA 1).
+     */
+    public attemptsRemaining: number | null = null,
   ) {
     super(message);
+  }
+}
+
+/**
+ * Listeners told about every successful API call. The session idle timeout is
+ * rolling on the server, refreshed by each request, so the only honest way for
+ * the UI to know how much idle time is left is to watch actual requests.
+ * Mouse movement does not touch the server and so does not extend anything.
+ */
+type ActivityListener = () => void;
+const activityListeners = new Set<ActivityListener>();
+
+/** Subscribe to API activity. Returns an unsubscribe function. */
+export function onApiActivity(listener: ActivityListener): () => void {
+  activityListeners.add(listener);
+  return () => activityListeners.delete(listener);
+}
+
+/**
+ * Tell the idle-timeout watcher a request just succeeded. Exported so the
+ * other API modules (clinicalApi, adminApi) feed the same clock; a screen
+ * whose calls bypass this would look idle while it is actually in use.
+ */
+export function notifyApiActivity(): void {
+  for (const listener of activityListeners) {
+    try {
+      listener();
+    } catch {
+      // A broken listener must not break the request that triggered it.
+    }
   }
 }
 
@@ -161,8 +198,13 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   });
   if (!res.ok) {
     const data = await res.json().catch(() => null);
-    throw new ApiError(data?.error ?? `${res.status} ${res.statusText}`, data?.details);
+    throw new ApiError(
+      data?.error ?? `${res.status} ${res.statusText}`,
+      data?.details,
+      typeof data?.attemptsRemaining === 'number' ? data.attemptsRemaining : null,
+    );
   }
+  notifyApiActivity();
   if (res.status === 204) return undefined as T;
   return (res.headers.get('Content-Type')?.includes('json') ? res.json() : res.blob()) as Promise<T>;
 }

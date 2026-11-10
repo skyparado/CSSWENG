@@ -4,6 +4,13 @@ import type { Clinic, User } from './api';
 export interface Session {
   user: User;
   clinics: Clinic[];
+  /**
+   * False until the clinic list has come back. Without this an empty
+   * `clinics` means both "still fetching" and "this account is assigned to
+   * no clinics", and a Secretary in the second case waits on a spinner that
+   * never resolves.
+   */
+  clinicsLoaded: boolean;
   /** The active clinic (S02); undefined until one is chosen. */
   clinic?: Clinic;
   selectClinic: (id: string) => Promise<void>;
