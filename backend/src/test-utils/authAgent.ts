@@ -14,6 +14,12 @@ import { hashPassword } from '../auth/auth.service.js';
 export async function loginAgent(
   app: Express,
   role: 'DOCTOR' | 'SECRETARY' = 'DOCTOR',
+  /**
+   * Assign this clinic to the account and select it, so the agent can reach
+   * routes behind requireClinicAccess. A Secretary also gets the UserClinic
+   * row, without which select-clinic refuses her.
+   */
+  clinicId?: string,
 ): Promise<{
   agent: ReturnType<typeof request.agent>;
   userId: string;
@@ -35,13 +41,26 @@ export async function loginAgent(
     },
   });
 
+  if (clinicId) {
+    await prisma.userClinic.create({ data: { userId: user.id, clinicId } });
+  }
+
   const agent = request.agent(app);
   await agent.post('/api/auth/login').send({ email, password }).expect(200);
+
+  if (clinicId) {
+    await agent.post('/api/auth/select-clinic').send({ clinicId }).expect(200);
+  }
 
   return {
     agent,
     userId: user.id,
     async cleanup() {
+      // UserClinic cascades on user delete, but be explicit so a failed
+      // cascade does not leave the row pointing at a deleted account.
+      await prisma.userClinic
+        .deleteMany({ where: { userId: user.id } })
+        .catch(() => undefined);
       await prisma.user
         .delete({ where: { id: user.id } })
         .catch(() => undefined);
