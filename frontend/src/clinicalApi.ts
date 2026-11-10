@@ -3,7 +3,7 @@
 // api.ts, errors keep the server's code, status and details, which the
 // screens need (e.g. the duplicate candidates on a 409).
 import type { ComparisonResponse, PatientListItem } from '@clinic/schemas';
-import { ApiError, type DocumentType } from './api';
+import { ApiError, notifyApiActivity, type DocumentType } from './api';
 
 export type { PatientListItem };
 export type PatientScope = 'all' | 'clinic' | 'followup';
@@ -184,6 +184,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     const message = data?.message ?? (fieldText || data?.error) ?? `${res.status} ${res.statusText}`;
     throw new ClinicalApiError(message, data?.error ?? String(res.status), res.status, data?.details ?? issues ?? null);
   }
+  notifyApiActivity();
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }

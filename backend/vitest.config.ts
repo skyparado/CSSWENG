@@ -8,6 +8,10 @@ export default defineConfig({
     // Run test files one at a time so parallel suites don't contend on the
     // Postgres advisory lock the audit middleware takes for every HTTP write.
     fileParallelism: false,
+    // Cleanup hooks wait on in-flight audit writes, which serialise through
+    // that same advisory lock. The default 10s is not enough now the suite
+    // writes a few hundred entries per run.
+    hookTimeout: 30_000,
     // Defaults so modules that read env.ts load in unit tests with no .env file.
     // Real values (e.g. CI's) win when set. Unit tests that mock Prisma and the
     // queue never open a connection with these.

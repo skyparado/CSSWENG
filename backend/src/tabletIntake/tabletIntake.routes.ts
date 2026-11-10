@@ -2,7 +2,10 @@ import { Router } from 'express';
 import {
   intakeSessionCreateSchema,
   intakeFormSubmitSchema,
+  intakeReviewSchema,
+  intakeSubmissionListQuerySchema,
   idParamSchema,
+  type IntakeSubmissionListQuery,
 } from '@clinic/schemas';
 import { z } from 'zod';
 import { asyncHandler, validate } from '../http.js';
@@ -10,7 +13,10 @@ import { requireAuth, requireRole } from '../auth/middleware.js';
 import {
   cancelSession,
   getSessionByToken,
+  getSubmission,
   listSessionsForClinic,
+  listSubmissionsForClinic,
+  reviewSubmission,
   startSession,
   submitSession,
 } from './tabletIntake.service.js';
@@ -78,6 +84,57 @@ tabletIntakeRouter.post(
       cancelledById: user.userId,
       userEmail: null,
       userRole: user.role,
+    });
+    res.json(result);
+  }),
+);
+
+/* ------------------------- Staff review of submissions -------------------- */
+
+/**
+ * GET /api/tablet-intake/submissions?clinicId=...&reviewStatus=...
+ *
+ * The review queue. A patient fills the form themselves, so staff check the
+ * typed details against an ID before the record counts as verified.
+ */
+tabletIntakeRouter.get(
+  '/submissions',
+  ...staffMiddleware,
+  validate(intakeSubmissionListQuerySchema, 'query'),
+  asyncHandler(async (req, res) => {
+    const query = req.query as unknown as IntakeSubmissionListQuery;
+    const result = await listSubmissionsForClinic(query);
+    res.json(result);
+  }),
+);
+
+/** GET /api/tablet-intake/submissions/:id — one submission for the review panel. */
+tabletIntakeRouter.get(
+  '/submissions/:id',
+  ...staffMiddleware,
+  validate(idParamSchema, 'params'),
+  asyncHandler(async (req, res) => {
+    const submission = await getSubmission(req.params.id);
+    res.json(submission);
+  }),
+);
+
+/**
+ * POST /api/tablet-intake/submissions/:id/review — accept the form as typed,
+ * or record that staff had to correct the patient record afterwards.
+ */
+tabletIntakeRouter.post(
+  '/submissions/:id/review',
+  ...staffMiddleware,
+  validate(idParamSchema, 'params'),
+  validate(intakeReviewSchema),
+  asyncHandler(async (req, res) => {
+    const user = req.session.user!;
+    const result = await reviewSubmission({
+      id: req.params.id,
+      review: req.body,
+      reviewerId: user.userId,
+      reviewerRole: user.role,
     });
     res.json(result);
   }),
