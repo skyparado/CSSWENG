@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { writeAudit } from './audit.service.js';
 import { AuditActions } from './actions.js';
+import { wasAudited } from './record.js';
 
 /**
  * Paths that are not audit-logged by the middleware:
@@ -46,6 +47,11 @@ export function auditMiddleware(
   };
 
   res.on('finish', () => {
+    // A route handler already wrote a named event for this request (login,
+    // user approval, and so on). Writing the generic row too would double
+    // every meaningful action in the audit screen.
+    if (wasAudited(res)) return;
+
     writeAudit({
       userId: snapshot.userId,
       userEmail: null, // middleware does not read the DB; business events set this

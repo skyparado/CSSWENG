@@ -1,13 +1,35 @@
 import { z } from 'zod';
 
-/** Query params for GET /api/audit. All filters are optional and combinable. */
+/**
+ * Query params for GET /api/audit and the export endpoints. All filters are
+ * optional and combinable, covering the search axes QA asked for: patient,
+ * user, date, clinic and event type.
+ */
 export const auditListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(200).default(50),
+  /** Acting user (who did it). */
   userId: z.string().optional(),
+  /** Exact event type, for example LOGIN_FAILED. */
   action: z.string().optional(),
   resourceType: z.string().optional(),
+  /** Record the event was about. Pair with resourceType 'Patient' to search by patient. */
   resourceId: z.string().optional(),
+  /**
+   * Clinic the event happened under. Read out of the entry metadata rather
+   * than a column of its own, so the value stays inside the hash chain.
+   */
+  clinicId: z.string().optional(),
+  /** Free text matched against actor email, action and request path. */
+  q: z.string().trim().min(1).max(200).optional(),
+  /**
+   * Drop the generic per-request rows the middleware writes. The audit screen
+   * sets this by default, otherwise HTTP_REQUEST buries the named events.
+   */
+  hideHttpNoise: z
+    .union([z.boolean(), z.enum(['true', 'false'])])
+    .transform((v) => v === true || v === 'true')
+    .optional(),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
 });
