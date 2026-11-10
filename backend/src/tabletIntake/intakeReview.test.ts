@@ -65,12 +65,15 @@ async function submitOne(): Promise<{ submissionId: string; patientId: string }>
 }
 
 beforeAll(async () => {
-  secretary = await loginAgent(app, 'SECRETARY');
-  doctor = await loginAgent(app, 'DOCTOR');
+  // The clinic comes first: the staff routes sit behind requireClinicAccess,
+  // so each agent has to be assigned to it and have it selected.
   const clinic = await prisma.clinic.create({
     data: { name: 'Intake Review Test Clinic', timezone: 'Asia/Manila' },
   });
   clinicId = clinic.id;
+
+  secretary = await loginAgent(app, 'SECRETARY', clinicId);
+  doctor = await loginAgent(app, 'DOCTOR', clinicId);
 });
 
 afterAll(async () => {
@@ -117,16 +120,18 @@ describe('review queue', () => {
     expect(res.body.reviewStatus).toBe('PENDING_REVIEW');
   });
 
-  it('scopes the queue to the requested clinic', async () => {
+  it('refuses a secretary asking for a clinic she is not assigned to', async () => {
     const other = await prisma.clinic.create({
       data: { name: 'Unrelated Review Clinic', timezone: 'Asia/Manila' },
     });
     try {
-      const res = await secretary.agent
+      // Previously this returned 200 with an empty list, which leaked that
+      // the clinic exists and relied on the filter rather than refusing.
+      // Clinic scoping is covered in depth in intakeClinicScope.test.ts.
+      await secretary.agent
         .get('/api/tablet-intake/submissions')
         .query({ clinicId: other.id })
-        .expect(200);
-      expect(res.body.total).toBe(0);
+        .expect(403);
     } finally {
       await prisma.clinic.delete({ where: { id: other.id } }).catch(() => undefined);
     }

@@ -409,3 +409,16 @@ export async function reviewSubmission(input: {
 
   return updated;
 }
+
+/**
+ * The clinic a session belongs to, for the clinic-access guard. Separate from
+ * cancelSession so the route can refuse before anything is mutated.
+ */
+export async function getSessionClinicId(id: string): Promise<string> {
+  const session = await prisma.tabletIntakeSession.findUnique({
+    where: { id },
+    select: { clinicId: true },
+  });
+  if (!session) throw notFound('Intake session not found');
+  return session.clinicId;
+}
