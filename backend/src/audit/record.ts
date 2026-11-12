@@ -1,8 +1,7 @@
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { writeAudit, type AuditTx } from './audit.service.js';
 import type { AuditAction } from './actions.js';
 
-/** Who did something. `SYSTEM` is used for background jobs (reminder worker, etc.). */
 export interface AuditActor {
   userId: string | null;
   userEmail: string | null;
@@ -23,12 +22,11 @@ export const SYSTEM_ACTOR: AuditActor = {
   userAgent: null,
 };
 
-/** The signed-in user and HTTP context of a request, as an audit actor. */
 export function actorFromRequest(req: Request): AuditActor {
   const user = req.session?.user;
   return {
     userId: user?.userId ?? null,
-    userEmail: null, // the session does not carry the email; the userId is the stable key
+    userEmail: null,
     userRole: user?.role ?? null,
     method: req.method,
     path: (req.originalUrl ?? '').split('?')[0] || null,
@@ -44,11 +42,27 @@ export interface AuditEvent {
   metadata?: Record<string, unknown>;
 }
 
-/**
- * Record a business event in the shared, hash-chained audit log. Pass `tx` to
- * write inside the caller's transaction so the event and the change commit or
- * roll back together.
- */
+export type AuditEventDetails = {
+  action: AuditAction;
+  resourceType?: string | null;
+  resourceId?: string | null;
+  statusCode?: number | null;
+  metadata?: unknown;
+  actor?: {
+    userId?: string | null;
+    userEmail?: string | null;
+    userRole?: string | null;
+  };
+};
+
+export function markAudited(res: Response): void {
+  res.locals.auditHandled = true;
+}
+
+export function wasAudited(res: Response): boolean {
+  return res.locals.auditHandled === true;
+}
+
 export function recordAudit(actor: AuditActor, event: AuditEvent, tx?: AuditTx) {
   return writeAudit(
     {
@@ -61,4 +75,32 @@ export function recordAudit(actor: AuditActor, event: AuditEvent, tx?: AuditTx) 
     },
     tx,
   );
+}
+
+export function recordEvent(
+  req: Request,
+  res: Response,
+  details: AuditEventDetails,
+): void {
+  const sessionUser = req.session?.user;
+  const path = req.originalUrl.split('?')[0] ?? req.originalUrl;
+
+  markAudited(res);
+
+  writeAudit({
+    userId: details.actor?.userId ?? sessionUser?.userId ?? null,
+    userEmail: details.actor?.userEmail ?? null,
+    userRole: details.actor?.userRole ?? sessionUser?.role ?? null,
+    action: details.action,
+    resourceType: details.resourceType ?? null,
+    resourceId: details.resourceId ?? null,
+    method: req.method,
+    path,
+    statusCode: details.statusCode ?? res.statusCode ?? null,
+    ipAddress: req.ip ?? null,
+    userAgent: req.get('user-agent') ?? null,
+    metadata: details.metadata ?? null,
+  }).catch((err) => {
+    console.error(`audit write failed for ${details.action}:`, err);
+  });
 }

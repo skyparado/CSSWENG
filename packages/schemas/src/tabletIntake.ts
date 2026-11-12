@@ -14,6 +14,13 @@ export type TabletIntakeStatus = z.infer<typeof tabletIntakeStatusEnum>;
 /** How long a fresh session stays usable before it auto-expires. */
 export const INTAKE_SESSION_TTL_MINUTES = 30;
 
+export const intakeReviewStatusEnum = z.enum([
+  'PENDING_REVIEW',
+  'ACCEPTED',
+  'CORRECTED',
+]);
+export type IntakeReviewStatus = z.infer<typeof intakeReviewStatusEnum>;
+
 /* ------------------------------- Payloads -------------------------------- */
 
 /** Secretary creates a session for a specific clinic. */
@@ -48,6 +55,26 @@ export const intakeFormSubmitSchema = z.object({
   }),
 });
 export type IntakeFormSubmit = z.infer<typeof intakeFormSubmitSchema>;
+
+/**
+ * Staff review of a submitted intake form. ACCEPTED means the typed details
+ * matched the patient's ID; CORRECTED means staff had to fix the patient
+ * record afterwards, which is worth recording so repeat problems show up.
+ */
+export const intakeReviewSchema = z.object({
+  decision: z.enum(['ACCEPTED', 'CORRECTED']),
+  notes: z.string().trim().max(2000).optional(),
+});
+export type IntakeReview = z.infer<typeof intakeReviewSchema>;
+
+/** Staff queue query: optionally narrow to one review state. */
+export const intakeSubmissionListQuerySchema = z.object({
+  clinicId: z.string().min(1),
+  reviewStatus: intakeReviewStatusEnum.optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+});
+export type IntakeSubmissionListQuery = z.infer<typeof intakeSubmissionListQuerySchema>;
 
 /* ------------------------------- Responses -------------------------------- */
 

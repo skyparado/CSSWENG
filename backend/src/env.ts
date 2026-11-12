@@ -5,6 +5,21 @@ import { z } from 'zod';
  * Validated process environment. Importing this module throws early if a
  * required variable is missing, so misconfiguration fails at startup.
  */
+/**
+ * A 32-byte key supplied as base64. The message names the variable and the
+ * command that produces a valid value, because the usual way to hit this is a
+ * fresh checkout whose .env was copied from .env.example with blanks left in.
+ */
+function base64Key(name: string) {
+  const hint =
+    `${name} must be 32 random bytes, base64 encoded. Generate one with: ` +
+    'node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'base64\'))"';
+  return z
+    .string()
+    .min(1, hint)
+    .refine((raw) => Buffer.from(raw, 'base64').length === 32, hint);
+}
+
 const envSchema = z.object({
   NODE_ENV: z
     .enum(['development', 'test', 'production'])
@@ -104,6 +119,14 @@ const envSchema = z.object({
   PRISMA_FIELD_ENCRYPTION_KEY: z
     .string()
     .startsWith('k1.aesgcm256.', 'Must start with "k1.aesgcm256."'),
+
+  // Patient field encryption and blind indexes (src/lib/fieldCrypto.ts).
+  // Validated here so a missing key stops the server at startup with a clear
+  // message, instead of throwing deep inside the first patient write.
+  // Losing either one makes existing patient rows unreadable, so back them up
+  // and never regenerate against a database that already holds data.
+  FIELD_ENCRYPTION_KEY: base64Key('FIELD_ENCRYPTION_KEY'),
+  BLIND_INDEX_KEY: base64Key('BLIND_INDEX_KEY'),
 });
 
 const parsed = envSchema.parse(process.env);

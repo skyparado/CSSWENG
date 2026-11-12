@@ -296,6 +296,12 @@ model User {
   passwordHash        String
   role                UserRole   @default(SECRETARY)
   status              UserStatus @default(PENDING)
+  // Role the account asked for at sign-up. The doctor may grant a different
+  // one, so this is kept separately from `role` (which is what is enforced).
+  requestedRole       UserRole?
+  // Who decided on this account and when. Set on approve and on reject.
+  approvedById        String?
+  approvedAt          DateTime?
   // Lockout tracking per SRS 7.2: 5 failed attempts within 15 min locks the account.
   failedLoginAttempts Int        @default(0)
   firstFailedLoginAt  DateTime?
@@ -303,6 +309,9 @@ model User {
   lastLoginAt         DateTime?
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt
+
+  approvedBy         User?              @relation("UserApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  accountsApproved   User[]             @relation("UserApprovedBy")
 
   documentRequests   DocumentRequest[]
   clinics            UserClinic[]
@@ -331,9 +340,11 @@ model User {
 
   startedTabletSessions TabletIntakeSession[] @relation("TabletIntakeSessionStarter")
   reportExports         ReportExport[]        @relation("ReportExportRequestedBy")
+  reviewedIntakeForms   TabletIntakeSubmission[] @relation("IntakeSubmissionReviewedBy")
 
   @@index([status])
   @@index([role])
+  @@index([approvedById])
 }
 
 enum UserRole {
@@ -964,6 +975,15 @@ enum TabletIntakeStatus {
   EXPIRED
 }
 
+/// Where a submitted intake form sits in the staff review queue. A patient
+/// types their own details, so a staff member checks them against an ID
+/// before the record is treated as verified.
+enum IntakeReviewStatus {
+  PENDING_REVIEW
+  ACCEPTED
+  CORRECTED
+}
+
 /// A supervised intake handover. The Secretary starts it on a tablet, hands
 /// the tablet to the patient, and the patient fills the form. The token is
 /// a random opaque string the tablet sends on each request so the patient
@@ -1000,10 +1020,21 @@ model TabletIntakeSubmission {
   rawPayload Json
   createdAt  DateTime @default(now())
 
-  session TabletIntakeSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  patient Patient             @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  // Staff review of what the patient typed. A submission starts as
+  // PENDING_REVIEW; a staff member then accepts it as-is or marks that they
+  // corrected the patient record afterwards. Review never rewrites
+  // rawPayload, so what the patient actually entered stays on record.
+  reviewStatus IntakeReviewStatus @default(PENDING_REVIEW)
+  reviewedById String?
+  reviewedAt   DateTime?
+  reviewNotes  String?
+
+  session    TabletIntakeSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  patient    Patient             @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  reviewedBy User?               @relation("IntakeSubmissionReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
 
   @@index([patientId])
+  @@index([reviewStatus, createdAt])
 }
 
 // ============================= User <-> Clinic (Dev 4) =======================

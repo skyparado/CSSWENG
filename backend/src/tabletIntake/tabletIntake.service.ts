@@ -4,6 +4,8 @@ import { badRequest, notFound } from '../http.js';
 import {
   INTAKE_SESSION_TTL_MINUTES,
   type IntakeFormSubmit,
+  type IntakeReview,
+  type IntakeReviewStatus,
   type TabletIntakeSessionAdmin,
   type TabletIntakeSessionPublic,
 } from '@clinic/schemas';
@@ -276,4 +278,147 @@ export async function listSessionsForClinic(
     prisma.tabletIntakeSession.count({ where }),
   ]);
   return { items, total, page, pageSize };
+}
+
+/* ----------------------------- Staff review ------------------------------- */
+
+const SUBMISSION_RESOURCE = 'TABLET_INTAKE_SUBMISSION';
+
+/**
+ * The staff review queue for one clinic. A patient types their own details on
+ * the tablet, so a staff member checks them against an ID before the record
+ * counts as verified. Returns the patient id rather than patient details; the
+ * reviewer opens the chart from the queue, which keeps chart access on the
+ * normal audited path.
+ */
+export async function listSubmissionsForClinic(query: {
+  clinicId: string;
+  reviewStatus?: IntakeReviewStatus;
+  page: number;
+  pageSize: number;
+}) {
+  const { clinicId, reviewStatus, page, pageSize } = query;
+  const where = {
+    session: { clinicId },
+    ...(reviewStatus ? { reviewStatus } : {}),
+  };
+  const [items, total] = await Promise.all([
+    prisma.tabletIntakeSubmission.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      select: {
+        id: true,
+        sessionId: true,
+        patientId: true,
+        rawPayload: true,
+        reviewStatus: true,
+        reviewedById: true,
+        reviewedAt: true,
+        reviewNotes: true,
+        createdAt: true,
+      },
+    }),
+    prisma.tabletIntakeSubmission.count({ where }),
+  ]);
+  return { items, total, page, pageSize };
+}
+
+/** One submission, for the review panel. */
+export async function getSubmission(id: string) {
+  const submission = await prisma.tabletIntakeSubmission.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      sessionId: true,
+      patientId: true,
+      rawPayload: true,
+      reviewStatus: true,
+      reviewedById: true,
+      reviewedAt: true,
+      reviewNotes: true,
+      createdAt: true,
+      session: { select: { clinicId: true, submittedAt: true } },
+    },
+  });
+  if (!submission) throw notFound('Intake submission not found');
+  return submission;
+}
+
+/**
+ * Record a staff review. Reviewing is one-way on purpose: once a submission
+ * has been signed off, changing that decision would need its own audited
+ * action rather than a silent overwrite.
+ */
+export async function reviewSubmission(input: {
+  id: string;
+  review: IntakeReview;
+  reviewerId: string;
+  reviewerRole: string;
+}) {
+  const existing = await prisma.tabletIntakeSubmission.findUnique({
+    where: { id: input.id },
+    select: { id: true, patientId: true, reviewStatus: true, session: { select: { clinicId: true } } },
+  });
+  if (!existing) throw notFound('Intake submission not found');
+
+  if (existing.reviewStatus !== 'PENDING_REVIEW') {
+    throw badRequest(
+      `This submission was already reviewed as ${existing.reviewStatus}.`,
+    );
+  }
+
+  const updated = await prisma.tabletIntakeSubmission.update({
+    where: { id: input.id },
+    data: {
+      reviewStatus: input.review.decision,
+      reviewedById: input.reviewerId,
+      reviewedAt: new Date(),
+      reviewNotes: input.review.notes ?? null,
+    },
+    select: {
+      id: true,
+      patientId: true,
+      reviewStatus: true,
+      reviewedById: true,
+      reviewedAt: true,
+      reviewNotes: true,
+    },
+  });
+
+  await writeAudit({
+    userId: input.reviewerId,
+    userEmail: null,
+    userRole: input.reviewerRole,
+    action: AuditActions.INTAKE_SUBMISSION_REVIEWED,
+    resourceType: SUBMISSION_RESOURCE,
+    resourceId: updated.id,
+    method: null,
+    path: null,
+    statusCode: null,
+    ipAddress: null,
+    userAgent: null,
+    metadata: {
+      decision: updated.reviewStatus,
+      patientId: updated.patientId,
+      clinicId: existing.session.clinicId,
+      hasNotes: Boolean(input.review.notes),
+    },
+  });
+
+  return updated;
+}
+
+/**
+ * The clinic a session belongs to, for the clinic-access guard. Separate from
+ * cancelSession so the route can refuse before anything is mutated.
+ */
+export async function getSessionClinicId(id: string): Promise<string> {
+  const session = await prisma.tabletIntakeSession.findUnique({
+    where: { id },
+    select: { clinicId: true },
+  });
+  if (!session) throw notFound('Intake session not found');
+  return session.clinicId;
 }

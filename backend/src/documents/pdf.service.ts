@@ -36,8 +36,22 @@ async function getBrowser(): Promise<Browser> {
   return browser;
 }
 
-/** Render an HTML string to a PDF buffer (A4). */
-export async function renderHtmlToPdf(html: string): Promise<Buffer> {
+/**
+ * Page options a caller can override. Defaults match the clinical document
+ * templates, which do their own full-bleed layout and so want zero margins.
+ * Reports that rely on CSS padding (the audit export) ask for margins here,
+ * because Puppeteer's margin option wins over an @page rule.
+ */
+export type PdfRenderOptions = {
+  landscape?: boolean;
+  margin?: { top: string; right: string; bottom: string; left: string };
+};
+
+/** Render an HTML string to a PDF buffer (A4 portrait, no margins by default). */
+export async function renderHtmlToPdf(
+  html: string,
+  options: PdfRenderOptions = {},
+): Promise<Buffer> {
   const browser = await getBrowser();
   const page = await browser.newPage();
   try {
@@ -45,7 +59,8 @@ export async function renderHtmlToPdf(html: string): Promise<Buffer> {
     const pdf = await page.pdf({
       format: 'A4',
       printBackground: true,
-      margin: { top: '0', right: '0', bottom: '0', left: '0' },
+      landscape: options.landscape ?? false,
+      margin: options.margin ?? { top: '0', right: '0', bottom: '0', left: '0' },
     });
     return Buffer.from(pdf);
   } finally {

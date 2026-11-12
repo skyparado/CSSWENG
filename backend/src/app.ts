@@ -20,6 +20,7 @@ import { medicationsRouter } from './medications/medications.routes.js';
 import { allergiesRouter } from './medications/allergies.routes.js';
 import { requireAuth } from './auth/middleware.js';
 import { createPatientRouter } from './patients/patient.routes.js';
+import { chartSummaryRouter } from './patients/chartSummary.routes.js';
 import { createEncounterRouter } from './encounters/encounter.routes.js';
 import { createComparisonRouter, createFindingRouter, createLabResultRouter } from './results/results.routes.js';
 import { prisma } from './prisma.js';
@@ -100,6 +101,7 @@ export function createApp(): Express {
   app.use('/api/encounters/:encounterId/findings', requireAuth, createFindingRouter(prisma));
   app.use('/api/lab-results', requireAuth, createLabResultRouter(prisma));
   app.use('/api/patients', requireAuth, createComparisonRouter(prisma));
+  app.use('/api/patients', requireAuth, chartSummaryRouter);
 
   if (existsSync(webDir)) app.use(express.static(webDir));
 

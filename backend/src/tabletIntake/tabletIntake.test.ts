@@ -44,18 +44,20 @@ function fullPayload(overrides: Partial<Record<string, unknown>> = {}) {
 }
 
 beforeAll(async () => {
-  const secretary = await loginAgent(app, 'SECRETARY');
-  secretaryAgent = secretary.agent;
-  secretaryCleanup = secretary.cleanup;
-
-  const doctor = await loginAgent(app, 'DOCTOR');
-  doctorAgent = doctor.agent;
-  doctorCleanup = doctor.cleanup;
-
+  // The clinic comes first: the staff routes sit behind requireClinicAccess,
+  // so each agent has to be assigned to it and have it selected.
   const clinic = await prisma.clinic.create({
     data: { name: 'Tablet Intake Test Clinic', timezone: 'Asia/Manila' },
   });
   clinicId = clinic.id;
+
+  const secretary = await loginAgent(app, 'SECRETARY', clinicId);
+  secretaryAgent = secretary.agent;
+  secretaryCleanup = secretary.cleanup;
+
+  const doctor = await loginAgent(app, 'DOCTOR', clinicId);
+  doctorAgent = doctor.agent;
+  doctorCleanup = doctor.cleanup;
 });
 
 afterAll(async () => {
@@ -99,8 +101,20 @@ describe('POST /api/tablet-intake/sessions (start)', () => {
     createdSessionIds.push(res.body.id);
   });
 
-  it('rejects start for an unknown clinic with 404', async () => {
+  it('refuses a secretary naming any clinic other than her active one', async () => {
+    // 403 rather than 404 on purpose. The clinic guard runs before the
+    // lookup, so the response is the same whether or not the clinic exists
+    // and cannot be used to probe for clinic ids.
     const res = await secretaryAgent
+      .post('/api/tablet-intake/sessions')
+      .send({ clinicId: 'does_not_exist' });
+    expect(res.status).toBe(403);
+  });
+
+  it('still reports an unknown clinic as 404 for the doctor', async () => {
+    // A Doctor may name a clinic explicitly, so for her an unknown id really
+    // is not found and saying so leaks nothing she could not already see.
+    const res = await doctorAgent
       .post('/api/tablet-intake/sessions')
       .send({ clinicId: 'does_not_exist' });
     expect(res.status).toBe(404);

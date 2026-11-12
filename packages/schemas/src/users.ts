@@ -36,6 +36,30 @@ export const userUpdateSchema = z
   });
 export type UserUpdate = z.infer<typeof userUpdateSchema>;
 
+/**
+ * Doctor approves a pending account. `grantedRole` is optional: supply it to
+ * hand out a role different from the one the account requested, leave it off
+ * to keep what is already on the record. `clinicIds` is the user-to-clinic
+ * authorization step US-04 and US-06 call for (SDD gap H2): a Secretary may
+ * only pick an active clinic she was approved for.
+ */
+export const userApproveSchema = z.object({
+  grantedRole: userRoleEnum.optional(),
+  clinicIds: z.array(z.string().min(1)).max(50).optional(),
+});
+export type UserApprove = z.infer<typeof userApproveSchema>;
+
+/**
+ * Replace the set of clinics an account may work in. Sending an empty array
+ * removes every assignment, which leaves a Secretary unable to select any
+ * clinic; that is allowed on purpose, since it is how access is withdrawn
+ * for one site without revoking the whole account.
+ */
+export const userAssignClinicsSchema = z.object({
+  clinicIds: z.array(z.string().min(1)).max(50),
+});
+export type UserAssignClinics = z.infer<typeof userAssignClinicsSchema>;
+
 /** Doctor sets a new password for a staff account (e.g. after a reset). */
 export const userResetPasswordSchema = z.object({
   password: z.string().min(8).max(128),
@@ -63,6 +87,16 @@ export const adminUserSchema = z.object({
   fullName: z.string(),
   role: userRoleEnum,
   status: userStatusEnum,
+  /** What the account asked for, which may differ from the granted role. */
+  requestedRole: userRoleEnum.nullable(),
+  /** Id of the doctor who approved or rejected this account. */
+  approvedById: z.string().nullable(),
+  approvedAt: z.date().nullable(),
+  /**
+   * Clinics this account is authorized for. Always empty-or-more; a Doctor
+   * may work in every clinic regardless of what is listed here.
+   */
+  clinicIds: z.array(z.string()),
   lockedUntil: z.date().nullable(),
   lastLoginAt: z.date().nullable(),
   createdAt: z.date(),

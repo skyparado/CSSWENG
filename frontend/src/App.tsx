@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { Suspense, lazy, useEffect, useState, type ReactNode } from 'react';
 import { api, type Clinic, type User } from './api';
 import { SessionContext, go, useRoute, useSession, type Session } from './session';
 import ClinicSelect from './pages/ClinicSelect';
@@ -9,8 +9,44 @@ import Documents from './pages/Documents';
 import FollowUps from './pages/FollowUps';
 import Outreach, { followUpIdFromOutreachRoute } from './pages/Outreach';
 import Medications, { MedicationsLanding, patientIdFromMedicationsRoute } from './pages/Medications';
+import Patients from './pages/Patients';
+import PatientRegister from './pages/PatientRegister';
+import PatientChart from './pages/PatientChart';
+import ConsultationNote from './pages/ConsultationNote';
+import Comparison from './pages/Comparison';
+import Login from './pages/Login';
+import Users from './pages/Users';
+import AuditLog from './pages/AuditLog';
+import Intake from './pages/Intake';
+import TabletIntake, { tabletTokenFromRoute } from './pages/TabletIntake';
+import SessionTimeout from './SessionTimeout';
+
 // Recharts is large; load it only when the Reports page is opened.
 const Reports = lazy(() => import('./pages/Reports'));
+
+/**
+ * Patient routes (S04–S08):
+ *   /patients                                   S04 search and list
+ *   /patients/new                               S05 registration
+ *   /patients/:id                               S06 chart summary
+ *   /patients/:id/visits/:encounterId           S07 consultation note
+ *   /patients/:id/compare[?current=:encounterId] S08 comparison
+ */
+function patientPage(route: string): ReactNode | undefined {
+  const [path, query = ''] = route.split('?');
+  const parts = path!.split('/').filter(Boolean);
+  if (parts[0] !== 'patients') return undefined;
+  if (parts.length === 1) return <Patients />;
+  if (parts[1] === 'new' && parts.length === 2) return <PatientRegister />;
+  const id = parts[1]!;
+  if (parts.length === 2) return <PatientChart key={id} patientId={id} />;
+  if (parts[2] === 'visits' && parts[3]) return <ConsultationNote key={parts[3]} patientId={id} encounterId={parts[3]} />;
+  if (parts[2] === 'compare') {
+    const current = new URLSearchParams(query).get('current') ?? undefined;
+    return <Comparison key={id} patientId={id} currentEncounterId={current} />;
+  }
+  return undefined;
+}
 
 /** Sidebar entries; `doctorOnly` items are hidden from the Secretary (SDD role matrix). */
 const MENU: Array<{ label: string; path: string; doctorOnly?: boolean }> = [
@@ -20,6 +56,7 @@ const MENU: Array<{ label: string; path: string; doctorOnly?: boolean }> = [
   { label: 'Medications', path: '/medications', doctorOnly: true },
   { label: 'Appointments', path: '/appointments' },
   { label: 'Documents', path: '/documents' },
+  { label: 'Patient Intake', path: '/intake' },
   { label: 'Reports', path: '/reports' },
   { label: 'User Accounts', path: '/users', doctorOnly: true },
   { label: 'Audit Log', path: '/audit', doctorOnly: true },
@@ -27,22 +64,41 @@ const MENU: Array<{ label: string; path: string; doctorOnly?: boolean }> = [
 
 export default function App() {
   const [user, setUser] = useState<User | null>();
-  const [clinics, setClinics] = useState<Clinic[]>([]);
+  const [clinics, setClinics] = useState<Clinic[]>();
+  const route = useRoute();
+
+  // The patient-facing tablet form (S16) is its own surface: no staff
+  // session, no app shell, authenticated only by the token in the URL. It
+  // has to be checked before anything that assumes a signed-in user.
+  const tabletToken = tabletTokenFromRoute(route);
 
   useEffect(() => {
+    // Skip the session probe on the tablet. It would always 401 there, and
+    // the failed call just adds noise to the audit log.
+    if (tabletToken) return;
     api.me().then((r) => setUser(r.user), () => setUser(null));
-  }, []);
+  }, [tabletToken]);
   useEffect(() => {
-    if (user) void api.listClinics().then((r) => setClinics(r.items));
+    // On failure settle on an empty list rather than leaving it undefined,
+    // so the UI explains itself instead of spinning forever.
+    if (user) {
+      void api.listClinics().then(
+        (r) => setClinics(r.items),
+        () => setClinics([]),
+      );
+    }
   }, [user]);
+
+  if (tabletToken) return <TabletIntake token={tabletToken} />;
 
   if (user === undefined) return <p className="page">Loading…</p>;
   if (user === null) return <Login onLogin={setUser} />;
 
   const session: Session = {
     user,
-    clinics,
-    clinic: clinics.find((c) => c.id === user.activeClinicId),
+    clinics: clinics ?? [],
+    clinicsLoaded: clinics !== undefined,
+    clinic: (clinics ?? []).find((c) => c.id === user.activeClinicId),
     selectClinic: async (id) => {
       await api.setActiveClinic(id);
       setUser({ ...user, activeClinicId: id });
@@ -58,20 +114,40 @@ export default function App() {
   return (
     <SessionContext.Provider value={session}>
       <Routes />
+      <SessionTimeout onExpire={() => void session.logout()} />
     </SessionContext.Provider>
   );
 }
 
 function Routes() {
   const route = useRoute();
-  const { user, clinic, clinics } = useSession();
-  if (clinics.length === 0) return <p className="page">Loading clinics…</p>;
+  const { user, clinic, clinics, clinicsLoaded, logout } = useSession();
+  if (!clinicsLoaded) return <p className="page">Loading clinics…</p>;
+  // A Secretary only sees clinics she is assigned to (UserClinic). A freshly
+  // approved account has none until the Doctor assigns one, so say that
+  // plainly rather than leaving her on a spinner.
+  if (clinics.length === 0) {
+    return (
+      <div className="page">
+        <h1>No clinic assigned yet</h1>
+        <p className="muted">
+          Your account is active, but it is not assigned to any clinic yet, so
+          there is nothing to open. Ask Dr. Pacio to assign you to a clinic.
+        </p>
+        <button type="button" className="primary" onClick={() => void logout()}>
+          Log Out
+        </button>
+      </div>
+    );
+  }
   // No active clinic yet (or the user asked to switch): S02 before anything else.
   if (!clinic || route === '/select-clinic') return <ClinicSelect />;
 
   const doctor = user.role === 'DOCTOR';
   let page: ReactNode;
-  if (route === '/dashboard') page = <Dashboard />;
+  const patient = patientPage(route);
+  if (patient) page = patient;
+  else if (route === '/dashboard') page = <Dashboard />;
   // Match on the path only: links such as #/appointments?patientId=... carry a query string.
   else if (route.split('?')[0] === '/appointments') page = <Calendar />;
   else if (route.split('?')[0] === '/documents') page = <Documents />;
@@ -91,6 +167,11 @@ function Routes() {
     );
   else if (route.startsWith('/medications'))
     page = doctor ? <MedicationsLanding /> : <p>Only the Doctor can view medications and allergies.</p>;
+  else if (route === '/intake') page = <Intake />;
+  else if (route === '/users')
+    page = doctor ? <Users /> : <p>Only the Doctor can manage staff accounts.</p>;
+  else if (route === '/audit')
+    page = doctor ? <AuditLog /> : <p>Only the Doctor can view the audit log.</p>;
   else if (route.startsWith('/documents/new'))
     page = doctor ? <DocumentEditor /> : <p>Only the Doctor can prepare and sign documents.</p>;
   else {
@@ -155,50 +236,3 @@ function Layout({ route, children }: { route: string; children: ReactNode }) {
   );
 }
 
-function Login({ onLogin }: { onLogin: (u: User) => void }) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPw, setShowPw] = useState(false);
-  const [error, setError] = useState<string>();
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    api.login(email, password).then(
-      (r) => onLogin(r.user),
-      (err: Error) => setError(err.message),
-    );
-  };
-  return (
-    <>
-      <header className="topbar solo">
-        <div className="brand">
-          <span className="brand-mark" aria-hidden /> EMR System
-        </div>
-      </header>
-      <form className="card" style={{ maxWidth: 420, margin: '60px auto' }} onSubmit={submit}>
-        <h1>Sign in</h1>
-        <label htmlFor="email">Email</label>
-        <input id="email" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
-        <label htmlFor="password">Password</label>
-        <div style={{ position: 'relative' }}>
-          <input id="password" type={showPw ? 'text' : 'password'} autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required style={{ paddingRight: 52 }} />
-          <button
-            type="button"
-            aria-label={showPw ? 'Hide password' : 'Show password'}
-            onClick={() => setShowPw(!showPw)}
-            style={{ position: 'absolute', right: 0, top: 0, bottom: 0, minWidth: 44, minHeight: 44, background: 'none', border: 0 }}
-          >
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-              <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" />
-              <circle cx="12" cy="12" r="3" />
-              {showPw && <line x1="3" y1="3" x2="21" y2="21" />}
-            </svg>
-          </button>
-        </div>
-        {error && <p className="error" role="alert">{error}</p>}
-        <button className="primary" style={{ marginTop: 16, width: '100%' }}>
-          Sign in
-        </button>
-      </form>
-    </>
-  );
-}

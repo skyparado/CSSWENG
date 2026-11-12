@@ -2,15 +2,24 @@ import { Router } from 'express';
 import {
   intakeSessionCreateSchema,
   intakeFormSubmitSchema,
+  intakeReviewSchema,
+  intakeSubmissionListQuerySchema,
   idParamSchema,
+  type IntakeSubmissionListQuery,
 } from '@clinic/schemas';
 import { z } from 'zod';
-import { asyncHandler, validate } from '../http.js';
+import { asyncHandler, validate, HttpError } from '../http.js';
 import { requireAuth, requireRole } from '../auth/middleware.js';
+import { requireClinicAccess } from '../auth/clinicScope.js';
+import { assertClinicAccess, clinicForRead, clinicForWrite } from '../auth/guards.js';
 import {
   cancelSession,
   getSessionByToken,
+  getSessionClinicId,
+  getSubmission,
   listSessionsForClinic,
+  listSubmissionsForClinic,
+  reviewSubmission,
   startSession,
   submitSession,
 } from './tabletIntake.service.js';
@@ -25,7 +34,17 @@ export const tabletIntakeRouter = Router();
 
 /* --------------------------- Staff-facing routes -------------------------- */
 
-const staffMiddleware = [requireAuth, requireRole('SECRETARY', 'DOCTOR')];
+/*
+ * Staff routes also require a valid active clinic. Without requireClinicAccess
+ * a Secretary with no clinic selected, or one assigned elsewhere, reached
+ * these endpoints and could name any clinic in the body or query. The guards
+ * below then pin every clinic id to the session rather than trusting input.
+ */
+const staffMiddleware = [
+  requireAuth,
+  requireRole('SECRETARY', 'DOCTOR'),
+  requireClinicAccess,
+];
 
 /** POST /api/tablet-intake/sessions — start a new session for a clinic. */
 tabletIntakeRouter.post(
@@ -34,8 +53,10 @@ tabletIntakeRouter.post(
   validate(intakeSessionCreateSchema),
   asyncHandler(async (req, res) => {
     const user = req.session.user!;
+    // A Secretary may only open an intake at her active clinic; a Doctor may
+    // name another one explicitly.
     const session = await startSession({
-      clinicId: req.body.clinicId,
+      clinicId: clinicForWrite(req, req.body.clinicId),
       startedBySecretaryId: user.userId,
       userEmail: null,
       userRole: user.role,
@@ -61,7 +82,9 @@ tabletIntakeRouter.get(
     const { clinicId, page, pageSize } = req.query as unknown as z.infer<
       typeof sessionListQuerySchema
     >;
-    const result = await listSessionsForClinic(clinicId, page, pageSize);
+    const scoped = clinicForRead(req, clinicId);
+    if (!scoped) throw new HttpError(400, 'Select an active clinic first');
+    const result = await listSessionsForClinic(scoped, page, pageSize);
     res.json(result);
   }),
 );
@@ -73,11 +96,72 @@ tabletIntakeRouter.post(
   validate(idParamSchema, 'params'),
   asyncHandler(async (req, res) => {
     const user = req.session.user!;
+    // Checked before the mutation, and 404 rather than 403 so another
+    // clinic's session ids are not confirmed.
+    assertClinicAccess(req, await getSessionClinicId(req.params.id));
     const result = await cancelSession({
       id: req.params.id,
       cancelledById: user.userId,
       userEmail: null,
       userRole: user.role,
+    });
+    res.json(result);
+  }),
+);
+
+/* ------------------------- Staff review of submissions -------------------- */
+
+/**
+ * GET /api/tablet-intake/submissions?clinicId=...&reviewStatus=...
+ *
+ * The review queue. A patient fills the form themselves, so staff check the
+ * typed details against an ID before the record counts as verified.
+ */
+tabletIntakeRouter.get(
+  '/submissions',
+  ...staffMiddleware,
+  validate(intakeSubmissionListQuerySchema, 'query'),
+  asyncHandler(async (req, res) => {
+    const query = req.query as unknown as IntakeSubmissionListQuery;
+    // These rows carry everything the patient typed, so the clinic filter is
+    // pinned to the session rather than taken from the query string.
+    const scoped = clinicForRead(req, query.clinicId);
+    if (!scoped) throw new HttpError(400, 'Select an active clinic first');
+    const result = await listSubmissionsForClinic({ ...query, clinicId: scoped });
+    res.json(result);
+  }),
+);
+
+/** GET /api/tablet-intake/submissions/:id — one submission for the review panel. */
+tabletIntakeRouter.get(
+  '/submissions/:id',
+  ...staffMiddleware,
+  validate(idParamSchema, 'params'),
+  asyncHandler(async (req, res) => {
+    const submission = await getSubmission(req.params.id);
+    assertClinicAccess(req, submission.session.clinicId);
+    res.json(submission);
+  }),
+);
+
+/**
+ * POST /api/tablet-intake/submissions/:id/review — accept the form as typed,
+ * or record that staff had to correct the patient record afterwards.
+ */
+tabletIntakeRouter.post(
+  '/submissions/:id/review',
+  ...staffMiddleware,
+  validate(idParamSchema, 'params'),
+  validate(intakeReviewSchema),
+  asyncHandler(async (req, res) => {
+    const user = req.session.user!;
+    const existing = await getSubmission(req.params.id);
+    assertClinicAccess(req, existing.session.clinicId);
+    const result = await reviewSubmission({
+      id: req.params.id,
+      review: req.body,
+      reviewerId: user.userId,
+      reviewerRole: user.role,
     });
     res.json(result);
   }),

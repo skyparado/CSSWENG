@@ -1,5 +1,6 @@
 import { prisma } from '../prisma.js';
 import { computeEntryHash, type HashableEntry } from './hashChain.js';
+import { AuditActions } from './actions.js';
 
 /**
  * Everything a caller supplies when writing an audit entry. createdAt,
@@ -143,17 +144,60 @@ export type AuditListQuery = {
   action?: string;
   resourceType?: string;
   resourceId?: string;
+  clinicId?: string;
+  q?: string;
+  hideHttpNoise?: boolean;
   from?: Date;
   to?: Date;
 };
 
-export async function listAudit(query: AuditListQuery) {
-  const { page, pageSize, userId, action, resourceType, resourceId, from, to } = query;
-  const where = {
+/**
+ * Build the Prisma where clause shared by the list and the export endpoints,
+ * so a CSV or PDF always covers exactly the rows the screen was showing.
+ */
+function buildAuditWhere(query: AuditListQuery) {
+  const {
+    userId,
+    action,
+    resourceType,
+    resourceId,
+    clinicId,
+    q,
+    hideHttpNoise,
+    from,
+    to,
+  } = query;
+
+  // An exact action filter wins over the noise toggle, since both target the
+  // same column and asking for one specific action is the narrower request.
+  const actionFilter = action
+    ? { action }
+    : hideHttpNoise
+      ? // HTTP_REQUEST is written for every request by the middleware. Useful
+        // for forensics, useless when scanning for who approved an account.
+        { action: { not: AuditActions.HTTP_REQUEST } }
+      : {};
+
+  return {
     ...(userId ? { userId } : {}),
-    ...(action ? { action } : {}),
+    ...actionFilter,
     ...(resourceType ? { resourceType } : {}),
     ...(resourceId ? { resourceId } : {}),
+    // Clinic lives in the metadata payload, which is covered by the hash
+    // chain, so filtering on it does not need a column of its own.
+    ...(clinicId
+      ? { metadata: { path: ['clinicId'], equals: clinicId } }
+      : {}),
+    ...(q
+      ? {
+          OR: [
+            { userEmail: { contains: q, mode: 'insensitive' as const } },
+            { action: { contains: q, mode: 'insensitive' as const } },
+            { path: { contains: q, mode: 'insensitive' as const } },
+            { resourceId: { contains: q, mode: 'insensitive' as const } },
+          ],
+        }
+      : {}),
     ...(from || to
       ? {
           createdAt: {
@@ -163,6 +207,11 @@ export async function listAudit(query: AuditListQuery) {
         }
       : {}),
   };
+}
+
+export async function listAudit(query: AuditListQuery) {
+  const { page, pageSize } = query;
+  const where = buildAuditWhere(query);
   const [items, total] = await Promise.all([
     prisma.auditLog.findMany({
       where,
@@ -173,4 +222,28 @@ export async function listAudit(query: AuditListQuery) {
     prisma.auditLog.count({ where }),
   ]);
   return { items, total, page, pageSize };
+}
+
+/**
+ * Every matching entry, oldest first, for export. Capped so one careless
+ * unfiltered export cannot pull an unbounded table into memory; the response
+ * says when the cap was hit so the doctor knows to narrow the date range.
+ */
+export const EXPORT_ROW_CAP = 10000;
+
+export async function listAuditForExport(query: AuditListQuery): Promise<{
+  rows: Awaited<ReturnType<typeof prisma.auditLog.findMany>>;
+  total: number;
+  truncated: boolean;
+}> {
+  const where = buildAuditWhere(query);
+  const [rows, total] = await Promise.all([
+    prisma.auditLog.findMany({
+      where,
+      orderBy: { createdAt: 'asc' },
+      take: EXPORT_ROW_CAP,
+    }),
+    prisma.auditLog.count({ where }),
+  ]);
+  return { rows, total, truncated: total > rows.length };
 }

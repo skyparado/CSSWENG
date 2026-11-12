@@ -6,6 +6,8 @@ import { requireAuth } from './middleware.js';
 import { authorizedClinics } from '../clinics/clinics.routes.js';
 import { prisma } from '../prisma.js';
 import { authenticate, InvalidCredentialsError } from './auth.service.js';
+import { recordEvent } from '../audit/record.js';
+import { AuditActions } from '../audit/actions.js';
 import { sessionCookieOptions } from './session.js';
 import { env } from '../env.js';
 
@@ -48,6 +50,34 @@ authRouter.post(
       // 401 and the message is the same generic "Invalid credentials" the
       // service throws — the only extra signal is the counter.
       if (err instanceof InvalidCredentialsError) {
+        // The audit entry records which account and why; the response body
+        // stays generic so the client learns nothing it could enumerate with.
+        recordEvent(req, res, {
+          action: AuditActions.LOGIN_FAILED,
+          resourceType: 'User',
+          resourceId: err.userId,
+          statusCode: err.status,
+          actor: { userId: err.userId, userEmail: email },
+          metadata: {
+            reason: err.reason,
+            accountStatus: err.accountStatus,
+            attemptsRemaining: err.attemptsRemaining,
+          },
+        });
+
+        // A separate entry for the lockout itself, so a doctor scanning for
+        // ACCOUNT_LOCKED does not have to read every failed attempt.
+        if (err.lockedNow) {
+          recordEvent(req, res, {
+            action: AuditActions.ACCOUNT_LOCKED,
+            resourceType: 'User',
+            resourceId: err.userId,
+            statusCode: err.status,
+            actor: { userId: err.userId, userEmail: email },
+            metadata: { trigger: 'failed_login_threshold' },
+          });
+        }
+
         return res.status(err.status).json({
           error: err.message,
           attemptsRemaining: err.attemptsRemaining,
@@ -73,6 +103,17 @@ authRouter.post(
           fullName: user.fullName,
           role: user.role,
         };
+        recordEvent(req, res, {
+          action: AuditActions.LOGIN_SUCCESS,
+          resourceType: 'User',
+          resourceId: user.id,
+          statusCode: 200,
+          actor: {
+            userId: user.id,
+            userEmail: user.email,
+            userRole: user.role,
+          },
+        });
         res.json({ user: payload });
       });
     });
@@ -86,9 +127,18 @@ authRouter.post(
     if (!req.session.user) {
       return res.status(204).end();
     }
+    // Snapshot before destroy, otherwise there is no session left to read.
+    const { userId, role } = req.session.user;
     req.session.destroy((err) => {
       if (err) return res.status(500).json({ error: 'Logout error' });
       res.clearCookie(env.SESSION_COOKIE_NAME, sessionCookieOptions());
+      recordEvent(req, res, {
+        action: AuditActions.LOGOUT,
+        resourceType: 'User',
+        resourceId: userId,
+        statusCode: 204,
+        actor: { userId, userRole: role },
+      });
       res.status(204).end();
     });
   }),

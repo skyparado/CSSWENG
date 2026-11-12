@@ -106,6 +106,35 @@ async function main() {
     skipDuplicates: true,
   });
 
+  // The doctor is her own approver, since there is nobody above her.
+  await prisma.user.update({
+    where: { id: doctor.id },
+    data: { requestedRole: 'DOCTOR', approvedById: doctor.id, approvedAt: new Date() },
+  });
+  await prisma.user.update({
+    where: { id: secretary.id },
+    data: { requestedRole: 'SECRETARY', approvedById: doctor.id, approvedAt: new Date() },
+  });
+
+  // An account waiting in the approval queue, so the User Accounts screen
+  // (S18) has something to approve on a fresh database. It asks to be a
+  // Doctor on purpose, which is the case worth seeing: the approver can hand
+  // out Secretary instead and the granted role is the one enforced.
+  const applicantEmail = 'applicant@pacio.clinic.local';
+  const applicantPassword = 'ApplicantPass123!';
+  await prisma.user.upsert({
+    where: { email: applicantEmail },
+    update: {},
+    create: {
+      email: applicantEmail,
+      fullName: 'Maria Reyes',
+      passwordHash: await argon2.hash(applicantPassword, { type: argon2.argon2id }),
+      role: 'SECRETARY',
+      requestedRole: 'DOCTOR',
+      status: 'PENDING',
+    },
+  });
+
   // Patient fields are encrypted, so build the row the same way the API does.
   await prisma.patient.upsert({
     where: { id: 'seed-patient-juan' },
@@ -132,6 +161,7 @@ async function main() {
   console.log(`  ${doctorEmail} / ${doctorPassword}`);
   // eslint-disable-next-line no-console
   console.log(`  ${secretaryEmail} / ${secretaryPassword}`);
+  console.log(`  ${applicantEmail} / ${applicantPassword} (PENDING, awaiting approval)`);
 }
 
 main()
