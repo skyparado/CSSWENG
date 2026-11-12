@@ -76,6 +76,10 @@ const envSchema = z.object({
   SMTP_URL: z.string().default('smtp://localhost:1025'),
   EMAIL_FROM: z.string().default('Clinic <no-reply@clinic.local>'),
 
+  // Optional path to the Doctor-approved medication / allergen reference (JSON).
+  // Unset = the bundled starter list. See src/medications/drugReference.ts.
+  DRUG_REFERENCE_PATH: z.string().optional(),
+
   PRISMA_FIELD_ENCRYPTION_KEY: z
     .string()
     .startsWith('k1.aesgcm256.', 'Must start with "k1.aesgcm256."'),

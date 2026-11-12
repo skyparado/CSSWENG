@@ -60,6 +60,17 @@ function requireEndAfterStart(
 }
 
 /**
+ * One safety alert the Doctor saw and accepts. Alerts are matched by what they
+ * are about (type + the allergy/medication that triggered them); the text the
+ * server stores is its own, never the client's.
+ */
+export const acknowledgedAlertSchema = z.object({
+  type: z.enum(['ALLERGY_CONFLICT', 'DUPLICATE_MEDICATION']),
+  relatedId: idSchema,
+});
+export type AcknowledgedAlert = z.infer<typeof acknowledgedAlertSchema>;
+
+/**
  * Doctor adds a medication. If the safety check finds an allergy conflict or a
  * duplicate, the request is refused with the alerts unless the doctor
  * resubmits with `acknowledgeAlerts: true` (FR-5.6.7).
@@ -69,7 +80,10 @@ export const medicationCreateSchema = z
     patientId: idSchema,
     clinicId: idSchema.optional(),
     ...medicationFields,
+    /** Blanket "I accept every alert the server raises for this save". */
     acknowledgeAlerts: z.boolean().default(false),
+    /** The specific alerts accepted; when sent, every alert raised must be listed. */
+    acknowledgedAlerts: z.array(acknowledgedAlertSchema).max(50).optional(),
   })
   .superRefine((m, ctx) => {
     requireDiscontinuationReason(m, ctx);
@@ -97,6 +111,7 @@ export const medicationUpdateSchema = z
     prescribingDoctor: medicationFields.prescribingDoctor.optional(),
     source: medicationSourceSchema.optional(),
     acknowledgeAlerts: z.boolean().default(false),
+    acknowledgedAlerts: z.array(acknowledgedAlertSchema).max(50).optional(),
   })
   .superRefine((m, ctx) => {
     requireDiscontinuationReason(m, ctx);

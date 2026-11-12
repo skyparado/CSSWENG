@@ -1,26 +1,53 @@
 import type { Request, Response } from 'express';
-import { writeAudit } from './audit.service.js';
+import { writeAudit, type AuditTx } from './audit.service.js';
 import type { AuditAction } from './actions.js';
 
-/**
- * Details a route handler supplies for a named audit event. Everything the
- * request already knows (method, path, IP, user agent, who is signed in) is
- * filled in for you.
- */
+export interface AuditActor {
+  userId: string | null;
+  userEmail: string | null;
+  userRole: string | null;
+  method: string | null;
+  path: string | null;
+  ipAddress: string | null;
+  userAgent: string | null;
+}
+
+export const SYSTEM_ACTOR: AuditActor = {
+  userId: null,
+  userEmail: null,
+  userRole: 'SYSTEM',
+  method: null,
+  path: null,
+  ipAddress: null,
+  userAgent: null,
+};
+
+export function actorFromRequest(req: Request): AuditActor {
+  const user = req.session?.user;
+  return {
+    userId: user?.userId ?? null,
+    userEmail: null,
+    userRole: user?.role ?? null,
+    method: req.method,
+    path: (req.originalUrl ?? '').split('?')[0] || null,
+    ipAddress: req.ip ?? null,
+    userAgent: req.get?.('user-agent') ?? null,
+  };
+}
+
+export interface AuditEvent {
+  action: AuditAction;
+  resourceType: string;
+  resourceId: string;
+  metadata?: Record<string, unknown>;
+}
+
 export type AuditEventDetails = {
   action: AuditAction;
-  /** Model or concept the event is about, for example 'User' or 'ClinicalImage'. */
   resourceType?: string | null;
-  /** Id of the affected record. Deliberately not a foreign key (Table 1-21). */
   resourceId?: string | null;
-  /** Status code to record. Defaults to whatever the response ended up with. */
   statusCode?: number | null;
-  /** Anything else worth keeping. Never put a password or a full record here. */
   metadata?: unknown;
-  /**
-   * Override the acting user. Needed on the login path, where the session is
-   * not set up yet but we do know which account was involved.
-   */
   actor?: {
     userId?: string | null;
     userEmail?: string | null;
@@ -28,12 +55,6 @@ export type AuditEventDetails = {
   };
 };
 
-/**
- * Marks the request as already audited so auditMiddleware skips its generic
- * HTTP_REQUEST row. Without this a single login writes two entries: the named
- * LOGIN_SUCCESS and a duplicate HTTP_REQUEST, which makes the audit screen
- * twice as long and half as useful.
- */
 export function markAudited(res: Response): void {
   res.locals.auditHandled = true;
 }
@@ -42,14 +63,20 @@ export function wasAudited(res: Response): boolean {
   return res.locals.auditHandled === true;
 }
 
-/**
- * Write a named business event for this request. Fire-and-forget on purpose:
- * a failing audit write must never change the response the user sees. The
- * error is logged so operators notice if the chain stops advancing.
- *
- * Call this instead of writeAudit from route handlers. It suppresses the
- * generic middleware row for the same request.
- */
+export function recordAudit(actor: AuditActor, event: AuditEvent, tx?: AuditTx) {
+  return writeAudit(
+    {
+      ...actor,
+      action: event.action,
+      resourceType: event.resourceType,
+      resourceId: event.resourceId,
+      statusCode: null,
+      metadata: event.metadata ?? null,
+    },
+    tx,
+  );
+}
+
 export function recordEvent(
   req: Request,
   res: Response,
@@ -74,7 +101,8 @@ export function recordEvent(
     userAgent: req.get('user-agent') ?? null,
     metadata: details.metadata ?? null,
   }).catch((err) => {
-    // eslint-disable-next-line no-console
     console.error(`audit write failed for ${details.action}:`, err);
   });
+}
+
 }

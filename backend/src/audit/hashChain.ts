@@ -37,6 +37,27 @@ export type HashableEntry = {
 };
 
 /**
+ * `metadata` is stored in a Postgres JSONB column, which does not keep the key
+ * order it was given: it returns object keys shortest first, then in byte
+ * order, at every depth. Hashing the keys in insertion order at write time and
+ * in JSONB order at verify time made any entry with several metadata keys look
+ * tampered with. Hashing in JSONB's own order makes the two agree; an entry
+ * whose keys were already in that order hashes exactly as before.
+ */
+export function jsonbOrder(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(jsonbOrder);
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    const sorted: Record<string, unknown> = {};
+    const keys = Object.keys(value).sort(
+      (a, b) => Buffer.byteLength(a) - Buffer.byteLength(b) || Buffer.compare(Buffer.from(a), Buffer.from(b)),
+    );
+    for (const key of keys) sorted[key] = jsonbOrder((value as Record<string, unknown>)[key]);
+    return sorted;
+  }
+  return value;
+}
+
+/**
  * Canonical JSON of an entry's content: fields in a fixed order, no extra
  * whitespace, dates as ISO strings. Deterministic across runs and machines.
  */
@@ -48,6 +69,8 @@ function canonicalize(entry: HashableEntry): string {
       normalized[key] = value.toISOString();
     } else if (value === undefined) {
       normalized[key] = null;
+    } else if (key === 'metadata') {
+      normalized[key] = jsonbOrder(value);
     } else {
       normalized[key] = value;
     }

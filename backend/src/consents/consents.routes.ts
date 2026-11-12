@@ -9,6 +9,8 @@ import type { ConsentType, ReminderChannel, ConsentCaptureMethod } from '@prisma
 import { prisma } from '../prisma.js';
 import { asyncHandler, conflict, notFound, validate } from '../http.js';
 import { currentUser, requireAuth } from '../auth/guards.js';
+import { AuditActions } from '../audit/actions.js';
+import { actorFromRequest, recordAudit } from '../audit/record.js';
 
 export const consentsRouter = Router();
 
@@ -62,9 +64,32 @@ consentsRouter.post(
     if (!consent) throw notFound('Consent not found');
     if (consent.withdrawnAt) throw conflict('Consent already withdrawn');
 
-    const updated = await prisma.patientConsent.update({
-      where: { id: consent.id },
-      data: { withdrawnAt: new Date(), withdrawnById: currentUser(req).userId },
+    // Withdraw and audit in one transaction. The `withdrawnAt: null` guard makes
+    // two simultaneous withdrawals resolve to one success and one 409.
+    const updated = await prisma.$transaction(async (tx) => {
+      const { count } = await tx.patientConsent.updateMany({
+        where: { id: consent.id, withdrawnAt: null },
+        data: { withdrawnAt: new Date(), withdrawnById: currentUser(req).userId },
+      });
+      if (count === 0) throw conflict('Consent already withdrawn');
+
+      await recordAudit(
+        actorFromRequest(req),
+        {
+          action: AuditActions.CONSENT_WITHDRAWN,
+          resourceType: 'PatientConsent',
+          resourceId: consent.id,
+          metadata: {
+            patientId: consent.patientId,
+            consentType: consent.consentType,
+            channel: consent.channel,
+            // The free-text reason may hold personal detail, so only note that one was given.
+            reasonGiven: Boolean((req.body as { reason?: string }).reason),
+          },
+        },
+        tx,
+      );
+      return tx.patientConsent.findUniqueOrThrow({ where: { id: consent.id } });
     });
     res.json(updated);
   }),

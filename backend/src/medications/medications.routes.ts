@@ -1,18 +1,23 @@
-import { Router } from 'express';
-import type { Medication, MedicationSource, MedicationStatus } from '@prisma/client';
+import { Router, type Request } from 'express';
+import { Prisma, type Medication, type MedicationSource, type MedicationStatus } from '@prisma/client';
 import {
   idParamSchema,
   medicationCheckSchema,
   medicationCreateSchema,
   medicationQuerySchema,
   medicationUpdateSchema,
+  type AcknowledgedAlert,
   type SafetyAlert,
 } from '@clinic/schemas';
 import { prisma } from '../prisma.js';
 import { asyncHandler, conflict, notFound, validate } from '../http.js';
 import { clinicForWrite, currentUser, requireAuth, requireRole } from '../auth/guards.js';
 import { toDateOnly } from '../followups/dates.js';
+import { AuditActions } from '../audit/actions.js';
+import { actorFromRequest, recordAudit } from '../audit/record.js';
+import type { AuditTx } from '../audit/audit.service.js';
 import { checkMedicationSafety } from './medicationSafety.js';
+import { getDrugReference } from './drugReference.js';
 
 export const medicationsRouter = Router();
 
@@ -37,11 +42,74 @@ async function safetyAlertsFor(
   });
 }
 
-/** Refuse with the alerts unless the Doctor acknowledged them (FR-5.6.7). */
-function requireAcknowledgement(alerts: SafetyAlert[], acknowledged: boolean) {
-  if (alerts.length > 0 && !acknowledged) {
+/** What is saved on a medication row when the Doctor accepted safety alerts. */
+interface StoredAcknowledgement {
+  acknowledgedAt: string;
+  acknowledgedById: string;
+  referenceVersion: number;
+  alerts: SafetyAlert[];
+}
+
+/**
+ * Refuse with the alerts unless the Doctor acknowledged them (FR-5.6.7).
+ *
+ * The alerts that get saved are the ones the SERVER just computed, never text
+ * from the client. Two ways to acknowledge:
+ *  - `acknowledgedAlerts`: the specific alerts, which must cover every alert
+ *    raised now (so an allergy added since the Doctor looked is not waved through);
+ *  - `acknowledgeAlerts: true`: accept whatever the server raises for this save.
+ *
+ * Returns null when there was nothing to acknowledge.
+ */
+function acknowledge(
+  alerts: SafetyAlert[],
+  body: { acknowledgeAlerts: boolean; acknowledgedAlerts?: AcknowledgedAlert[] },
+  doctorId: string,
+): StoredAcknowledgement | null {
+  if (alerts.length === 0) return null;
+
+  const listed = body.acknowledgedAlerts;
+  const accepted = listed
+    ? alerts.every((a) => listed.some((l) => l.type === a.type && l.relatedId === a.relatedId))
+    : body.acknowledgeAlerts;
+  if (!accepted) {
     throw conflict('Medication safety alerts must be acknowledged', { alerts });
   }
+  return {
+    acknowledgedAt: new Date().toISOString(),
+    acknowledgedById: doctorId,
+    referenceVersion: getDrugReference().version,
+    alerts,
+  };
+}
+
+/** Audit the acknowledgement (doctor, alert details, timestamp) inside the saving transaction. */
+function auditAcknowledgement(
+  req: Request,
+  tx: AuditTx,
+  medication: Pick<Medication, 'id' | 'patientId' | 'clinicId' | 'medicationName'>,
+  ack: StoredAcknowledgement,
+  change: 'CREATED' | 'UPDATED',
+) {
+  return recordAudit(
+    actorFromRequest(req),
+    {
+      action: AuditActions.MEDICATION_SAFETY_ALERTS_ACKNOWLEDGED,
+      resourceType: 'Medication',
+      resourceId: medication.id,
+      metadata: {
+        doctorId: ack.acknowledgedById,
+        acknowledgedAt: ack.acknowledgedAt,
+        patientId: medication.patientId,
+        clinicId: medication.clinicId,
+        medicationName: medication.medicationName,
+        change,
+        referenceVersion: ack.referenceVersion,
+        alerts: ack.alerts as unknown as Prisma.InputJsonValue,
+      },
+    },
+    tx,
+  );
 }
 
 /** GET /api/medications?patientId= — the current list (or full dated history). */
@@ -128,26 +196,40 @@ medicationsRouter.post(
       source: MedicationSource;
       documentId?: string;
       acknowledgeAlerts: boolean;
+      acknowledgedAlerts?: AcknowledgedAlert[];
     };
     const clinicId = clinicForWrite(req, body.clinicId);
     const patient = await prisma.patient.findUnique({ where: { id: body.patientId } });
     if (!patient) throw notFound('Patient not found');
 
     // A discontinued entry is history, not something being taken: nothing to warn about.
+    let ack: StoredAcknowledgement | null = null;
     if (body.status !== 'DISCONTINUED') {
       const alerts = await safetyAlertsFor(body.patientId, body.medicationName);
-      requireAcknowledgement(alerts, body.acknowledgeAlerts);
+      ack = acknowledge(alerts, body, currentUser(req).userId);
     }
 
-    const { acknowledgeAlerts: _ack, startDate, endDate, ...rest } = body;
-    const medication = await prisma.medication.create({
-      data: {
-        ...rest,
-        clinicId,
-        startDate: toDateOnly(startDate),
-        endDate: endDate ? toDateOnly(endDate) : undefined,
-        recordedById: currentUser(req).userId,
-      },
+    const {
+      acknowledgeAlerts: _ack,
+      acknowledgedAlerts: _acks,
+      startDate,
+      endDate,
+      ...rest
+    } = body;
+    const medication = await prisma.$transaction(async (tx) => {
+      const created = await tx.medication.create({
+        data: {
+          ...rest,
+          clinicId,
+          startDate: toDateOnly(startDate),
+          endDate: endDate ? toDateOnly(endDate) : undefined,
+          recordedById: currentUser(req).userId,
+          lookupVersion: getDrugReference().version,
+          safetyAcknowledgements: ack ? (ack as unknown as Prisma.InputJsonValue) : undefined,
+        },
+      });
+      if (ack) await auditAcknowledgement(req, tx, created, ack, 'CREATED');
+      return created;
     });
     res.status(201).json(medication);
   }),
@@ -166,8 +248,9 @@ medicationsRouter.patch(
     if (!existing) throw notFound('Medication not found');
     if (!existing.isCurrent) throw conflict('This version was already superseded; edit the latest one');
 
-    const { acknowledgeAlerts, startDate, endDate, ...patch } = req.body as {
+    const { acknowledgeAlerts, acknowledgedAlerts, startDate, endDate, ...patch } = req.body as {
       acknowledgeAlerts: boolean;
+      acknowledgedAlerts?: AcknowledgedAlert[];
       startDate?: string;
       endDate?: string;
       medicationName?: string;
@@ -177,12 +260,18 @@ medicationsRouter.patch(
 
     const next = { ...existing, ...stripUndefined(patch) } as Medication;
 
-    // Re-check only when the drug changes or the medication becomes active again.
-    const reactivated = next.status !== 'DISCONTINUED' && existing.status === 'DISCONTINUED';
+    // Re-check when the drug changes, or when the medication starts being taken
+    // again: DISCONTINUED -> ACTIVE/ON_HOLD, or ON_HOLD -> ACTIVE. An allergy or
+    // a duplicate may have been recorded while it was off the list.
     const renamed = next.medicationName !== existing.medicationName;
-    if (next.status !== 'DISCONTINUED' && (renamed || reactivated)) {
+    const resumed =
+      (existing.status === 'DISCONTINUED' && next.status !== 'DISCONTINUED') ||
+      (existing.status === 'ON_HOLD' && next.status === 'ACTIVE');
+    const rechecked = next.status !== 'DISCONTINUED' && (renamed || resumed);
+    let ack: StoredAcknowledgement | null = null;
+    if (rechecked) {
       const alerts = await safetyAlertsFor(existing.patientId, next.medicationName, existing.id);
-      requireAcknowledgement(alerts, acknowledgeAlerts);
+      ack = acknowledge(alerts, { acknowledgeAlerts, acknowledgedAlerts }, currentUser(req).userId);
     }
 
     const {
@@ -193,18 +282,23 @@ medicationsRouter.patch(
       ...carried
     } = next;
 
-    const [, created] = await prisma.$transaction([
-      prisma.medication.update({ where: { id: existing.id }, data: { isCurrent: false } }),
-      prisma.medication.create({
+    const created = await prisma.$transaction(async (tx) => {
+      await tx.medication.update({ where: { id: existing.id }, data: { isCurrent: false } });
+      const version = await tx.medication.create({
         data: {
           ...carried,
           startDate: startDate ? toDateOnly(startDate) : existing.startDate,
           endDate: endDate ? toDateOnly(endDate) : existing.endDate,
           supersedesMedicationId: existing.id,
           recordedById: currentUser(req).userId,
+          // An acknowledgement belongs to the save that made it; it is not inherited.
+          safetyAcknowledgements: ack ? (ack as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
+          lookupVersion: rechecked ? getDrugReference().version : existing.lookupVersion,
         },
-      }),
-    ]);
+      });
+      if (ack) await auditAcknowledgement(req, tx, version, ack, 'UPDATED');
+      return version;
+    });
     res.json(created);
   }),
 );

@@ -9,6 +9,7 @@ import {
   currentUser,
   requireAuth,
 } from '../auth/guards.js';
+import { actorFromRequest } from '../audit/record.js';
 import { logOutreachAttempt } from './outreach.service.js';
 
 export const outreachRouter = Router();
@@ -78,6 +79,7 @@ outreachRouter.post(
       patientResponse: body.patientResponse,
       attemptedAt: body.attemptedAt,
       contactedById: currentUser(req).userId,
+      actor: actorFromRequest(req),
     });
     res.status(201).json(log);
   }),
