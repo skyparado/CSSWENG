@@ -104,5 +104,3 @@ export function recordEvent(
     console.error(`audit write failed for ${details.action}:`, err);
   });
 }
-
-}

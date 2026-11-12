@@ -3,6 +3,7 @@ import { prisma } from '../prisma.js';
 import { verifyChain, writeAudit } from '../audit/audit.service.js';
 import { processReminder } from './reminders.service.js';
 import type { Gateways } from './gateway.js';
+import { testPatientData } from '../test-utils/patientData.js';
 
 /**
  * Integration test (real Postgres): the persistent send record is what stops a
@@ -33,7 +34,11 @@ beforeAll(async () => {
   });
   const clinic = await prisma.clinic.create({ data: { name: 'Reminder Clinic', phone: '+63 2 1234' } });
   const patient = await prisma.patient.create({
-    data: { firstName: 'Re', lastName: 'Mind', mobileNumber: '+639171112222' },
+    data: testPatientData(clinic.id, user.id, {
+      firstName: 'Re',
+      lastName: 'Mind',
+      mobileNumber: '+639171112222',
+    }),
   });
   const consent = await prisma.patientConsent.create({
     data: {

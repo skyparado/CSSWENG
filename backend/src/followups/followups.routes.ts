@@ -27,7 +27,15 @@ import { findActiveReminderConsent } from '../consents/consents.service.js';
 import { enqueueReminder } from '../reminders/queue.js';
 import { actorFromRequest } from '../audit/record.js';
 import { addDays, daysOverdue, todayInTimezone, toDateOnly } from './dates.js';
-import { followUpInclude, followUpWhere, type FollowUpFilters } from './followups.service.js';
+import {
+  assertAppointmentMatches,
+  auditFollowUpStatusChange,
+  followUpInclude,
+  followUpWhere,
+  matchesReason,
+  withPlainPatient,
+  type FollowUpFilters,
+} from './followups.service.js';
 
 export const followUpsRouter = Router();
 
@@ -291,9 +299,9 @@ followUpsRouter.post(
         closureNote: body.closureNote,
         appointmentId: body.appointmentId,
       },
-      include: followUpInclude,
-    });
-    res.json(updated);
+      'COMPLETE',
+    );
+    res.json(withPlainPatient(updated));
   }),
 );
 
@@ -305,12 +313,13 @@ followUpsRouter.post(
   asyncHandler(async (req, res) => {
     const existing = await loadFollowUp(req);
     assertOpenOrScheduled(existing);
-    const updated = await prisma.followUp.update({
-      where: { id: existing.id },
-      data: { status: 'DECLINED', closureNote: (req.body as { closureNote: string }).closureNote },
-      include: followUpInclude,
-    });
-    res.json(updated);
+    const updated = await changeStatus(
+      req,
+      existing,
+      { status: 'DECLINED', closureNote: (req.body as { closureNote: string }).closureNote },
+      'DECLINE',
+    );
+    res.json(withPlainPatient(updated));
   }),
 );
 
@@ -327,12 +336,13 @@ followUpsRouter.post(
     const appt = await prisma.appointment.findUnique({ where: { id: appointmentId } });
     assertAppointmentMatches(appt, existing);
 
-    const updated = await prisma.followUp.update({
-      where: { id: existing.id },
-      data: { status: 'SCHEDULED', appointmentId },
-      include: followUpInclude,
-    });
-    res.json(updated);
+    const updated = await changeStatus(
+      req,
+      existing,
+      { status: 'SCHEDULED', appointmentId },
+      'SCHEDULE',
+    );
+    res.json(withPlainPatient(updated));
   }),
 );
 

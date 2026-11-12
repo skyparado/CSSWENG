@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { prisma } from '../prisma.js';
+import { testPatientData } from '../test-utils/patientData.js';
 
 /**
  * Integration test (real Postgres, like fieldEncryption.test.ts): the clinical
@@ -28,7 +29,9 @@ beforeAll(async () => {
     },
   });
   const clinic = await prisma.clinic.create({ data: { name: 'Sensitive Fields Clinic' } });
-  const patient = await prisma.patient.create({ data: { firstName: 'Sensi', lastName: 'Tive' } });
+  const patient = await prisma.patient.create({
+    data: testPatientData(clinic.id, user.id, { firstName: 'Sensi', lastName: 'Tive' }),
+  });
   const followUp = await prisma.followUp.create({
     data: {
       patientId: patient.id,

@@ -1,16 +1,10 @@
 import type { FollowUp, FollowUpStatus, Prisma } from '@prisma/client';
 import { prisma } from '../prisma.js';
-import type { FollowUp, FollowUpStatus, Prisma } from '@prisma/client';
-import { prisma } from '../prisma.js';
 import { decrypt } from '../lib/fieldCrypto.js';
 import { badRequest } from '../http.js';
 import { AuditActions } from '../audit/actions.js';
 import { recordAudit, SYSTEM_ACTOR, type AuditActor } from '../audit/record.js';
 import type { AuditTx } from '../audit/audit.service.js';
-
-/** Task types that stay open until staff record completion (FR-5.5.9). */
-const STAYS_OPEN_ON_APPOINTMENT = ['LAB_TEST', 'INJECTION', 'PROCEDURE'] as const;
-
 
 /** Task types that stay open until staff record completion (FR-5.5.9). */
 const STAYS_OPEN_ON_APPOINTMENT = ['LAB_TEST', 'INJECTION', 'PROCEDURE'] as const;

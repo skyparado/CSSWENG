@@ -169,7 +169,7 @@ describe('POST /api/follow-ups', () => {
     ['another clinic', { patientId: 'p1', clinicId: 'c2' }],
     ['a missing appointment', null],
   ])('rejects an appointment that belongs to %s', async (_label, appt) => {
-    db.patient.findUnique.mockResolvedValue({ id: 'p1' });
+    db.patient.findFirst.mockResolvedValue({ id: 'p1' });
     db.clinic.findUnique.mockResolvedValue({ id: 'c1' });
     db.appointment.findUnique.mockResolvedValue(appt && { id: 'a1', status: 'SCHEDULED', ...appt });
 
@@ -182,7 +182,7 @@ describe('POST /api/follow-ups', () => {
   });
 
   it('accepts an appointment of the same patient at the same clinic and starts SCHEDULED', async () => {
-    db.patient.findUnique.mockResolvedValue({ id: 'p1' });
+    db.patient.findFirst.mockResolvedValue({ id: 'p1' });
     db.clinic.findUnique.mockResolvedValue({ id: 'c1' });
     db.appointment.findUnique.mockResolvedValue({
       id: 'a1',
@@ -190,7 +190,11 @@ describe('POST /api/follow-ups', () => {
       clinicId: 'c1',
       status: 'SCHEDULED',
     });
-    db.followUp.create.mockImplementation(async ({ data }) => ({ id: 'f9', ...data }));
+    db.followUp.create.mockImplementation(async ({ data }) => ({
+      id: 'f9',
+      ...data,
+      patient: openTask.patient,
+    }));
 
     const res = await request(doctorApp)
       .post('/api/follow-ups')
