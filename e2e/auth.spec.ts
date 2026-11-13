@@ -85,7 +85,7 @@ test.describe('S01 sign-in', () => {
     await signIn(page, 'DOCTOR');
     const username = `e2e-lock-${Date.now()}`;
     const email = `${username}@pacio.clinic.local`;
-    const password = 'LockMePass123!';
+    const password = 'Driftwood-Ember-31';
 
     // Created as a DOCTOR on purpose. A Secretary only sees clinics she has a
     // UserClinic row for, there is no endpoint to add one, and a throwaway
@@ -184,7 +184,7 @@ test.describe('an account with no clinic assigned', () => {
     await signIn(page, 'DOCTOR');
     const username = `e2e-noclinic-${Date.now()}`;
     const email = `${username}@pacio.clinic.local`;
-    const password = 'NoClinicPass123!';
+    const password = 'Sandpiper-Vellum-6';
 
     const created = await page.request.post('/api/users', {
       data: { username, email, fullName: 'E2E Unassigned Secretary', password, role: 'SECRETARY' },
@@ -222,7 +222,7 @@ test.describe('S18 clinic authorization', () => {
     await signIn(page, 'DOCTOR');
     const username = `e2e-assign-${Date.now()}`;
     const email = `${username}@pacio.clinic.local`;
-    const password = 'AssignPass123!';
+    const password = 'Harbour-Thimble-55';
 
     // Arrive as a pending account the way a sign-up would.
     const created = await page.request.post('/api/users', {
