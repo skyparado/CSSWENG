@@ -21,9 +21,14 @@ import AuditLog from './pages/AuditLog';
 import Intake from './pages/Intake';
 import TabletIntake, { tabletTokenFromRoute } from './pages/TabletIntake';
 import SessionTimeout from './SessionTimeout';
+import ClinicalImages, { ClinicalImagesLanding } from './pages/ClinicalImages';
+import { annotateFromRoute, patientIdFromImagesRoute } from './imageApi';
 
 // Recharts is large; load it only when the Reports page is opened.
 const Reports = lazy(() => import('./pages/Reports'));
+
+// Konva is large; load the annotator only when an image is opened.
+const ImageAnnotator = lazy(() => import('./pages/ImageAnnotator'));
 
 /**
  * Patient routes (S04–S08):
@@ -55,6 +60,7 @@ const MENU: Array<{ label: string; path: string; doctorOnly?: boolean }> = [
   { label: 'Patients', path: '/patients' },
   { label: 'Follow-Ups', path: '/follow-ups' },
   { label: 'Medications', path: '/medications', doctorOnly: true },
+  { label: 'Clinical Images', path: '/images', doctorOnly: true },
   { label: 'Appointments', path: '/appointments' },
   { label: 'Documents', path: '/documents' },
   { label: 'Patient Intake', path: '/intake' },
@@ -187,6 +193,22 @@ function Routes() {
     );
   else if (route.startsWith('/medications'))
     page = doctor ? <MedicationsLanding /> : <p>Only the Doctor can view medications and allergies.</p>;
+    else if (annotateFromRoute(route))
+    page = doctor ? (
+      <Suspense fallback={<p>Loading…</p>}>
+        <ImageAnnotator key={route} {...annotateFromRoute(route)!} />
+      </Suspense>
+    ) : (
+      <p>Only the Doctor can view clinical images.</p>
+    );
+  else if (patientIdFromImagesRoute(route))
+    page = doctor ? (
+      <ClinicalImages key={route} patientId={patientIdFromImagesRoute(route)!} />
+    ) : (
+      <p>Only the Doctor can view clinical images.</p>
+    );
+  else if (route.startsWith('/images'))
+    page = doctor ? <ClinicalImagesLanding /> : <p>Only the Doctor can view clinical images.</p>;
   else if (route === '/intake') page = <Intake />;
   else if (route === '/users')
     page = doctor ? <Users /> : <p>Only the Doctor can manage staff accounts.</p>;
