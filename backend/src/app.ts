@@ -18,7 +18,7 @@ import { followUpsRouter } from './followups/followups.routes.js';
 import { outreachRouter } from './followups/outreach.routes.js';
 import { medicationsRouter } from './medications/medications.routes.js';
 import { allergiesRouter } from './medications/allergies.routes.js';
-import { requireAuth } from './auth/middleware.js';
+import { denyUnauthenticatedByDefault, requireAuth } from './auth/middleware.js';
 import { createPatientRouter } from './patients/patient.routes.js';
 import { chartSummaryRouter } from './patients/chartSummary.routes.js';
 import { createEncounterRouter } from './encounters/encounter.routes.js';
@@ -87,6 +87,11 @@ export function createApp(): Express {
   // role against the DB so a doctor's revoke or role change takes effect
   // on the user's next request (QA 2.1, SDD 7.2).
   app.use(refreshSessionUser);
+
+  // Deny by default (QA 3.1): every /api path needs a session unless it is on
+  // the small public allowlist in auth/middleware.ts. The per-router guards
+  // stay as they are; this makes a forgotten one a 401 instead of a hole.
+  app.use(denyUnauthenticatedByDefault);
 
   app.use('/api/auth', authRouter);
   app.use('/api/users', usersRouter);

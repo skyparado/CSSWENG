@@ -38,6 +38,60 @@ function logRefusal(
 }
 
 /**
+ * Paths that may be reached without a session. Everything else under /api is
+ * refused by denyUnauthenticatedByDefault, so a router mounted without its own
+ * guard is closed rather than open (QA 3.1).
+ *
+ * Each entry is here for a stated reason; nothing goes on this list because it
+ * was convenient:
+ *   - /health            liveness probe, no data in the response
+ *   - /api/auth/login    the only way to get a session in the first place
+ *   - /api/auth/logout   idempotent, and must still work on a dead session
+ *   - /api/webhooks/     provider callbacks (the SMS provider has no account
+ *                        here); these authenticate the caller by request
+ *                        signature or shared secret inside the router
+ *   - /api/tablet-intake/tablet/
+ *                        the supervised clinic tablet, which holds a one-shot
+ *                        session token in the URL and no credentials
+ */
+const PUBLIC_EXACT = new Set(['/health', '/api/auth/login', '/api/auth/logout']);
+const PUBLIC_PREFIXES = ['/api/webhooks/', '/api/tablet-intake/tablet/'];
+
+/** True when the path is one of the few that may be reached anonymously. */
+export function isPublicPath(path: string): boolean {
+  if (PUBLIC_EXACT.has(path)) return true;
+  return PUBLIC_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
+/**
+ * Deny by default (QA 3.1, SDD 7.2). Mount once, app-wide, after the session
+ * and session-refresh middleware and before the routers.
+ *
+ * The per-router guards stay where they are: this does not replace them, it
+ * means forgetting one is no longer a hole. A new router added without a guard
+ * refuses anonymous requests here instead of serving them.
+ *
+ * Role checks stay per route, since only the route knows which role it needs.
+ */
+export function denyUnauthenticatedByDefault(
+  req: Request,
+  _res: Response,
+  next: NextFunction,
+): void {
+  const path = req.originalUrl.split('?')[0] ?? req.originalUrl;
+  if (isPublicPath(path)) return next();
+
+  // Anything not under /api is static or unknown; let the router decide.
+  if (!path.startsWith('/api/')) return next();
+
+  if (!req.session?.user) {
+    logRefusal(req, 'unauthenticated', null);
+    return next(new HttpError(401, 'Not authenticated'));
+  }
+  next();
+}
+
+/**
  * Reject requests that do not carry an authenticated session. Attach it
  * before any router that needs auth. Logs an access.refused audit entry
  * on rejection.
