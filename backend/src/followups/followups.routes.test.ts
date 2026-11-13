@@ -13,8 +13,15 @@ const db = vi.hoisted(() => ({
   patient: { findFirst: vi.fn() },
   clinic: { findUnique: vi.fn() },
   appointment: { findUnique: vi.fn() },
-  patientConsent: { findFirst: vi.fn() },
-  outreachLog: { count: vi.fn(), create: vi.fn(), findMany: vi.fn(), aggregate: vi.fn() },
+  encounter: { findUnique: vi.fn() },
+  patientConsent: { findFirst: vi.fn(), findMany: vi.fn() },
+  outreachLog: {
+    count: vi.fn(),
+    create: vi.fn(),
+    findMany: vi.fn(),
+    updateMany: vi.fn(),
+    aggregate: vi.fn(),
+  },
   $transaction: vi.fn(),
   $queryRaw: vi.fn(),
 }));
@@ -52,6 +59,8 @@ beforeEach(() => {
   db.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(db));
   db.$queryRaw.mockResolvedValue([]);
   db.outreachLog.aggregate.mockResolvedValue({ _max: { attemptNumber: null } });
+  // Reminder consent is looked up for every list row; no consent on file by default.
+  db.patientConsent.findMany.mockResolvedValue([]);
   audit.writeAudit.mockResolvedValue({});
 });
 
