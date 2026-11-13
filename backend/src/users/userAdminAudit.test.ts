@@ -20,6 +20,7 @@ const createdUserIds: string[] = [];
 async function pendingUser(requestedRole: 'DOCTOR' | 'SECRETARY' = 'SECRETARY') {
   const user = await prisma.user.create({
     data: {
+      username: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       email: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 7)}@test.local`,
       fullName: 'Pending Applicant',
       passwordHash: await hashPassword('PendingPass123!'),
@@ -100,13 +101,14 @@ describe('account approval trail (QA 4.1)', () => {
   });
 
   it('marks a doctor-created account as self-approved', async () => {
-    const email = `made-${Date.now()}@test.local`;
+    const username = `made-${Date.now()}`;
     const res = await doctor.agent
       .post('/api/users')
       .send({
-        email,
+        username,
+        email: `${username}@test.local`,
         fullName: 'Directly Created',
-        password: 'DirectPass123!',
+        password: 'Tambourine-Kelp-42',
         role: 'SECRETARY',
       })
       .expect(201);

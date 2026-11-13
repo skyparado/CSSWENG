@@ -3,6 +3,7 @@ import type request from 'supertest';
 import { createApp } from '../app.js';
 import { prisma } from '../prisma.js';
 import { loginAgent } from '../test-utils/authAgent.js';
+import { isPublicPath } from './middleware.js';
 import supertest from 'supertest';
 
 /**
@@ -113,5 +114,62 @@ describe('requireDoctor middleware', () => {
   it('rejects a Secretary POST /api/documents/requests with 403', async () => {
     const res = await secretaryAgent.post('/api/documents/requests').send({});
     expect(res.status).toBe(403);
+  });
+});
+
+
+describe('deny by default (QA 3.1)', () => {
+  it('refuses an anonymous request to an api route with 401', async () => {
+    const res = await supertest(app).get('/api/clinics');
+    expect(res.status).toBe(401);
+  });
+
+  it('refuses an anonymous request to a path no router handles', async () => {
+    // The point of denying by default: an unguarded or not-yet-written route
+    // must not fall through to a 404 that confirms what does exist.
+    const res = await supertest(app).get('/api/not-a-real-router');
+    expect(res.status).toBe(401);
+  });
+
+  it.each([
+    ['health', '/health'],
+    ['the tablet read route', '/api/tablet-intake/tablet/no-such-token'],
+  ])('still allows %s without a session', async (_label, path) => {
+    const res = await supertest(app).get(path);
+    expect(res.status).not.toBe(401);
+  });
+
+  it('still allows a login attempt without a session', async () => {
+    const res = await supertest(app)
+      .post('/api/auth/login')
+      .send({ username: `nobody-${Date.now()}`, password: 'wrong' });
+    // 401 for bad credentials is the route answering, not the gate refusing;
+    // what matters is that it was not refused before reaching the handler.
+    expect(res.body.error).not.toBe('Not authenticated');
+  });
+
+  it('lets an authenticated request through to its own role check', async () => {
+    // Secretary reaching a Doctor-only route must get 403 from the role guard,
+    // not 401 from the gate.
+    const res = await secretaryAgent.post('/api/clinics').send({ name: 'Nope' });
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('isPublicPath', () => {
+  it('allows only the documented public paths', () => {
+    expect(isPublicPath('/health')).toBe(true);
+    expect(isPublicPath('/api/auth/login')).toBe(true);
+    expect(isPublicPath('/api/auth/logout')).toBe(true);
+    expect(isPublicPath('/api/webhooks/sms/status')).toBe(true);
+    expect(isPublicPath('/api/tablet-intake/tablet/abc/submit')).toBe(true);
+  });
+
+  it('does not allow the staff side of tablet intake', async () => {
+    // Starting or listing sessions is staff work and must stay behind auth,
+    // even though it shares a prefix with the tablet's own routes.
+    expect(isPublicPath('/api/tablet-intake/sessions')).toBe(false);
+    expect(isPublicPath('/api/auth/me')).toBe(false);
+    expect(isPublicPath('/api/patients')).toBe(false);
   });
 });

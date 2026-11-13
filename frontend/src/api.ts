@@ -298,8 +298,8 @@ export class ApiError extends Error {
     /**
      * How many sign-in attempts are left before the account locks. Only set
      * on a 401 from /api/auth/login, and only when the server recognised the
-     * email. Null on the unknown-email and non-active paths, so the UI never
-     * reveals whether an account exists (S01, QA 1).
+     * username. Null on the unknown-account and non-active paths, so the UI
+     * never reveals whether an account exists (S01, QA 1).
      */
     public attemptsRemaining: number | null = null,
   ) {
@@ -365,8 +365,12 @@ const qs = (params: Record<string, string | number | undefined>) =>
 
 export const api = {
   me: () => call<{ user: User }>('GET', '/api/auth/me'),
-  login: (email: string, password: string) =>
-    call<{ user: User }>('POST', '/api/auth/login', { email, password }),
+  login: (username: string, password: string) =>
+    call<{ user: User }>('POST', '/api/auth/login', { username, password }),
+
+  /** Set your own password. Clears a pending forced reset. */
+  changePassword: (currentPassword: string, newPassword: string) =>
+    call<void>('POST', '/api/auth/change-password', { currentPassword, newPassword }),
   logout: () => call<void>('POST', '/api/auth/logout'),
   setActiveClinic: (clinicId: string) => call<void>('POST', '/api/auth/select-clinic', { clinicId }),
 

@@ -6,16 +6,16 @@ import { api, ApiError, type User } from '../api';
  *
  * Branding panel on the left, sign-in form on the right. Shows the number of
  * attempts left on a failed sign-in, which the backend returns only when it
- * recognised the email, and says plainly that a locked account needs the
+ * recognised the username, and says plainly that a locked account needs the
  * doctor. There is no self-service password reset by design: the clinic wanted
  * every credential change to go through Dr. Pacio.
  *
- * The login id is an email address. The SRS and SDD call it a username; the
- * switch is a separate change because it touches the seed, the tests and the
- * documents together.
+ * The login id is a username, as the SRS, SDD and S01 all specify. Staff email
+ * addresses were never credentials: nothing is sent to them and the clinic has
+ * no mail domain, so an email-shaped login was a fiction staff had to memorise.
  */
 export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
-  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,7 +28,7 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
     setAttemptsRemaining(null);
     setBusy(true);
     try {
-      const res = await api.login(email, password);
+      const res = await api.login(username, password);
       onLogin(res.user);
     } catch (err) {
       if (err instanceof ApiError) {
@@ -92,15 +92,16 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
             </div>
           )}
 
-          <label htmlFor="login-email">Email</label>
+          <label htmlFor="login-username">Username</label>
           <input
-            id="login-email"
-            name="email"
-            type="email"
+            id="login-username"
+            name="username"
+            type="text"
             autoComplete="username"
-            placeholder="you@pacio.clinic.local"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            autoCapitalize="none"
+            spellCheck={false}
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
             required
             aria-required="true"
             autoFocus

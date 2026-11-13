@@ -1,11 +1,19 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
-import { loginSchema, selectClinicSchema, type AuthUser, type SelectClinicInput } from '@clinic/schemas';
+import {
+  changePasswordSchema,
+  loginSchema,
+  selectClinicSchema,
+  type AuthUser,
+  type ChangePassword,
+  type SelectClinicInput,
+} from '@clinic/schemas';
 import { asyncHandler, validate, HttpError } from '../http.js';
 import { requireAuth } from './middleware.js';
 import { authorizedClinics } from '../clinics/clinics.routes.js';
 import { prisma } from '../prisma.js';
 import { authenticate, InvalidCredentialsError } from './auth.service.js';
+import { changeOwnPassword } from '../users/users.service.js';
 import { recordEvent } from '../audit/record.js';
 import { AuditActions } from '../audit/actions.js';
 import { sessionCookieOptions } from './session.js';
@@ -37,14 +45,14 @@ authRouter.post(
   loginRateLimiter,
   validate(loginSchema, 'body'),
   asyncHandler(async (req, res) => {
-    const { email, password } = req.body as {
-      email: string;
+    const { username, password } = req.body as {
+      username: string;
       password: string;
     };
 
     let user;
     try {
-      user = await authenticate(email, password);
+      user = await authenticate(username, password);
     } catch (err) {
       // Surface attemptsRemaining to the client when we have it. Status stays
       // 401 and the message is the same generic "Invalid credentials" the
@@ -57,9 +65,12 @@ authRouter.post(
           resourceType: 'User',
           resourceId: err.userId,
           statusCode: err.status,
-          actor: { userId: err.userId, userEmail: email },
+          actor: { userId: err.userId },
           metadata: {
             reason: err.reason,
+            // The username as typed. Not an email: on the unknown-account path
+            // there is no account to read an address from.
+            attemptedUsername: username,
             accountStatus: err.accountStatus,
             attemptsRemaining: err.attemptsRemaining,
           },
@@ -73,8 +84,8 @@ authRouter.post(
             resourceType: 'User',
             resourceId: err.userId,
             statusCode: err.status,
-            actor: { userId: err.userId, userEmail: email },
-            metadata: { trigger: 'failed_login_threshold' },
+            actor: { userId: err.userId },
+            metadata: { trigger: 'failed_login_threshold', attemptedUsername: username },
           });
         }
 
@@ -99,9 +110,11 @@ authRouter.post(
         if (saveErr) return res.status(500).json({ error: 'Session error' });
         const payload: AuthUser = {
           id: user.id,
+          username: user.username,
           email: user.email,
           fullName: user.fullName,
           role: user.role,
+          mustResetPassword: user.mustResetPassword,
         };
         recordEvent(req, res, {
           action: AuditActions.LOGIN_SUCCESS,
@@ -162,12 +175,39 @@ authRouter.get(
     }
     const payload: AuthUser = {
       id: user.id,
+      username: user.username,
       email: user.email,
       fullName: user.fullName,
       role: user.role,
+      mustResetPassword: user.mustResetPassword,
       activeClinicId: req.session.user.activeClinicId,
     };
     res.json({ user: payload });
+  }),
+);
+
+/**
+ * POST /api/auth/change-password — the signed-in account sets its own password.
+ *
+ * Reachable while a forced reset is pending, which is the only way to clear
+ * that flag. The current password is required either way, so a session left
+ * open on a shared front-desk machine cannot be used to take the account over.
+ */
+authRouter.post(
+  '/change-password',
+  validate(changePasswordSchema, 'body'),
+  asyncHandler(async (req, res) => {
+    if (!req.session.user) {
+      throw new HttpError(401, 'Not authenticated');
+    }
+    const { currentPassword, newPassword } = req.body as ChangePassword;
+    await changeOwnPassword(req.session.user.userId, currentPassword, newPassword);
+    recordEvent(req, res, {
+      action: AuditActions.USER_PASSWORD_CHANGED,
+      resourceType: 'User',
+      resourceId: req.session.user.userId,
+    });
+    res.status(204).end();
   }),
 );
 

@@ -34,6 +34,7 @@ beforeAll(async () => {
 
   const user = await prisma.user.create({
     data: {
+      username: `enc-test-${Date.now()}`,
       email: `encryption-test-${Date.now()}@test.local`,
       fullName: 'Encryption Test User',
       passwordHash: 'not-a-real-hash',

@@ -602,6 +602,7 @@ function CreateAccountDialog({
 }) {
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<UserRole>('SECRETARY');
   const [error, setError] = useState<string | null>(null);
@@ -612,7 +613,7 @@ function CreateAccountDialog({
     setError(null);
     setBusy(true);
     try {
-      const created = await adminApi.createUser({ fullName, email, password, role });
+      const created = await adminApi.createUser({ fullName, username, email, password, role });
       onCreated(created);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -637,6 +638,21 @@ function CreateAccountDialog({
           required
           autoFocus
         />
+
+        <label htmlFor="new-username">Username</label>
+        <input
+          id="new-username"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          autoCapitalize="none"
+          spellCheck={false}
+          required
+          aria-describedby="new-username-help"
+        />
+        <p id="new-username-help" className="muted small">
+          What this person types to sign in. Letters, numbers, dots,
+          underscores and hyphens.
+        </p>
 
         <label htmlFor="new-email">Email</label>
         <input

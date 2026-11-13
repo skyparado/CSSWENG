@@ -21,6 +21,7 @@ import {
 const app = createApp();
 
 const PASSWORD = 'AuditPass123!';
+let username = '';
 let email = '';
 let userId = '';
 
@@ -30,9 +31,11 @@ function latest(action: string) {
 }
 
 beforeAll(async () => {
-  email = `audit-auth-${Date.now()}@test.local`;
+  username = `audit-auth-${Date.now()}`;
+  email = `${username}@test.local`;
   const user = await prisma.user.create({
     data: {
+      username,
       email,
       fullName: 'Audit Auth Test',
       passwordHash: await hashPassword(PASSWORD),
@@ -55,7 +58,7 @@ describe('login audit entries (QA 1.3)', () => {
   it('writes LOGIN_SUCCESS with the actor on a good sign-in', async () => {
     await supertest(app)
       .post('/api/auth/login')
-      .send({ email, password: PASSWORD })
+      .send({ username, password: PASSWORD })
       .expect(200);
 
     const entry = await latest(AuditActions.LOGIN_SUCCESS);
@@ -68,7 +71,7 @@ describe('login audit entries (QA 1.3)', () => {
   it('writes LOGIN_FAILED with the reason on a wrong password', async () => {
     await supertest(app)
       .post('/api/auth/login')
-      .send({ email, password: 'definitely-wrong' })
+      .send({ username, password: 'definitely-wrong' })
       .expect(401);
 
     const entry = await latest(AuditActions.LOGIN_FAILED);
@@ -78,32 +81,33 @@ describe('login audit entries (QA 1.3)', () => {
     expect(meta?.reason).toBe('wrong_password');
   });
 
-  it('records an unknown email without inventing a user id', async () => {
-    const unknownEmail = `nobody-${Date.now()}@test.local`;
+  it('records an unknown username without inventing a user id', async () => {
+    const unknownUsername = `nobody-${Date.now()}`;
 
     await supertest(app)
       .post('/api/auth/login')
-      .send({ email: unknownEmail, password: 'whatever' })
+      .send({ username: unknownUsername, password: 'whatever' })
       .expect(401);
 
-    // Matched on the email that was tried. Picking the most recent
+    // Matched on the username that was tried. Picking the most recent
     // LOGIN_FAILED would catch another spec's entry instead, since the
-    // writes are fire-and-forget and can land out of order.
+    // writes are fire-and-forget and can land out of order. There is no
+    // address to match on: an unknown account has no email to read.
     const entry = await waitForAudit({
       action: AuditActions.LOGIN_FAILED,
-      userEmail: unknownEmail,
+      metadata: { path: ['attemptedUsername'], equals: unknownUsername },
     });
 
     // No user id: there is no account, and inventing one would be a lie.
     expect(entry.userId).toBeNull();
     expect(entry.resourceId).toBeNull();
     const meta = entry.metadata as { reason?: string } | null;
-    expect(meta?.reason).toBe('unknown_email');
+    expect(meta?.reason).toBe('unknown_username');
   });
 
   it('writes LOGOUT when a session is destroyed', async () => {
     const agent = supertest.agent(app);
-    await agent.post('/api/auth/login').send({ email, password: PASSWORD }).expect(200);
+    await agent.post('/api/auth/login').send({ username, password: PASSWORD }).expect(200);
     await agent.post('/api/auth/logout').expect(204);
 
     const entry = await latest(AuditActions.LOGOUT);
@@ -112,10 +116,11 @@ describe('login audit entries (QA 1.3)', () => {
   });
 
   it('writes a single ACCOUNT_LOCKED entry on the attempt that locks', async () => {
-    const lockEmail = `audit-lock-${Date.now()}@test.local`;
+    const lockUsername = `audit-lock-${Date.now()}`;
     const locking = await prisma.user.create({
       data: {
-        email: lockEmail,
+        username: lockUsername,
+        email: `${lockUsername}@test.local`,
         fullName: 'Audit Lock Test',
         passwordHash: await hashPassword(PASSWORD),
         role: 'SECRETARY',
@@ -128,7 +133,7 @@ describe('login audit entries (QA 1.3)', () => {
       for (let i = 0; i < 5; i += 1) {
         await supertest(app)
           .post('/api/auth/login')
-          .send({ email: lockEmail, password: 'wrong' })
+          .send({ username: lockUsername, password: 'wrong' })
           .expect(401);
       }
 
@@ -144,7 +149,7 @@ describe('login audit entries (QA 1.3)', () => {
 
       await supertest(app)
         .post('/api/auth/login')
-        .send({ email: lockEmail, password: 'wrong' })
+        .send({ username: lockUsername, password: 'wrong' })
         .expect(401);
 
       // Give that attempt's writes time to land, then confirm the count did
@@ -168,7 +173,7 @@ describe('login audit entries (QA 1.3)', () => {
 
     await supertest(app)
       .post('/api/auth/login')
-      .send({ email, password: PASSWORD })
+      .send({ username, password: PASSWORD })
       .expect(200);
 
     // Wait for the named entry to land, which means the request's audit work

@@ -71,6 +71,7 @@ async function main() {
     });
   }
 
+  const doctorUsername = 'apacio';
   const doctorEmail = 'doctor@pacio.clinic.local';
   const doctorPassword = 'DoctorPass123!';
   const doctorHash = await argon2.hash(doctorPassword, { type: argon2.argon2id });
@@ -78,6 +79,7 @@ async function main() {
     where: { email: doctorEmail },
     update: {},
     create: {
+      username: doctorUsername,
       email: doctorEmail,
       fullName: 'Dr. Angeline Pacio',
       passwordHash: doctorHash,
@@ -86,6 +88,7 @@ async function main() {
     },
   });
 
+  const secretaryUsername = 'frontdesk';
   const secretaryEmail = 'secretary@pacio.clinic.local';
   const secretaryPassword = 'SecretaryPass123!';
   const secretaryHash = await argon2.hash(secretaryPassword, { type: argon2.argon2id });
@@ -93,6 +96,7 @@ async function main() {
     where: { email: secretaryEmail },
     update: {},
     create: {
+      username: secretaryUsername,
       email: secretaryEmail,
       fullName: 'Clinic Secretary',
       passwordHash: secretaryHash,
@@ -120,12 +124,14 @@ async function main() {
   // (S18) has something to approve on a fresh database. It asks to be a
   // Doctor on purpose, which is the case worth seeing: the approver can hand
   // out Secretary instead and the granted role is the one enforced.
+  const applicantUsername = 'mreyes';
   const applicantEmail = 'applicant@pacio.clinic.local';
   const applicantPassword = 'ApplicantPass123!';
   await prisma.user.upsert({
     where: { email: applicantEmail },
     update: {},
     create: {
+      username: applicantUsername,
       email: applicantEmail,
       fullName: 'Maria Reyes',
       passwordHash: await argon2.hash(applicantPassword, { type: argon2.argon2id }),
@@ -158,10 +164,10 @@ async function main() {
   // eslint-disable-next-line no-console
   console.log('Seeded clinics, schedules, patient, and auth users.');
   // eslint-disable-next-line no-console
-  console.log(`  ${doctorEmail} / ${doctorPassword}`);
+  console.log(`  ${doctorUsername} / ${doctorPassword}`);
   // eslint-disable-next-line no-console
-  console.log(`  ${secretaryEmail} / ${secretaryPassword}`);
-  console.log(`  ${applicantEmail} / ${applicantPassword} (PENDING, awaiting approval)`);
+  console.log(`  ${secretaryUsername} / ${secretaryPassword}`);
+  console.log(`  ${applicantUsername} / ${applicantPassword} (PENDING, awaiting approval)`);
 }
 
 main()

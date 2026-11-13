@@ -2,8 +2,8 @@ import { expect, type Page } from '@playwright/test';
 
 // Seeded by backend/prisma/seed.ts.
 export const USERS = {
-  DOCTOR: { email: 'doctor@pacio.clinic.local', password: 'DoctorPass123!' },
-  SECRETARY: { email: 'secretary@pacio.clinic.local', password: 'SecretaryPass123!' },
+  DOCTOR: { username: 'apacio', password: 'DoctorPass123!' },
+  SECRETARY: { username: 'frontdesk', password: 'SecretaryPass123!' },
 };
 export const UERM_ID = 'seed-clinic-uerm'; // Mon 13:00–16:00, Thu 10:00–12:00
 export const PATIENT_ID = 'seed-patient-juan';
@@ -21,7 +21,7 @@ export const SIGNATURE_PNG = Buffer.from(
 /** Sign in through the UI and pick the active clinic on S02. */
 export async function signIn(page: Page, role: keyof typeof USERS, clinic = 'UERM') {
   await page.goto('/');
-  await page.getByLabel('Email').fill(USERS[role].email);
+  await page.getByLabel('Username').fill(USERS[role].username);
   await page.getByLabel('Password', { exact: true }).fill(USERS[role].password);
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page.getByRole('heading', { name: 'Select Active Clinic' })).toBeVisible();
@@ -49,4 +49,24 @@ export function nextMondayInManila(): string {
   const d = new Date(`${today}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + (((8 - d.getUTCDay()) % 7) || 7));
   return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Complete the "set your password" screen a freshly created account lands on.
+ *
+ * Every password a doctor hands over is temporary, so a throwaway account made
+ * through POST /api/users has to pass through this before it can do anything.
+ * Leaves the page signed in as that account.
+ */
+export async function setOwnPassword(
+  page: Page,
+  tempPassword: string,
+  newPassword: string,
+) {
+  await expect(page.getByRole('heading', { name: 'Set your password' })).toBeVisible();
+  await page.getByLabel('Current password').fill(tempPassword);
+  await page.getByLabel('New password', { exact: true }).fill(newPassword);
+  await page.getByLabel('Confirm new password').fill(newPassword);
+  await page.getByRole('button', { name: 'Save password' }).click();
+  await expect(page.getByRole('heading', { name: 'Set your password' })).toBeHidden();
 }

@@ -21,6 +21,7 @@ const ids = { user: '', clinic: '', patient: '', followUp: '', outreach: '', med
 beforeAll(async () => {
   const user = await prisma.user.create({
     data: {
+      username: `enc-${Date.now()}`,
       email: `enc-${Date.now()}@test.local`,
       fullName: 'Encryption Tester',
       passwordHash: 'x',

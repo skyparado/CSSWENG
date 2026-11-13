@@ -29,11 +29,11 @@ async function makeTarget(
     status: 'PENDING' | 'ACTIVE' | 'LOCKED' | 'REVOKED' | 'REJECTED';
   }> = {},
 ): Promise<string> {
-  const email =
-    overrides.email ??
-    `target-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@test.local`;
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const email = overrides.email ?? `target-${suffix}@test.local`;
   const user = await prisma.user.create({
     data: {
+      username: `target-${suffix}`,
       email,
       fullName: overrides.fullName ?? 'Target User',
       passwordHash: await hashPassword('TargetPass123!'),
@@ -81,9 +81,10 @@ describe('authorization', () => {
 
   it('rejects a Secretary POST /api/users with 403', async () => {
     const res = await secretaryAgent.post('/api/users').send({
+      username: `nope-${Date.now()}`,
       email: `nope-${Date.now()}@test.local`,
       fullName: 'Nope',
-      password: 'NopePass123!',
+      password: 'Tambourine-Kelp-42',
       role: 'SECRETARY',
     });
     expect(res.status).toBe(403);
@@ -92,11 +93,13 @@ describe('authorization', () => {
 
 describe('POST /api/users (create)', () => {
   it('creates an ACTIVE account and never returns the password hash', async () => {
-    const email = `create-${Date.now()}@test.local`;
+    const username = `create-${Date.now()}`;
+    const email = `${username}@test.local`;
     const res = await doctorAgent.post('/api/users').send({
+      username,
       email,
       fullName: 'Fresh Hire',
-      password: 'FreshPass123!',
+      password: 'Marmalade-Quartz-7',
       role: 'SECRETARY',
     });
     expect(res.status).toBe(201);
@@ -107,20 +110,23 @@ describe('POST /api/users (create)', () => {
   });
 
   it('rejects a duplicate email with 400', async () => {
-    const email = `dup-${Date.now()}@test.local`;
+    const username = `dup-${Date.now()}`;
+    const email = `${username}@test.local`;
     const first = await doctorAgent.post('/api/users').send({
+      username: `${username}-a`,
       email,
       fullName: 'First',
-      password: 'FirstPass123!',
+      password: 'Lantern-Bramble-19',
       role: 'SECRETARY',
     });
     expect(first.status).toBe(201);
     createdTargetIds.push(first.body.id);
 
     const second = await doctorAgent.post('/api/users').send({
+      username: `${username}-b`,
       email,
       fullName: 'Second',
-      password: 'SecondPass123!',
+      password: 'Kingfisher-Loom-83',
       role: 'SECRETARY',
     });
     expect(second.status).toBe(400);
@@ -217,12 +223,13 @@ describe('PATCH /api/users/:id', () => {
 
 describe('reset password', () => {
   it('lets the target log in with the new password after reset', async () => {
-    const email = `reset-${Date.now()}@test.local`;
+    const username = `reset-${Date.now()}`;
     const original = await prisma.user.create({
       data: {
-        email,
+        username,
+        email: `${username}@test.local`,
         fullName: 'Reset Target',
-        passwordHash: await hashPassword('OldPass123!'),
+        passwordHash: await hashPassword('Driftwood-Ember-31'),
         role: 'SECRETARY',
         status: 'ACTIVE',
       },
@@ -231,19 +238,19 @@ describe('reset password', () => {
 
     const res = await doctorAgent
       .post(`/api/users/${original.id}/reset-password`)
-      .send({ password: 'BrandNewPass123!' });
+      .send({ password: 'Harbour-Thimble-55' });
     expect(res.status).toBe(200);
 
     // Old password should fail.
     const oldLogin = await supertest(app)
       .post('/api/auth/login')
-      .send({ email, password: 'OldPass123!' });
+      .send({ username, password: 'Driftwood-Ember-31' });
     expect(oldLogin.status).toBe(401);
 
     // New password should work.
     const newLogin = await supertest(app)
       .post('/api/auth/login')
-      .send({ email, password: 'BrandNewPass123!' });
+      .send({ username, password: 'Harbour-Thimble-55' });
     expect(newLogin.status).toBe(200);
   });
 });
@@ -251,19 +258,21 @@ describe('reset password', () => {
 
 describe('password policy (QA 1)', () => {
   const WEAK: Array<[string, string]> = [
-    ['too short', 'Short1Pass'],
-    ['no uppercase', 'alllowercase123'],
-    ['no lowercase', 'ALLUPPERCASE123'],
-    ['no number', 'NoDigitsHereAtAll'],
-    ['padded with a space', ' LeadingSpace123'],
-    ['a common password', 'Password123'],
+    ['too short', 'Short1Pass!'],
+    ['missing a letter', '1234567890!!'],
+    ['missing a number', 'NoDigitsHere!'],
+    ['missing a symbol', 'NoSymbolHere123'],
+    ['padded with a space', ' LeadingSpace1!'],
+    ['on the breached list', 'Password123!'],
+    ['built from the account name', 'Policy-Subject-1!'],
   ];
 
-  it.each(WEAK)('refuses a new account with a password that is %s', async (_label, password) => {
-    const email = `weak-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@test.local`;
+  it.each(WEAK)('refuses a new account with a password %s', async (_label, password) => {
+    const username = `weak-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const email = `${username}@test.local`;
     const res = await doctorAgent
       .post('/api/users')
-      .send({ email, fullName: 'Weak Password', password, role: 'SECRETARY' });
+      .send({ username, email, fullName: 'Policy Subject', password, role: 'SECRETARY' });
     expect(res.status).toBe(400);
     // Nothing half-created: the account must not exist after a refusal.
     const found = await prisma.user.findUnique({ where: { email } });
@@ -271,10 +280,11 @@ describe('password policy (QA 1)', () => {
   });
 
   it('refuses a reset that would weaken an existing password', async () => {
-    const email = `reset-weak-${Date.now()}@test.local`;
+    const username = `reset-weak-${Date.now()}`;
+    const email = `${username}@test.local`;
     const created = await doctorAgent
       .post('/api/users')
-      .send({ email, fullName: 'Reset Target', password: 'StrongEnough123', role: 'SECRETARY' });
+      .send({ username, email, fullName: 'Reset Target', password: 'Sandpiper-Vellum-6', role: 'SECRETARY' });
     expect(created.status).toBe(201);
     createdTargetIds.push(created.body.id);
 
@@ -286,15 +296,16 @@ describe('password policy (QA 1)', () => {
     // The original password still works, so the refusal changed nothing.
     const login = await supertest(app)
       .post('/api/auth/login')
-      .send({ email, password: 'StrongEnough123' });
+      .send({ username, password: 'Sandpiper-Vellum-6' });
     expect(login.status).toBe(200);
   });
 
   it('accepts a password that meets the policy at the minimum length', async () => {
-    const email = `ok-${Date.now()}@test.local`;
+    const username = `ok-${Date.now()}`;
+    const email = `${username}@test.local`;
     const res = await doctorAgent
       .post('/api/users')
-      .send({ email, fullName: 'Just Enough', password: 'Abcdefghij12', role: 'SECRETARY' });
+      .send({ username, email, fullName: 'Just Enough', password: 'Abcdefghij1!', role: 'SECRETARY' });
     expect(res.status).toBe(201);
     createdTargetIds.push(res.body.id);
   });
@@ -304,7 +315,93 @@ describe('password policy (QA 1)', () => {
     // would tell an attacker what the policy is.
     const res = await supertest(app)
       .post('/api/auth/login')
-      .send({ email: `nobody-${Date.now()}@test.local`, password: 'x' });
+      .send({ username: `nobody-${Date.now()}`, password: 'x' });
     expect(res.status).toBe(401);
+  });
+});
+
+
+describe('username (SRS, SDD, S01)', () => {
+  it('refuses a username that is already taken, without saying whose', async () => {
+    const username = `taken-${Date.now()}`;
+    const first = await doctorAgent.post('/api/users').send({
+      username,
+      email: `${username}-a@test.local`,
+      fullName: 'First Holder',
+      password: 'Tambourine-Kelp-42',
+      role: 'SECRETARY',
+    });
+    expect(first.status).toBe(201);
+    createdTargetIds.push(first.body.id);
+
+    const second = await doctorAgent.post('/api/users').send({
+      username,
+      email: `${username}-b@test.local`,
+      fullName: 'Second Holder',
+      password: 'Marmalade-Quartz-7',
+      role: 'SECRETARY',
+    });
+    expect(second.status).toBe(400);
+    expect(second.body.error).toMatch(/username/i);
+  });
+
+  it.each([
+    ['too short', 'ab'],
+    ['has a space', 'ana reyes'],
+    ['has an at sign', 'ana@clinic'],
+    ['starts with a dot', '.ana'],
+  ])('refuses a username that is %s', async (_label, username) => {
+    const res = await doctorAgent.post('/api/users').send({
+      username,
+      email: `shape-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@test.local`,
+      fullName: 'Shape Check',
+      password: 'Tambourine-Kelp-42',
+      role: 'SECRETARY',
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('stores a username lowercased so case cannot lock anyone out', async () => {
+    const base = `MixedCase${Date.now()}`;
+    const res = await doctorAgent.post('/api/users').send({
+      username: base,
+      email: `mixed-${Date.now()}@test.local`,
+      fullName: 'Mixed Case',
+      password: 'Lantern-Bramble-19',
+      role: 'SECRETARY',
+    });
+    expect(res.status).toBe(201);
+    createdTargetIds.push(res.body.id);
+    expect(res.body.username).toBe(base.toLowerCase());
+
+    // Typed in any case, it signs in.
+    const login = await supertest(app)
+      .post('/api/auth/login')
+      .send({ username: base.toUpperCase(), password: 'Lantern-Bramble-19' });
+    expect(login.status).toBe(200);
+  });
+
+  it('does not accept the email address as a credential any more', async () => {
+    const username = `nomail-${Date.now()}`;
+    const email = `${username}@test.local`;
+    const created = await doctorAgent.post('/api/users').send({
+      username,
+      email,
+      fullName: 'No Mail Login',
+      password: 'Driftwood-Ember-31',
+      role: 'SECRETARY',
+    });
+    expect(created.status).toBe(201);
+    createdTargetIds.push(created.body.id);
+
+    const byEmail = await supertest(app)
+      .post('/api/auth/login')
+      .send({ username: email, password: 'Driftwood-Ember-31' });
+    expect(byEmail.status).toBe(401);
+
+    const byUsername = await supertest(app)
+      .post('/api/auth/login')
+      .send({ username, password: 'Driftwood-Ember-31' });
+    expect(byUsername.status).toBe(200);
   });
 });

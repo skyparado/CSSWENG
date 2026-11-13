@@ -25,6 +25,7 @@ const gateways: Gateways = {
 beforeAll(async () => {
   const user = await prisma.user.create({
     data: {
+      username: `reminder-${Date.now()}`,
       email: `reminder-${Date.now()}@test.local`,
       fullName: 'Reminder Tester',
       passwordHash: 'x',

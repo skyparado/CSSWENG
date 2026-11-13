@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { signIn, USERS } from './helpers';
+import { setOwnPassword, signIn, USERS } from './helpers';
 
 /**
  * S01 sign-in, lockout, role restrictions and the idle session warning.
@@ -10,8 +10,8 @@ import { signIn, USERS } from './helpers';
  */
 
 /** Fill the sign-in form without submitting. */
-async function fillLogin(page: Page, email: string, password: string) {
-  await page.getByLabel('Email').fill(email);
+async function fillLogin(page: Page, username: string, password: string) {
+  await page.getByLabel('Username').fill(username);
   await page.getByLabel('Password', { exact: true }).fill(password);
 }
 
@@ -34,7 +34,7 @@ test.describe('S01 sign-in', () => {
     await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
     await expect(page.getByText('Data Privacy Act of 2012')).toBeVisible();
 
-    await fillLogin(page, USERS.DOCTOR.email, USERS.DOCTOR.password);
+    await fillLogin(page, USERS.DOCTOR.username, USERS.DOCTOR.password);
     await page.getByRole('button', { name: 'Sign in' }).click();
 
     await expect(page.getByRole('heading', { name: 'Select Active Clinic' })).toBeVisible();
@@ -42,7 +42,7 @@ test.describe('S01 sign-in', () => {
 
   test('shows the attempts remaining on a wrong password', async ({ page }) => {
     await page.goto('/');
-    await fillLogin(page, USERS.SECRETARY.email, 'definitely-not-the-password');
+    await fillLogin(page, USERS.SECRETARY.username, 'definitely-not-the-password');
     await page.getByRole('button', { name: 'Sign in' }).click();
 
     const alert = page.getByRole('alert');
@@ -56,7 +56,7 @@ test.describe('S01 sign-in', () => {
     await expect(page.getByRole('heading', { name: 'Select Active Clinic' })).toBeVisible();
   });
 
-  test('says nothing about whether an unknown email exists', async ({ page }) => {
+  test('says nothing about whether an unknown username exists', async ({ page }) => {
     await page.goto('/');
     await fillLogin(page, 'nobody@pacio.clinic.local', 'whatever123');
     await page.getByRole('button', { name: 'Sign in' }).click();
@@ -83,7 +83,8 @@ test.describe('S01 sign-in', () => {
   test('locks an account after five failed attempts and keeps it locked', async ({ page }) => {
     // Throwaway account, so the seeded ones stay usable for the other specs.
     await signIn(page, 'DOCTOR');
-    const email = `e2e-lock-${Date.now()}@pacio.clinic.local`;
+    const username = `e2e-lock-${Date.now()}`;
+    const email = `${username}@pacio.clinic.local`;
     const password = 'LockMePass123!';
 
     // Created as a DOCTOR on purpose. A Secretary only sees clinics she has a
@@ -91,7 +92,7 @@ test.describe('S01 sign-in', () => {
     // Secretary would therefore land on the no-clinic-assigned screen instead
     // of clinic selection. Lockout itself is the same for either role.
     const created = await page.request.post('/api/users', {
-      data: { email, fullName: 'E2E Lockout Target', password, role: 'DOCTOR' },
+      data: { username, email, fullName: 'E2E Lockout Target', password, role: 'DOCTOR' },
     });
     expect(created.ok()).toBeTruthy();
     const target = await created.json();
@@ -100,7 +101,7 @@ test.describe('S01 sign-in', () => {
       await resetToLogin(page);
 
       for (let attempt = 1; attempt <= 5; attempt += 1) {
-        await fillLogin(page, email, 'wrong-password');
+        await fillLogin(page, username, 'wrong-password');
         await page.getByRole('button', { name: 'Sign in' }).click();
         await expect(page.getByRole('alert')).toContainText('Invalid credentials');
       }
@@ -111,7 +112,7 @@ test.describe('S01 sign-in', () => {
 
       // The correct password must not get in either: LOCKED is permanent
       // until the doctor unlocks it (QA 1.1).
-      await fillLogin(page, email, password);
+      await fillLogin(page, username, password);
       await page.getByRole('button', { name: 'Sign in' }).click();
       await expect(page.getByRole('alert')).toContainText('Invalid credentials');
       await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
@@ -122,8 +123,12 @@ test.describe('S01 sign-in', () => {
       expect(unlocked.ok()).toBeTruthy();
 
       await resetToLogin(page);
-      await fillLogin(page, email, password);
+      await fillLogin(page, username, password);
       await page.getByRole('button', { name: 'Sign in' }).click();
+
+      // The password the doctor handed over is temporary, so this account sets
+      // its own before it reaches the clinic picker.
+      await setOwnPassword(page, password, 'Tambourine-Kelp-42');
       await expect(page.getByRole('heading', { name: 'Select Active Clinic' })).toBeVisible();
     } finally {
       // Leave the throwaway account revoked so it cannot be signed into
@@ -177,19 +182,21 @@ test.describe('an account with no clinic assigned', () => {
     // created account has none. Before this was handled she sat on
     // "Loading clinics..." with no way forward and no explanation.
     await signIn(page, 'DOCTOR');
-    const email = `e2e-noclinic-${Date.now()}@pacio.clinic.local`;
+    const username = `e2e-noclinic-${Date.now()}`;
+    const email = `${username}@pacio.clinic.local`;
     const password = 'NoClinicPass123!';
 
     const created = await page.request.post('/api/users', {
-      data: { email, fullName: 'E2E Unassigned Secretary', password, role: 'SECRETARY' },
+      data: { username, email, fullName: 'E2E Unassigned Secretary', password, role: 'SECRETARY' },
     });
     expect(created.ok()).toBeTruthy();
     const target = await created.json();
 
     try {
       await resetToLogin(page);
-      await fillLogin(page, email, password);
+      await fillLogin(page, username, password);
       await page.getByRole('button', { name: 'Sign in' }).click();
+      await setOwnPassword(page, password, 'Marmalade-Quartz-7');
 
       await expect(
         page.getByRole('heading', { name: 'No clinic assigned yet' }),
@@ -213,12 +220,13 @@ test.describe('S18 clinic authorization', () => {
     // Secretary can select only those. Covered through the UI because the
     // approval dialog is where the Doctor actually makes the decision.
     await signIn(page, 'DOCTOR');
-    const email = `e2e-assign-${Date.now()}@pacio.clinic.local`;
+    const username = `e2e-assign-${Date.now()}`;
+    const email = `${username}@pacio.clinic.local`;
     const password = 'AssignPass123!';
 
     // Arrive as a pending account the way a sign-up would.
     const created = await page.request.post('/api/users', {
-      data: { email, fullName: 'E2E Assign Target', password, role: 'SECRETARY' },
+      data: { username, email, fullName: 'E2E Assign Target', password, role: 'SECRETARY' },
     });
     expect(created.ok()).toBeTruthy();
     const target = await created.json();
@@ -256,8 +264,9 @@ test.describe('S18 clinic authorization', () => {
 
       // And it is the assignment that gates her, not the UI.
       await resetToLogin(page);
-      await fillLogin(page, email, password);
+      await fillLogin(page, username, password);
       await page.getByRole('button', { name: 'Sign in' }).click();
+      await setOwnPassword(page, password, 'Kingfisher-Loom-83');
       await expect(
         page.getByRole('heading', { name: 'Select Active Clinic' }),
       ).toBeVisible();
