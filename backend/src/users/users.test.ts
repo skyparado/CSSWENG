@@ -247,3 +247,64 @@ describe('reset password', () => {
     expect(newLogin.status).toBe(200);
   });
 });
+
+
+describe('password policy (QA 1)', () => {
+  const WEAK: Array<[string, string]> = [
+    ['too short', 'Short1Pass'],
+    ['no uppercase', 'alllowercase123'],
+    ['no lowercase', 'ALLUPPERCASE123'],
+    ['no number', 'NoDigitsHereAtAll'],
+    ['padded with a space', ' LeadingSpace123'],
+    ['a common password', 'Password123'],
+  ];
+
+  it.each(WEAK)('refuses a new account with a password that is %s', async (_label, password) => {
+    const email = `weak-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@test.local`;
+    const res = await doctorAgent
+      .post('/api/users')
+      .send({ email, fullName: 'Weak Password', password, role: 'SECRETARY' });
+    expect(res.status).toBe(400);
+    // Nothing half-created: the account must not exist after a refusal.
+    const found = await prisma.user.findUnique({ where: { email } });
+    expect(found).toBeNull();
+  });
+
+  it('refuses a reset that would weaken an existing password', async () => {
+    const email = `reset-weak-${Date.now()}@test.local`;
+    const created = await doctorAgent
+      .post('/api/users')
+      .send({ email, fullName: 'Reset Target', password: 'StrongEnough123', role: 'SECRETARY' });
+    expect(created.status).toBe(201);
+    createdTargetIds.push(created.body.id);
+
+    const res = await doctorAgent
+      .post(`/api/users/${created.body.id}/reset-password`)
+      .send({ password: 'weak' });
+    expect(res.status).toBe(400);
+
+    // The original password still works, so the refusal changed nothing.
+    const login = await supertest(app)
+      .post('/api/auth/login')
+      .send({ email, password: 'StrongEnough123' });
+    expect(login.status).toBe(200);
+  });
+
+  it('accepts a password that meets the policy at the minimum length', async () => {
+    const email = `ok-${Date.now()}@test.local`;
+    const res = await doctorAgent
+      .post('/api/users')
+      .send({ email, fullName: 'Just Enough', password: 'Abcdefghij12', role: 'SECRETARY' });
+    expect(res.status).toBe(201);
+    createdTargetIds.push(res.body.id);
+  });
+
+  it('does not apply the policy to signing in, so it is never revealed there', async () => {
+    // A short wrong password gets the ordinary 401, not a validation error that
+    // would tell an attacker what the policy is.
+    const res = await supertest(app)
+      .post('/api/auth/login')
+      .send({ email: `nobody-${Date.now()}@test.local`, password: 'x' });
+    expect(res.status).toBe(401);
+  });
+});

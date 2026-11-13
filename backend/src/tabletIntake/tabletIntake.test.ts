@@ -61,6 +61,13 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // Consent rows point at both the patient and the session with onDelete:
+  // Restrict, so they have to go before either of those.
+  if (createdPatientIds.length) {
+    await prisma.patientConsent
+      .deleteMany({ where: { patientId: { in: createdPatientIds } } })
+      .catch(() => undefined);
+  }
   // Cascade from submission to session.
   for (const id of createdSessionIds) {
     await prisma.tabletIntakeSession.delete({ where: { id } }).catch(() => undefined);
@@ -306,5 +313,100 @@ describe('GET /api/tablet-intake/sessions (list, staff)', () => {
   it('400 when clinicId query param is missing', async () => {
     const res = await secretaryAgent.get('/api/tablet-intake/sessions');
     expect(res.status).toBe(400);
+  });
+});
+
+
+describe('consent capture (QA 8.4)', () => {
+  it('records the tablet consent ticks against the patient and the session', async () => {
+    const start = await secretaryAgent
+      .post('/api/tablet-intake/sessions')
+      .send({ clinicId });
+    createdSessionIds.push(start.body.id);
+
+    const submit = await supertest(app)
+      .post(`/api/tablet-intake/tablet/${start.body.token}/submit`)
+      .send(fullPayload({ mobileNumber: '+63-917-555-0140' }));
+    expect(submit.status).toBe(201);
+    createdPatientIds.push(submit.body.patientId);
+
+    const consents = await prisma.patientConsent.findMany({
+      where: { patientId: submit.body.patientId },
+      orderBy: { consentType: 'asc' },
+    });
+
+    // All three ticks are on record, not just the data privacy notice.
+    expect(consents.map((c) => c.consentType).sort()).toEqual([
+      'CLINICAL_PHOTOGRAPHY',
+      'DATA_PROCESSING',
+      'TREATMENT',
+    ]);
+    for (const c of consents) {
+      expect(c.isGranted).toBe(true);
+      // Tagged as tablet-captured and traceable back to the session it came from.
+      expect(c.captureMethod).toBe('TABLET');
+      expect(c.intakeSessionId).toBe(start.body.id);
+      expect(c.recordedById).toBeTruthy();
+      // Only REMINDER consent is per channel.
+      expect(c.channel).toBeNull();
+    }
+  });
+
+  it('records a declined photo consent as refused rather than dropping it', async () => {
+    const start = await secretaryAgent
+      .post('/api/tablet-intake/sessions')
+      .send({ clinicId });
+    createdSessionIds.push(start.body.id);
+
+    const submit = await supertest(app)
+      .post(`/api/tablet-intake/tablet/${start.body.token}/submit`)
+      .send(
+        fullPayload({
+          mobileNumber: '+63-917-555-0141',
+          consents: { treatment: true, dataPrivacy: true, photoConsent: false },
+        }),
+      );
+    expect(submit.status).toBe(201);
+    createdPatientIds.push(submit.body.patientId);
+
+    const photo = await prisma.patientConsent.findFirst({
+      where: { patientId: submit.body.patientId, consentType: 'CLINICAL_PHOTOGRAPHY' },
+    });
+    // A refusal the clinic has to honor is worth as much as a grant.
+    expect(photo?.isGranted).toBe(false);
+
+    const privacy = await prisma.patientConsent.findFirst({
+      where: { patientId: submit.body.patientId, consentType: 'DATA_PROCESSING' },
+    });
+    expect(privacy?.isGranted).toBe(true);
+  });
+
+  it('refuses a submit when the session has no supervising staff member', async () => {
+    const start = await secretaryAgent
+      .post('/api/tablet-intake/sessions')
+      .send({ clinicId });
+    createdSessionIds.push(start.body.id);
+
+    // Stands in for a session whose starter was since removed: consent would
+    // have nobody to attribute it to, so the submit is refused outright.
+    await prisma.tabletIntakeSession.update({
+      where: { id: start.body.id },
+      data: { startedBySecretaryId: null },
+    });
+
+    const submit = await supertest(app)
+      .post(`/api/tablet-intake/tablet/${start.body.token}/submit`)
+      .send(fullPayload({ mobileNumber: '+63-917-555-0142' }));
+    expect(submit.status).toBe(400);
+
+    // Nothing was half-written: no submission, and the session is still ACTIVE.
+    const count = await prisma.tabletIntakeSubmission.count({
+      where: { sessionId: start.body.id },
+    });
+    expect(count).toBe(0);
+    const session = await prisma.tabletIntakeSession.findUnique({
+      where: { id: start.body.id },
+    });
+    expect(session?.status).toBe('ACTIVE');
   });
 });

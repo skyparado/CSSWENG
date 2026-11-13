@@ -589,6 +589,8 @@ model DocumentDelivery {
 
 enum ConsentType {
   DATA_PROCESSING
+  TREATMENT
+  CLINICAL_PHOTOGRAPHY
   REMINDER
 }
 

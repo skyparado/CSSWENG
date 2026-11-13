@@ -14,13 +14,53 @@ export const userStatusEnum = z.enum([
 ]);
 export type UserStatus = z.infer<typeof userStatusEnum>;
 
+/* ------------------------------ Password policy --------------------------- */
+
+/** Passwords a lockout would never save anyone from. */
+const BANNED_PASSWORDS = new Set([
+  'password',
+  'password1',
+  'password123',
+  'qwerty123456',
+  'administrator',
+  'clinicclinic',
+  'letmein12345',
+  '123456789012',
+]);
+
+/**
+ * Policy for any new password (QA 1).
+ *
+ * Twelve characters with three character classes, which is what the clinic's
+ * records warrant: these accounts reach patient data under the Data Privacy
+ * Act, and there is no self-service reset, so a weak password set once tends
+ * to stay. Deliberately no forced symbol and no expiry; both push staff toward
+ * writing passwords on a sticky note at a shared front desk, which is the
+ * threat that actually applies here.
+ *
+ * Checked only when a password is being set. The login schema stays permissive
+ * on purpose so the policy is never revealed by what a sign-in rejects.
+ */
+export const passwordSchema = z
+  .string()
+  .min(12, 'Password must be at least 12 characters')
+  .max(128, 'Password must be at most 128 characters')
+  .refine((v) => v.trim() === v, 'Password cannot start or end with a space')
+  .refine((v) => /[a-z]/.test(v), 'Password must include a lowercase letter')
+  .refine((v) => /[A-Z]/.test(v), 'Password must include an uppercase letter')
+  .refine((v) => /[0-9]/.test(v), 'Password must include a number')
+  .refine(
+    (v) => !BANNED_PASSWORDS.has(v.toLowerCase()),
+    'That password is too common; pick another',
+  );
+
 /* ----------------------------- Admin payloads ----------------------------- */
 
 /** Doctor creates a staff account directly (status = ACTIVE on create). */
 export const userCreateSchema = z.object({
   email: z.string().email().max(254),
   fullName: z.string().trim().min(1).max(120),
-  password: z.string().min(8).max(128),
+  password: passwordSchema,
   role: userRoleEnum,
 });
 export type UserCreate = z.infer<typeof userCreateSchema>;
@@ -62,7 +102,7 @@ export type UserAssignClinics = z.infer<typeof userAssignClinicsSchema>;
 
 /** Doctor sets a new password for a staff account (e.g. after a reset). */
 export const userResetPasswordSchema = z.object({
-  password: z.string().min(8).max(128),
+  password: passwordSchema,
 });
 export type UserResetPassword = z.infer<typeof userResetPasswordSchema>;
 

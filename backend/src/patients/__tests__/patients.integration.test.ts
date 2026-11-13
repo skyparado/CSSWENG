@@ -20,8 +20,15 @@ let userId = "";
 
 let here = "";
 let elsewhere = "";
-// Unique surname per run so other suites' patients don't show up.
-const surname = `Scope${Date.now()}`;
+// Unique surname per run so other suites' patients, and anything a crashed
+// earlier run left behind, don't show up. It has to be letters only: the name
+// blind index runs through normalizeName, which drops digits, so a timestamped
+// surname like "Scope1763" indexes as plain "scope" and is not unique at all.
+const surname = `Scope${Date.now()
+  .toString()
+  .split('')
+  .map((d) => 'abcdefghij'[Number(d)])
+  .join('')}`;
 // Every patient this suite creates, so afterAll can remove them.
 const ids: Record<string, string> = {};
 

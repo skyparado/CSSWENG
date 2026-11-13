@@ -3,7 +3,16 @@ import { idSchema, paginationSchema } from './common.js';
 
 /* ------------------------------ Patient consents ----------------------------- */
 
-export const consentTypeSchema = z.enum(['DATA_PROCESSING', 'REMINDER']);
+/**
+ * TREATMENT and CLINICAL_PHOTOGRAPHY are captured on the tablet intake form
+ * alongside DATA_PROCESSING; REMINDER is recorded by staff per channel.
+ */
+export const consentTypeSchema = z.enum([
+  'DATA_PROCESSING',
+  'TREATMENT',
+  'CLINICAL_PHOTOGRAPHY',
+  'REMINDER',
+]);
 export type ConsentType = z.infer<typeof consentTypeSchema>;
 
 /** Channels a patient can consent to receive automated reminders on. */
@@ -19,7 +28,7 @@ export type ConsentCaptureMethod = z.infer<typeof consentCaptureMethodSchema>;
 
 /**
  * Record a consent decision. REMINDER consent is per channel (SMS or EMAIL);
- * DATA_PROCESSING consent has no channel.
+ * every other consent type has no channel.
  */
 export const consentCreateSchema = z
   .object({
@@ -38,7 +47,7 @@ export const consentCreateSchema = z
         message: 'channel is required for REMINDER consent',
       });
     }
-    if (c.consentType === 'DATA_PROCESSING' && c.channel) {
+    if (c.consentType !== 'REMINDER' && c.channel) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['channel'],
