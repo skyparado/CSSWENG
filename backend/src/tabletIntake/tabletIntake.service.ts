@@ -111,7 +111,7 @@ export async function getSessionByToken(token: string): Promise<TabletIntakeSess
 
 async function findOrCreatePatient(
   payload: IntakeFormSubmit,
-  session: { clinicId: string; startedBySecretaryId: string | null },
+  session: { clinicId: string; startedBySecretaryId: string },
 ) {
   // Patient columns are encrypted with a random IV, so dedup matches on the
   // blind indexes (normalised first + last name + mobile) instead.
@@ -126,10 +126,7 @@ async function findOrCreatePatient(
   if (match) return { patient: match, created: false };
 
   // Every Patient records who registered it. The secretary who started the
-  // session stands in; a session whose starter was deleted cannot register.
-  if (!session.startedBySecretaryId) {
-    throw badRequest('This intake session has no registering staff member; start a new one');
-  }
+  // session stands in; submitSession already refused a session without one.
   const patient = await prisma.patient.create({
     data: {
       ...(toDbData({
@@ -149,6 +146,38 @@ async function findOrCreatePatient(
   return { patient, created: true };
 }
 
+/**
+ * The tablet's consent ticks, as PatientConsent rows (QA 8.4).
+ *
+ * The patient ticking the box on the tablet is the consent event, so these are
+ * written at submit time rather than at staff review, and are tagged with the
+ * session they were captured in. Treatment and data privacy are required to
+ * submit at all, so they are always granted; clinical photography is a real
+ * yes or no and is recorded either way, because "declined" is a decision the
+ * clinic has to be able to prove it honored.
+ */
+function consentRowsFor(
+  payload: IntakeFormSubmit,
+  patientId: string,
+  session: { id: string; startedBySecretaryId: string },
+): Prisma.PatientConsentUncheckedCreateInput[] {
+  const common = {
+    patientId,
+    captureMethod: 'TABLET' as const,
+    recordedById: session.startedBySecretaryId,
+    intakeSessionId: session.id,
+  };
+  return [
+    { ...common, consentType: 'TREATMENT', isGranted: payload.consents.treatment },
+    { ...common, consentType: 'DATA_PROCESSING', isGranted: payload.consents.dataPrivacy },
+    {
+      ...common,
+      consentType: 'CLINICAL_PHOTOGRAPHY',
+      isGranted: payload.consents.photoConsent ?? false,
+    },
+  ];
+}
+
 export async function submitSession(token: string, payload: IntakeFormSubmit) {
   const session = await prisma.tabletIntakeSession.findUnique({ where: { token } });
   if (!session) throw notFound('Intake session not found');
@@ -164,7 +193,17 @@ export async function submitSession(token: string, payload: IntakeFormSubmit) {
     throw badRequest('Session has expired');
   }
 
-  const { patient, created } = await findOrCreatePatient(payload, session);
+  // Both the patient record and the consent rows have to name the staff member
+  // who supervised the intake, so refuse up front rather than halfway through.
+  if (!session.startedBySecretaryId) {
+    throw badRequest('This intake session has no registering staff member; start a new one');
+  }
+  const supervised = { id: session.id, startedBySecretaryId: session.startedBySecretaryId };
+
+  const { patient, created } = await findOrCreatePatient(payload, {
+    clinicId: session.clinicId,
+    startedBySecretaryId: supervised.startedBySecretaryId,
+  });
 
   // Submission + status flip in one transaction so a crashed submit never
   // leaves us with a submission row and an ACTIVE session (which would allow
@@ -176,6 +215,9 @@ export async function submitSession(token: string, payload: IntakeFormSubmit) {
         patientId: patient.id,
         rawPayload: payload as any,
       },
+    });
+    await tx.patientConsent.createMany({
+      data: consentRowsFor(payload, patient.id, supervised),
     });
     const updatedSession = await tx.tabletIntakeSession.update({
       where: { id: session.id },
@@ -200,6 +242,8 @@ export async function submitSession(token: string, payload: IntakeFormSubmit) {
       patientId: patient.id,
       patientCreated: created,
       clinicId: session.clinicId,
+      consentsRecorded: ['TREATMENT', 'DATA_PROCESSING', 'CLINICAL_PHOTOGRAPHY'],
+      photoConsentGranted: payload.consents.photoConsent ?? false,
     },
   });
 
