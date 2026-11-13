@@ -77,7 +77,10 @@ async function main() {
   const doctorHash = await argon2.hash(doctorPassword, { type: argon2.argon2id });
   const doctor = await prisma.user.upsert({
     where: { email: doctorEmail },
-    update: {},
+    // Set the username on an existing row too: a database seeded before the
+    // username column existed had one backfilled from the email, and an empty
+    // update would leave that stale value in place.
+    update: { username: doctorUsername },
     create: {
       username: doctorUsername,
       email: doctorEmail,
@@ -94,7 +97,7 @@ async function main() {
   const secretaryHash = await argon2.hash(secretaryPassword, { type: argon2.argon2id });
   const secretary = await prisma.user.upsert({
     where: { email: secretaryEmail },
-    update: {},
+    update: { username: secretaryUsername },
     create: {
       username: secretaryUsername,
       email: secretaryEmail,
@@ -129,7 +132,7 @@ async function main() {
   const applicantPassword = 'ApplicantPass123!';
   await prisma.user.upsert({
     where: { email: applicantEmail },
-    update: {},
+    update: { username: applicantUsername },
     create: {
       username: applicantUsername,
       email: applicantEmail,

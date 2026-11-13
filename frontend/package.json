@@ -12,8 +12,10 @@
   },
   "dependencies": {
     "@clinic/schemas": "*",
+    "konva": "^9.3.16",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-konva": "^18.2.10",
     "recharts": "^2.15.4"
   },
   "devDependencies": {
