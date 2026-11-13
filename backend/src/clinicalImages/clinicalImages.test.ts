@@ -315,3 +315,56 @@ describe('annotation body size (QA 7.5)', () => {
     expect(res.status).toBe(413);
   });
 });
+
+
+describe('accepted file types and size (QA 7)', () => {
+  it('accepts a PDF, which is how outside reports arrive', async () => {
+    const res = await doctorAgent
+      .post('/api/clinical-images')
+      .field('patientId', patientId)
+      .field('caption', 'Referral report')
+      .attach('file', sampleBytes, {
+        filename: 'report.pdf',
+        contentType: 'application/pdf',
+      });
+
+    expect(res.status).toBe(201);
+    createdImageIds.push(res.body.id);
+  });
+
+  it.each([
+    ['webp', 'image/webp', 'scan.webp'],
+    ['gif', 'image/gif', 'scan.gif'],
+    ['svg', 'image/svg+xml', 'scan.svg'],
+  ])('refuses %s, which has no place in a clinical record', async (_label, contentType, filename) => {
+    const res = await doctorAgent
+      .post('/api/clinical-images')
+      .field('patientId', patientId)
+      .attach('file', sampleBytes, { filename, contentType });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('allows a file larger than the old 10mb ceiling, up to 20mb', async () => {
+    // Fundus photography runs well past 10mb, which is why the cap is 20.
+    const big = Buffer.alloc(12 * 1024 * 1024, 7);
+    const res = await doctorAgent
+      .post('/api/clinical-images')
+      .field('patientId', patientId)
+      .attach('file', big, { filename: 'large.png', contentType: 'image/png' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.sizeBytes).toBe(big.byteLength);
+    createdImageIds.push(res.body.id);
+  });
+
+  it('still refuses a file past 20mb', async () => {
+    const tooBig = Buffer.alloc(21 * 1024 * 1024, 7);
+    const res = await doctorAgent
+      .post('/api/clinical-images')
+      .field('patientId', patientId)
+      .attach('file', tooBig, { filename: 'huge.png', contentType: 'image/png' });
+
+    expect(res.status).toBeGreaterThanOrEqual(400);
+  });
+});

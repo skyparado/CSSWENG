@@ -5,17 +5,23 @@ import { z } from 'zod';
 export const imageStatusEnum = z.enum(['ACTIVE', 'DELETED']);
 export type ImageStatus = z.infer<typeof imageStatusEnum>;
 
-/** MIME types the API accepts for clinical images. */
+/**
+ * MIME types the API accepts for clinical images (QA 7).
+ *
+ * JPEG and PNG are what a fundus camera and a phone produce; PDF is here
+ * because outside reports arrive that way. Nothing else: webp and gif were
+ * accepted before and have no place in a clinical record, and gif in
+ * particular is lossy in ways that matter for an image a diagnosis rests on.
+ */
 export const ALLOWED_IMAGE_MIME_TYPES = [
   'image/jpeg',
   'image/png',
-  'image/webp',
-  'image/gif',
+  'application/pdf',
 ] as const;
 export type AllowedImageMimeType = (typeof ALLOWED_IMAGE_MIME_TYPES)[number];
 
-/** 10 MB upload cap. Matches the multer limit in the route. */
-export const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024;
+/** 20 MB upload cap (QA 7). Matches the multer limit in the route. */
+export const MAX_IMAGE_SIZE_BYTES = 20 * 1024 * 1024;
 
 /* ------------------------------- Payloads -------------------------------- */
 
