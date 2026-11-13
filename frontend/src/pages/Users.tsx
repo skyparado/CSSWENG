@@ -663,13 +663,14 @@ function CreateAccountDialog({
           type="text"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          minLength={8}
+          minLength={12}
           required
           aria-describedby="new-password-help"
         />
         <p id="new-password-help" className="muted small">
-          At least 8 characters. Shown as plain text on purpose, so you can
-          read it out to the person. Have them change it after signing in.
+          At least 12 characters, with an uppercase letter, a lowercase letter and a number. Shown as plain
+          text on purpose, so you can read it out to the person. Have them
+          change it after signing in.
         </p>
 
         {error && (
@@ -733,11 +734,11 @@ function ResetPasswordDialog({
           type="text"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          minLength={8}
+          minLength={12}
           required
           autoFocus
         />
-        <p className="muted small">At least 8 characters.</p>
+        <p className="muted small">At least 12 characters, with an uppercase letter, a lowercase letter and a number.</p>
 
         {error && (
           <p className="error" role="alert">
