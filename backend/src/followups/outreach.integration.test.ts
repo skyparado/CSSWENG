@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { prisma } from '../prisma.js';
-import { testPatientData } from '../test-utils/patientData.js';
 import { logOutreachAttempt } from './outreach.service.js';
+import { testPatientData } from '../test-utils/patientData.js';
 
 /**
  * Integration test (real Postgres): outreach attempts logged at the same moment
@@ -23,7 +23,9 @@ beforeAll(async () => {
     },
   });
   const clinic = await prisma.clinic.create({ data: { name: 'Outreach Race Clinic' } });
-  const patient = await prisma.patient.create({ data: testPatientData(clinic.id, user.id) });
+  const patient = await prisma.patient.create({
+    data: testPatientData(clinic.id, user.id, { firstName: 'Race', lastName: 'Patient' }),
+  });
   const followUp = await prisma.followUp.create({
     data: {
       patientId: patient.id,

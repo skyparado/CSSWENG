@@ -29,7 +29,9 @@ beforeAll(async () => {
     },
   });
   const clinic = await prisma.clinic.create({ data: { name: 'Sensitive Fields Clinic' } });
-  const patient = await prisma.patient.create({ data: testPatientData(clinic.id, user.id) });
+  const patient = await prisma.patient.create({
+    data: testPatientData(clinic.id, user.id, { firstName: 'Sensi', lastName: 'Tive' }),
+  });
   const followUp = await prisma.followUp.create({
     data: {
       patientId: patient.id,

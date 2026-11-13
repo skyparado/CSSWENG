@@ -57,6 +57,21 @@ export function createApp(): Express {
   );
 
   app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
+
+  /*
+   * Annotation stroke data (QA 7.5). A detailed drawing over a fundus photo
+   * serialises to well past the 1mb default, so the clinical image router
+   * gets a larger parser.
+   *
+   * Order matters: body-parser marks the request once it has read the body,
+   * so a second parser further down the chain is a no-op. The bigger limit
+   * therefore has to come BEFORE the default, not on the route itself.
+   *
+   * Scoped to /api/clinical-images rather than raised app-wide, so the rest
+   * of the API keeps the tighter limit. That router is doctor-only, which
+   * keeps the larger ceiling behind authentication.
+   */
+  app.use('/api/clinical-images', express.json({ limit: '12mb' }));
   app.use(express.json({ limit: '1mb' }));
 
   // Session middleware comes AFTER cors/json and BEFORE routes so handlers

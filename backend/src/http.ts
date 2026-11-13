@@ -63,6 +63,17 @@ export function errorHandler(
       .status(400)
       .json({ error: 'Validation failed', details: err.flatten() });
   }
+  // Body larger than the configured json limit (QA 7.5). body-parser throws a
+  // plain error carrying type 'entity.too.large' and status 413; pass that
+  // through instead of letting it fall to a generic 500.
+  if (
+    typeof err === 'object' &&
+    err !== null &&
+    'type' in err &&
+    (err as { type: string }).type === 'entity.too.large'
+  ) {
+    return res.status(413).json({ error: 'Payload too large', details: null });
+  }
   // Prisma "record not found" on update/delete.
   if (
     typeof err === 'object' &&

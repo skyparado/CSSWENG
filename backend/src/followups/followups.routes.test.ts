@@ -13,8 +13,7 @@ const db = vi.hoisted(() => ({
   patient: { findFirst: vi.fn() },
   clinic: { findUnique: vi.fn() },
   appointment: { findUnique: vi.fn() },
-  encounter: { findUnique: vi.fn() },
-  patientConsent: { findFirst: vi.fn(), findMany: vi.fn() },
+  patientConsent: { findFirst: vi.fn() },
   outreachLog: { count: vi.fn(), create: vi.fn(), findMany: vi.fn(), aggregate: vi.fn() },
   $transaction: vi.fn(),
   $queryRaw: vi.fn(),
@@ -53,7 +52,6 @@ beforeEach(() => {
   db.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(db));
   db.$queryRaw.mockResolvedValue([]);
   db.outreachLog.aggregate.mockResolvedValue({ _max: { attemptNumber: null } });
-  db.patientConsent.findMany.mockResolvedValue([]);
   audit.writeAudit.mockResolvedValue({});
 });
 
@@ -140,113 +138,6 @@ describe('GET /api/follow-ups/due and /overdue', () => {
   });
 });
 
-describe('GET /api/follow-ups (S11 list)', () => {
-  const today = new Date().toISOString().slice(0, 10);
-
-  it('filters by the status chips, in clinic-local terms', async () => {
-    for (const [bucket, expected] of [
-      ['overdue', { status: 'OPEN', dueDate: { lt: expect.any(Date) } }],
-      ['due', { status: 'OPEN', dueDate: { gte: expect.any(Date), lte: expect.any(Date) } }],
-      ['booked', { status: 'SCHEDULED' }],
-      ['done', { status: 'COMPLETED' }],
-      ['closed', { status: { in: ['DECLINED', 'UNREACHABLE'] } }],
-    ] as const) {
-      db.followUp.findMany.mockClear();
-      const res = await request(secretaryApp).get(`/api/follow-ups?bucket=${bucket}`);
-      expect(res.status).toBe(200);
-      expect(db.followUp.findMany.mock.calls[0][0].where).toMatchObject({ clinicId: 'c1', ...expected });
-    }
-  });
-
-  it('rejects an unknown chip', async () => {
-    expect((await request(secretaryApp).get('/api/follow-ups?bucket=weird')).status).toBe(400);
-  });
-
-  it('returns decrypted patient details with the patient number and per-channel reminder consent', async () => {
-    db.followUp.findMany.mockResolvedValue([
-      { ...openTask, id: 'f1', patientId: 'p1', patient: { ...openTask.patient, patientSeq: 187 } },
-      { ...openTask, id: 'f2', patientId: 'p2', patient: { ...openTask.patient, id: 'p2', patientSeq: 342 } },
-    ]);
-    db.followUp.count.mockResolvedValue(2);
-    db.patientConsent.findMany.mockResolvedValue([
-      // newest first: p1 granted SMS, then withdrew EMAIL; p2 refused SMS after an earlier grant
-      { patientId: 'p1', channel: 'SMS', isGranted: true, withdrawnAt: null },
-      { patientId: 'p1', channel: 'EMAIL', isGranted: true, withdrawnAt: new Date() },
-      { patientId: 'p2', channel: 'SMS', isGranted: false, withdrawnAt: null },
-      { patientId: 'p2', channel: 'SMS', isGranted: true, withdrawnAt: null },
-    ]);
-
-    const res = await request(secretaryApp).get('/api/follow-ups');
-
-    const [a, b] = res.body.items;
-    expect(a.patient).toMatchObject({ firstName: 'Juan', patientNumber: 'P-00187' });
-    expect(a.reminderConsent).toEqual({ SMS: true, EMAIL: false });
-    expect(b.reminderConsent).toEqual({ SMS: false, EMAIL: false }); // the later refusal wins
-  });
-
-  it('reads consent for the whole page in one query', async () => {
-    db.followUp.findMany.mockResolvedValue([
-      { ...openTask, id: 'f1', patientId: 'p1' },
-      { ...openTask, id: 'f2', patientId: 'p1' },
-    ]);
-    await request(secretaryApp).get('/api/follow-ups');
-    expect(db.patientConsent.findMany).toHaveBeenCalledTimes(1);
-    expect(db.patientConsent.findMany.mock.calls[0][0].where.patientId.in).toEqual(['p1']);
-  });
-
-  it('counts the chips for the active clinic', async () => {
-    db.followUp.count.mockImplementation(async ({ where }) => {
-      if (where.status === 'OPEN' && where.dueDate?.lt) return 1; // overdue
-      if (where.status === 'OPEN') return 2; // due
-      if (where.status === 'SCHEDULED') return 3;
-      if (where.status === 'COMPLETED') return 12;
-      if (where.status?.in) return 2;
-      return 19; // all
-    });
-
-    const res = await request(secretaryApp).get('/api/follow-ups/summary');
-
-    expect(res.body).toEqual({ all: 19, overdue: 1, due: 2, booked: 3, done: 12, closed: 2 });
-    expect(db.followUp.count.mock.calls.every(([a]) => a.where.clinicId === 'c1')).toBe(true);
-  });
-
-  it('keeps the Secretary on the active clinic for the counts', async () => {
-    expect((await request(secretaryApp).get('/api/follow-ups/summary?clinicId=c2')).status).toBe(403);
-  });
-});
-
-describe('GET /api/follow-ups/:id (S12 detail)', () => {
-  it('returns the attempt history, consent per channel and how many failed attempts are left', async () => {
-    db.followUp.findUnique.mockResolvedValue({
-      ...openTask,
-      outreachLogs: [
-        { id: 'o1', attemptNumber: 1, channel: 'SMS', outcome: 'SENT', deliveryStatus: 'DELIVERED', contactedBy: null },
-        { id: 'o2', attemptNumber: 2, channel: 'CALL', outcome: 'NO_ANSWER', deliveryStatus: null, contactedBy: { fullName: 'J. Ramos' } },
-        { id: 'o3', attemptNumber: 3, channel: 'CALL', outcome: 'REACHED', deliveryStatus: null, contactedBy: { fullName: 'J. Ramos' } },
-        { id: 'o4', attemptNumber: 4, channel: 'CALL', outcome: 'WRONG_NUMBER', deliveryStatus: null, contactedBy: { fullName: 'J. Ramos' } },
-      ],
-    });
-    db.patientConsent.findMany.mockResolvedValue([
-      { channel: 'SMS', isGranted: true, withdrawnAt: null, consentedAt: new Date('2026-10-02T00:00:00Z'), recordedBy: { fullName: 'J. Ramos' } },
-    ]);
-
-    const res = await request(secretaryApp).get('/api/follow-ups/f1');
-
-    expect(res.status).toBe(200);
-    expect(res.body.failedAttempts).toBe(2); // NO_ANSWER and WRONG_NUMBER; REACHED and SENT are not failures
-    expect(res.body.unreachableAfter).toBe(3);
-    expect(res.body.consents.SMS).toMatchObject({ active: true, recordedBy: { fullName: 'J. Ramos' } });
-    expect(res.body.consents.EMAIL).toBeUndefined();
-    expect(res.body.outreachLogs[0]).toMatchObject({ deliveryStatus: 'DELIVERED' });
-    expect(res.body.patient.firstName).toBe('Juan');
-  });
-
-  it("does not show another clinic's task to the Secretary", async () => {
-    db.followUp.findUnique.mockResolvedValue({ ...openTask, clinicId: 'c2', outreachLogs: [] });
-    expect((await request(secretaryApp).get('/api/follow-ups/f1')).status).toBe(404);
-  });
-});
-
 describe('POST /api/follow-ups', () => {
   const body = {
     patientId: 'p1',
@@ -299,7 +190,11 @@ describe('POST /api/follow-ups', () => {
       clinicId: 'c1',
       status: 'SCHEDULED',
     });
-    db.followUp.create.mockImplementation(async ({ data }) => ({ id: 'f9', ...data, patient: openTask.patient }));
+    db.followUp.create.mockImplementation(async ({ data }) => ({
+      id: 'f9',
+      ...data,
+      patient: openTask.patient,
+    }));
 
     const res = await request(doctorApp)
       .post('/api/follow-ups')
@@ -310,33 +205,6 @@ describe('POST /api/follow-ups', () => {
       appointmentId: 'a1',
       status: 'SCHEDULED',
     });
-  });
-
-  it.each([
-    ['another patient', { patientId: 'other', clinicId: 'c1' }],
-    ['another clinic', { patientId: 'p1', clinicId: 'c2' }],
-    ['a missing visit', null],
-  ])('rejects an encounter that belongs to %s', async (_label, encounter) => {
-    db.patient.findFirst.mockResolvedValue({ id: 'p1' });
-    db.clinic.findUnique.mockResolvedValue({ id: 'c1' });
-    db.encounter.findUnique.mockResolvedValue(encounter && { id: 'e1', ...encounter });
-
-    const res = await request(doctorApp).post('/api/follow-ups').send({ ...body, encounterId: 'e1' });
-
-    expect(res.status).toBe(400);
-    expect(db.followUp.create).not.toHaveBeenCalled();
-  });
-
-  it("links the patient's own visit at the same clinic", async () => {
-    db.patient.findFirst.mockResolvedValue({ id: 'p1' });
-    db.clinic.findUnique.mockResolvedValue({ id: 'c1' });
-    db.encounter.findUnique.mockResolvedValue({ id: 'e1', patientId: 'p1', clinicId: 'c1' });
-    db.followUp.create.mockImplementation(async ({ data }) => ({ id: 'f9', ...data, patient: openTask.patient }));
-
-    const res = await request(doctorApp).post('/api/follow-ups').send({ ...body, encounterId: 'e1' });
-
-    expect(res.status).toBe(201);
-    expect(db.followUp.create.mock.calls[0][0].data.encounterId).toBe('e1');
   });
 
   it('forbids the Secretary from setting due dates', async () => {

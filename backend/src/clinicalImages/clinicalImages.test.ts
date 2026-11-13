@@ -258,3 +258,60 @@ describe('Annotations', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('annotation body size (QA 7.5)', () => {
+  let bigImageId = '';
+
+  beforeAll(async () => {
+    const res = await doctorAgent
+      .post('/api/clinical-images')
+      .field('patientId', patientId)
+      .attach('file', sampleBytes, { filename: 'big-drawing.png', contentType: 'image/png' });
+    bigImageId = res.body.id;
+    createdImageIds.push(bigImageId);
+  });
+
+  it('accepts a detailed drawing larger than the default body limit', async () => {
+    /*
+     * A real annotation is freehand pen strokes, not a handful of shapes.
+     * Roughly 1,200 strokes of 120 coordinates each is what a doctor circling
+     * and hatching findings over a fundus photo produces, and it serialises
+     * past the 1mb default parser limit.
+     *
+     * This uses its own image so the layer version here cannot disturb the
+     * sequence the append-only tests above assert.
+     */
+    const shapes = Array.from({ length: 1200 }, (_, stroke) => ({
+      type: 'line',
+      stroke: '#d32f2f',
+      strokeWidth: 2,
+      points: Array.from({ length: 120 }, (_, i) =>
+        Number(((stroke * 7 + i * 3.14159) % 1024).toFixed(3)),
+      ),
+    }));
+    const konvaData = { stage: 'detailed', shapes };
+
+    const bytes = Buffer.byteLength(JSON.stringify({ konvaData }));
+    // Guard the guard: under 1mb this would pass on the default limit too,
+    // so it would stop proving anything.
+    expect(bytes).toBeGreaterThan(1_048_576);
+
+    const res = await doctorAgent
+      .post(`/api/clinical-images/${bigImageId}/annotations`)
+      .send({ konvaData });
+
+    // A 413 here means the larger parser is not mounted ahead of the 1mb
+    // default in app.ts.
+    expect(res.status).toBe(201);
+    expect(res.body.version).toBe(1);
+  });
+
+  it('still refuses an oversized body on an ordinary route', async () => {
+    // The wider ceiling is scoped to the clinical image router, so the rest
+    // of the API keeps the tighter one.
+    const res = await doctorAgent
+      .post('/api/auth/select-clinic')
+      .send({ clinicId: 'x'.repeat(1_200_000) });
+    expect(res.status).toBe(413);
+  });
+});
