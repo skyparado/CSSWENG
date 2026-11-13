@@ -111,11 +111,16 @@ export const adminApi = {
   }) => call<Paged<AdminUser>>('GET', `/api/users?${qs(query)}`),
 
   createUser: (body: {
+    username: string;
     email: string;
     fullName: string;
     password: string;
     role: UserRole;
   }) => call<AdminUser>('POST', '/api/users', body),
+
+  /** Make an account set a new password before it can do anything else. */
+  forcePasswordReset: (id: string) =>
+    call<AdminUser>('POST', `/api/users/${id}/force-password-reset`),
 
   updateUser: (id: string, body: { fullName?: string; role?: UserRole }) =>
     call<AdminUser>('PATCH', `/api/users/${id}`, body),

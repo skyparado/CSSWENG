@@ -21,7 +21,7 @@ const app = createApp();
 let doctor: Awaited<ReturnType<typeof loginAgent>>;
 let mine = '';
 let theirs = '';
-let secretaryEmail = '';
+let secretaryUsername = '';
 let secretaryId = '';
 const SECRETARY_PASSWORD = 'ScopePass123!';
 /** Signed in as a Secretary assigned to `mine` only, active clinic `mine`. */
@@ -82,10 +82,11 @@ beforeAll(async () => {
   // Doctor may act on any of them.
   doctor = await loginAgent(app, 'DOCTOR', mine);
 
-  secretaryEmail = `intake-scope-${Date.now()}@test.local`;
+  secretaryUsername = `intake-scope-${Date.now()}`;
   const user = await prisma.user.create({
     data: {
-      email: secretaryEmail,
+      username: secretaryUsername,
+      email: `${secretaryUsername}@test.local`,
       fullName: 'Scoped Secretary',
       passwordHash: await hashPassword(SECRETARY_PASSWORD),
       role: 'SECRETARY',
@@ -99,7 +100,7 @@ beforeAll(async () => {
   secretary = supertest.agent(app);
   await secretary
     .post('/api/auth/login')
-    .send({ email: secretaryEmail, password: SECRETARY_PASSWORD })
+    .send({ username: secretaryUsername, password: SECRETARY_PASSWORD })
     .expect(200);
   await secretary.post('/api/auth/select-clinic').send({ clinicId: mine }).expect(200);
 });
@@ -256,7 +257,7 @@ describe('with no active clinic selected', () => {
     const fresh = supertest.agent(app);
     await fresh
       .post('/api/auth/login')
-      .send({ email: secretaryEmail, password: SECRETARY_PASSWORD })
+      .send({ username: secretaryUsername, password: SECRETARY_PASSWORD })
       .expect(200);
     // Signed in, but no select-clinic call yet.
     await fresh.get('/api/tablet-intake/submissions').query({ clinicId: mine }).expect(400);

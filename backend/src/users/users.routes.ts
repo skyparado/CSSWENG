@@ -25,6 +25,7 @@ import {
   resetPassword,
   revokeUser,
   unlockUser,
+  forcePasswordReset,
   updateUser,
 } from './users.service.js';
 
@@ -197,6 +198,26 @@ usersRouter.post(
     const user = await unlockUser(req.params.id);
     recordEvent(req, res, {
       action: AuditActions.USER_UNLOCKED,
+      resourceType: 'User',
+      resourceId: user.id,
+      metadata: { email: user.email },
+    });
+    res.json(user);
+  }),
+);
+
+/**
+ * POST /api/users/:id/force-password-reset — the account must set a new
+ * password before it can do anything else. Used when a password may have been
+ * seen by someone else and there is no reason to hand out a new one yet.
+ */
+usersRouter.post(
+  '/:id/force-password-reset',
+  validate(idParamSchema, 'params'),
+  asyncHandler(async (req, res) => {
+    const user = await forcePasswordReset(req.params.id);
+    recordEvent(req, res, {
+      action: AuditActions.USER_PASSWORD_RESET_FORCED,
       resourceType: 'User',
       resourceId: user.id,
       metadata: { email: user.email },

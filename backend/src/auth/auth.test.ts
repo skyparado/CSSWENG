@@ -11,20 +11,22 @@ import {
  *  - All failure paths return 401 "Invalid credentials" (no status leak)
  *  - LOCKED is permanent until the doctor unlocks (POST /api/users/:id/unlock)
  *  - Failed-attempt counter increments atomically
- *  - Unknown emails still run a hash verify (timing-attack mitigation)
+ *  - Unknown usernames still run a hash verify (timing-attack mitigation)
  *
- * Each test creates its own user with a unique email so parallel runs do not
- * collide, and tears it down at the end.
+ * Each test creates its own user with a unique username so parallel runs do
+ * not collide, and tears it down at the end.
  */
 describe('auth.service lockout policy', () => {
-  const uniqueEmail = () =>
-    `test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@test.local`;
+  // A username, not an email: authenticate() takes the sign-in credential.
+  const uniqueLogin = () =>
+    `test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-  async function createUser(email: string, password: string) {
+  async function createUser(login: string, password: string) {
     const hash = await hashPassword(password);
     return prisma.user.create({
       data: {
-        email,
+        username: login,
+        email: `${login}@test.local`,
         fullName: 'Test User',
         passwordHash: hash,
         role: 'SECRETARY',
@@ -33,63 +35,63 @@ describe('auth.service lockout policy', () => {
     });
   }
 
-  async function cleanup(email: string) {
-    await prisma.user.deleteMany({ where: { email } });
+  async function cleanup(login: string) {
+    await prisma.user.deleteMany({ where: { username: login } });
   }
 
   it('authenticates with the correct password and clears failure counters', async () => {
-    const email = uniqueEmail();
+    const login = uniqueLogin();
     const password = 'CorrectPass123!';
-    await createUser(email, password);
+    await createUser(login, password);
 
-    const user = await authenticate(email, password);
-    expect(user.email).toBe(email);
+    const user = await authenticate(login, password);
+    expect(user.username).toBe(login);
 
-    const after = await prisma.user.findUnique({ where: { email } });
+    const after = await prisma.user.findUnique({ where: { username: login } });
     expect(after?.failedLoginAttempts).toBe(0);
     expect(after?.lastLoginAt).not.toBeNull();
 
-    await cleanup(email);
+    await cleanup(login);
   });
 
   it('rejects a wrong password with 401 "Invalid credentials" and carries attemptsRemaining', async () => {
-    const email = uniqueEmail();
-    await createUser(email, 'CorrectPass123!');
+    const login = uniqueLogin();
+    await createUser(login, 'CorrectPass123!');
 
-    await expect(authenticate(email, 'wrong')).rejects.toMatchObject({
+    await expect(authenticate(login, 'wrong')).rejects.toMatchObject({
       status: 401,
       message: 'Invalid credentials',
       attemptsRemaining: 4,
     });
 
-    const after = await prisma.user.findUnique({ where: { email } });
+    const after = await prisma.user.findUnique({ where: { username: login } });
     expect(after?.failedLoginAttempts).toBe(1);
     expect(after?.firstFailedLoginAt).not.toBeNull();
 
-    await cleanup(email);
+    await cleanup(login);
   });
 
   it('locks the account after 5 consecutive failed attempts (SRS 7.2)', async () => {
-    const email = uniqueEmail();
-    await createUser(email, 'CorrectPass123!');
+    const login = uniqueLogin();
+    await createUser(login, 'CorrectPass123!');
 
     for (let i = 0; i < 5; i++) {
-      await expect(authenticate(email, 'wrong')).rejects.toBeInstanceOf(
+      await expect(authenticate(login, 'wrong')).rejects.toBeInstanceOf(
         InvalidCredentialsError,
       );
     }
 
-    const locked = await prisma.user.findUnique({ where: { email } });
+    const locked = await prisma.user.findUnique({ where: { username: login } });
     expect(locked?.status).toBe('LOCKED');
     expect(locked?.failedLoginAttempts).toBe(5);
 
-    await cleanup(email);
+    await cleanup(login);
   });
 
   it('keeps a LOCKED account locked indefinitely — even with the correct password — until the doctor unlocks', async () => {
-    const email = uniqueEmail();
+    const login = uniqueLogin();
     const password = 'CorrectPass123!';
-    const user = await createUser(email, password);
+    const user = await createUser(login, password);
 
     // Simulate the lockout state the doctor would see.
     await prisma.user.update({
@@ -99,7 +101,7 @@ describe('auth.service lockout policy', () => {
 
     // Correct password: still rejected with the generic 401 — status is NOT
     // revealed, and it never auto-clears.
-    await expect(authenticate(email, password)).rejects.toMatchObject({
+    await expect(authenticate(login, password)).rejects.toMatchObject({
       status: 401,
       message: 'Invalid credentials',
       attemptsRemaining: null,
@@ -116,49 +118,49 @@ describe('auth.service lockout policy', () => {
         lockedUntil: null,
       },
     });
-    const authed = await authenticate(email, password);
-    expect(authed.email).toBe(email);
+    const authed = await authenticate(login, password);
+    expect(authed.username).toBe(login);
 
-    await cleanup(email);
+    await cleanup(login);
   });
 
   it('rejects a REVOKED account with the same generic 401 (no status leak)', async () => {
-    const email = uniqueEmail();
-    const user = await createUser(email, 'CorrectPass123!');
+    const login = uniqueLogin();
+    const user = await createUser(login, 'CorrectPass123!');
     await prisma.user.update({
       where: { id: user.id },
       data: { status: 'REVOKED' },
     });
 
-    await expect(authenticate(email, 'CorrectPass123!')).rejects.toMatchObject({
+    await expect(authenticate(login, 'CorrectPass123!')).rejects.toMatchObject({
       status: 401,
       message: 'Invalid credentials',
       attemptsRemaining: null,
     });
 
-    await cleanup(email);
+    await cleanup(login);
   });
 
   it('rejects a PENDING account with the same generic 401 (no status leak)', async () => {
-    const email = uniqueEmail();
-    const user = await createUser(email, 'CorrectPass123!');
+    const login = uniqueLogin();
+    const user = await createUser(login, 'CorrectPass123!');
     await prisma.user.update({
       where: { id: user.id },
       data: { status: 'PENDING' },
     });
 
-    await expect(authenticate(email, 'CorrectPass123!')).rejects.toMatchObject({
+    await expect(authenticate(login, 'CorrectPass123!')).rejects.toMatchObject({
       status: 401,
       message: 'Invalid credentials',
       attemptsRemaining: null,
     });
 
-    await cleanup(email);
+    await cleanup(login);
   });
 
-  it('returns the same 401 for unknown email as for wrong password (no account enumeration)', async () => {
-    const email = uniqueEmail();
-    await expect(authenticate(email, 'anything')).rejects.toMatchObject({
+  it('returns the same 401 for unknown login as for wrong password (no account enumeration)', async () => {
+    const login = uniqueLogin();
+    await expect(authenticate(login, 'anything')).rejects.toMatchObject({
       status: 401,
       message: 'Invalid credentials',
       attemptsRemaining: null,

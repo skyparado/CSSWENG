@@ -15,6 +15,7 @@ import PatientChart from './pages/PatientChart';
 import ConsultationNote from './pages/ConsultationNote';
 import Comparison from './pages/Comparison';
 import Login from './pages/Login';
+import ChangePassword from './pages/ChangePassword';
 import Users from './pages/Users';
 import AuditLog from './pages/AuditLog';
 import Intake from './pages/Intake';
@@ -81,7 +82,7 @@ export default function App() {
   useEffect(() => {
     // On failure settle on an empty list rather than leaving it undefined,
     // so the UI explains itself instead of spinning forever.
-    if (user) {
+    if (user && !user.mustResetPassword) {
       void api.listClinics().then(
         (r) => setClinics(r.items),
         () => setClinics([]),
@@ -93,6 +94,25 @@ export default function App() {
 
   if (user === undefined) return <p className="page">Loading…</p>;
   if (user === null) return <Login onLogin={setUser} />;
+
+  // A temporary password gets exactly one screen. The server refuses every
+  // other route until it is changed, so showing the app would only produce
+  // errors the person cannot act on.
+  if (user.mustResetPassword) {
+    return (
+      <ChangePassword
+        user={user}
+        onDone={setUser}
+        onSignOut={() => {
+          void api.logout().finally(() => {
+            sessionStorage.clear();
+            setUser(null);
+            go('/dashboard');
+          });
+        }}
+      />
+    );
+  }
 
   const session: Session = {
     user,

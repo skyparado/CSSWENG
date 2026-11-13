@@ -20,18 +20,19 @@ import { env } from '../env.js';
 
 const app = createApp();
 
-const uniqueEmail = () =>
-  `idletest-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@test.local`;
+const uniqueUsername = () =>
+  `idle-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const password = 'IdleTestPass123!';
-let email = '';
+let username = '';
 let userId = '';
 
 beforeAll(async () => {
-  email = uniqueEmail();
+  username = uniqueUsername();
   const hash = await hashPassword(password);
   const user = await prisma.user.create({
     data: {
-      email,
+      username,
+      email: `${username}@test.local`,
       fullName: 'Idle Timeout Test',
       passwordHash: hash,
       role: 'DOCTOR',
@@ -78,7 +79,7 @@ describe('session idle timeout (QA 2.5)', () => {
   it('sets the session cookie expiry to SESSION_IDLE_TIMEOUT_MINUTES on login', async () => {
     const res = await supertest(app)
       .post('/api/auth/login')
-      .send({ email, password });
+      .send({ username, password });
     expect(res.status).toBe(200);
 
     const cookie = pickSessionCookie(res.headers['set-cookie']);
@@ -94,7 +95,7 @@ describe('session idle timeout (QA 2.5)', () => {
 
   it('refreshes expiry on each subsequent request (rolling idle timeout)', async () => {
     const agent = supertest.agent(app);
-    const login = await agent.post('/api/auth/login').send({ email, password });
+    const login = await agent.post('/api/auth/login').send({ username, password });
     expect(login.status).toBe(200);
 
     // Short wait so a rolling cookie's expiry visibly shifts.
@@ -120,7 +121,7 @@ describe('session idle timeout (QA 2.5)', () => {
   it('cookie is HttpOnly and SameSite=lax', async () => {
     const res = await supertest(app)
       .post('/api/auth/login')
-      .send({ email, password });
+      .send({ username, password });
     expect(res.status).toBe(200);
 
     const cookie = pickSessionCookie(res.headers['set-cookie']);

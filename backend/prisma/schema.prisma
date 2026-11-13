@@ -291,6 +291,10 @@ model LabResult {
 /// clinics each account may work in (see UserClinic).
 model User {
   id                  String     @id @default(cuid())
+  /// What staff type to sign in (SRS, SDD and S01). Lowercased on the way in.
+  username            String     @unique
+  /// Kept on the record for the audit trail and as a contact address. Not a
+  /// credential: nothing is ever sent to it, and it is not used to sign in.
   email               String     @unique
   fullName            String
   passwordHash        String
@@ -307,6 +311,12 @@ model User {
   firstFailedLoginAt  DateTime?
   lockedUntil         DateTime?
   lastLoginAt         DateTime?
+  /// Argon2 hashes of recent passwords, newest first, so a password cannot be
+  /// reused (SDD 7.2). Capped at PASSWORD_HISTORY_SIZE; never the current one.
+  passwordHistory     String[]
+  /// Set when the doctor hands out a temporary password or forces a reset. The
+  /// account can sign in but can do nothing else until it sets a new password.
+  mustResetPassword   Boolean    @default(false)
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt
 

@@ -18,7 +18,7 @@ const FAILED_WINDOW_MS = 15 * 60 * 1000;
  * enumeration QA 1 asked us to close.
  */
 export type AuthFailureReason =
-  | 'unknown_email'
+  | 'unknown_username'
   | 'account_not_active'
   | 'wrong_password';
 
@@ -64,6 +64,14 @@ export async function hashPassword(plain: string): Promise<string> {
 }
 
 /**
+ * Check a password against a stored hash. A malformed or legacy hash counts as
+ * a mismatch rather than an exception, so a bad row cannot be a way in.
+ */
+export async function verifyPassword(hash: string, plain: string): Promise<boolean> {
+  return argon2.verify(hash, plain).catch(() => false);
+}
+
+/**
  * Cached dummy argon2id hash. We verify against it on the unknown-email path
  * so response time is indistinguishable from a real failed verify — no
  * account enumeration via timing.
@@ -85,17 +93,17 @@ function getDummyHash(): Promise<string> {
  * attempt counter with SELECT ... FOR UPDATE.
  */
 export async function authenticate(
-  emailLower: string,
+  usernameLower: string,
   password: string,
 ): Promise<User> {
-  const user = await prisma.user.findUnique({ where: { email: emailLower } });
+  const user = await prisma.user.findUnique({ where: { username: usernameLower } });
 
   if (!user) {
     // Timing-uniform path for unknown accounts.
     await argon2.verify(await getDummyHash(), password).catch(() => undefined);
     throw new InvalidCredentialsError({
       attemptsRemaining: null,
-      reason: 'unknown_email',
+      reason: 'unknown_username',
     });
   }
 

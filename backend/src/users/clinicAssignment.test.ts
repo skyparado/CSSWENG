@@ -26,6 +26,7 @@ const createdUserIds: string[] = [];
 async function pendingSecretary() {
   const user = await prisma.user.create({
     data: {
+      username: `assign-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       email: `assign-${Date.now()}-${Math.random().toString(36).slice(2, 7)}@test.local`,
       fullName: 'Clinic Assignment Target',
       passwordHash: await hashPassword('AssignPass123!'),
@@ -231,7 +232,7 @@ describe('what the assignment actually gates', () => {
     const agent = supertest.agent(app);
     await agent
       .post('/api/auth/login')
-      .send({ email: applicant.email, password })
+      .send({ username: applicant.username, password })
       .expect(200);
 
     await agent.post('/api/auth/select-clinic').send({ clinicId: clinicA }).expect(200);

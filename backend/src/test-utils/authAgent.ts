@@ -23,16 +23,21 @@ export async function loginAgent(
 ): Promise<{
   agent: ReturnType<typeof request.agent>;
   userId: string;
+  /** What this account signs in with, for tests that log in a second time. */
+  username: string;
+  email: string;
+  password: string;
   cleanup: () => Promise<void>;
 }> {
-  const email = `test-${Date.now()}-${Math.random()
-    .toString(36)
-    .slice(2, 8)}@test.local`;
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const username = `test-${suffix}`;
+  const email = `test-${suffix}@test.local`;
   const password = 'TestPass123!';
   const hash = await hashPassword(password);
 
   const user = await prisma.user.create({
     data: {
+      username,
       email,
       fullName: `Test ${role}`,
       passwordHash: hash,
@@ -46,7 +51,7 @@ export async function loginAgent(
   }
 
   const agent = request.agent(app);
-  await agent.post('/api/auth/login').send({ email, password }).expect(200);
+  await agent.post('/api/auth/login').send({ username, password }).expect(200);
 
   if (clinicId) {
     await agent.post('/api/auth/select-clinic').send({ clinicId }).expect(200);
@@ -55,6 +60,9 @@ export async function loginAgent(
   return {
     agent,
     userId: user.id,
+    username,
+    email,
+    password,
     async cleanup() {
       // UserClinic cascades on user delete, but be explicit so a failed
       // cascade does not leave the row pointing at a deleted account.

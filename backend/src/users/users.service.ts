@@ -1,7 +1,8 @@
 import type { Prisma, UserStatus } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { badRequest, notFound } from '../http.js';
-import { hashPassword } from '../auth/auth.service.js';
+import { assertPasswordAcceptable, nextPasswordHistory } from '../auth/passwordPolicy.js';
+import { hashPassword, verifyPassword } from '../auth/auth.service.js';
 import type {
   AdminUser,
   UserCreate,
@@ -17,6 +18,7 @@ import type {
 /** Columns the API ever returns. Excludes passwordHash and lockout internals. */
 const PUBLIC_SELECT = {
   id: true,
+  username: true,
   email: true,
   fullName: true,
   role: true,
@@ -25,6 +27,7 @@ const PUBLIC_SELECT = {
   approvedById: true,
   approvedAt: true,
   lockedUntil: true,
+  mustResetPassword: true,
   lastLoginAt: true,
   createdAt: true,
   updatedAt: true,
@@ -42,6 +45,7 @@ type PublicUser = Prisma.UserGetPayload<{ select: typeof PUBLIC_SELECT }>;
 function toPublic(user: PublicUser): AdminUser {
   return {
     id: user.id,
+    username: user.username,
     email: user.email,
     fullName: user.fullName,
     role: user.role,
@@ -51,6 +55,7 @@ function toPublic(user: PublicUser): AdminUser {
     approvedAt: user.approvedAt,
     clinicIds: user.clinics.map((c) => c.clinicId),
     lockedUntil: user.lockedUntil,
+    mustResetPassword: user.mustResetPassword,
     lastLoginAt: user.lastLoginAt,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
@@ -91,12 +96,24 @@ export async function createUser(
   input: UserCreate,
   actingDoctorId?: string,
 ): Promise<AdminUser> {
-  const existing = await prisma.user.findUnique({ where: { email: input.email } });
-  if (existing) throw badRequest('A user with that email already exists');
+  const existingEmail = await prisma.user.findUnique({ where: { email: input.email } });
+  if (existingEmail) throw badRequest('A user with that email already exists');
+
+  const existingUsername = await prisma.user.findUnique({
+    where: { username: input.username },
+  });
+  if (existingUsername) throw badRequest('That username is already taken');
+
+  await assertPasswordAcceptable(input.password, {
+    username: input.username,
+    email: input.email,
+    fullName: input.fullName,
+  });
 
   const passwordHash = await hashPassword(input.password);
   const user = await prisma.user.create({
     data: {
+      username: input.username,
       email: input.email,
       fullName: input.fullName,
       role: input.role,
@@ -107,6 +124,9 @@ export async function createUser(
       status: 'ACTIVE',
       approvedById: actingDoctorId ?? null,
       approvedAt: new Date(),
+      // The doctor reads this password out loud to the person, so it is
+      // temporary by definition: they must set their own before working.
+      mustResetPassword: true,
     },
     select: PUBLIC_SELECT,
   });
@@ -263,16 +283,74 @@ export async function resetPassword(id: string, newPassword: string): Promise<Ad
   const existing = await prisma.user.findUnique({ where: { id } });
   if (!existing) throw notFound('User not found');
 
+  await assertPasswordAcceptable(newPassword, {
+    username: existing.username,
+    email: existing.email,
+    fullName: existing.fullName,
+    passwordHash: existing.passwordHash,
+    passwordHistory: existing.passwordHistory,
+  });
+
   const passwordHash = await hashPassword(newPassword);
   const user = await prisma.user.update({
     where: { id },
     data: {
       passwordHash,
+      passwordHistory: nextPasswordHistory(existing.passwordHash, existing.passwordHistory),
+      // The doctor hands this one over in person, so it is temporary too.
+      mustResetPassword: true,
       // A password reset also clears lockout counters.
       failedLoginAttempts: 0,
       firstFailedLoginAt: null,
       lockedUntil: null,
     },
+    select: PUBLIC_SELECT,
+  });
+  return toPublic(user);
+}
+
+/**
+ * An account changing its own password. Clears the forced-reset flag, which is
+ * the only way to clear it, and records the replaced hash so it cannot come
+ * back within the history window.
+ */
+export async function changeOwnPassword(
+  id: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  const existing = await prisma.user.findUnique({ where: { id } });
+  if (!existing) throw notFound('User not found');
+
+  const ok = await verifyPassword(existing.passwordHash, currentPassword);
+  if (!ok) throw badRequest('Current password is incorrect');
+
+  await assertPasswordAcceptable(newPassword, {
+    username: existing.username,
+    email: existing.email,
+    fullName: existing.fullName,
+    passwordHash: existing.passwordHash,
+    passwordHistory: existing.passwordHistory,
+  });
+
+  await prisma.user.update({
+    where: { id },
+    data: {
+      passwordHash: await hashPassword(newPassword),
+      passwordHistory: nextPasswordHistory(existing.passwordHash, existing.passwordHistory),
+      mustResetPassword: false,
+    },
+  });
+}
+
+/** Doctor forces an account to set a new password before it can work again. */
+export async function forcePasswordReset(id: string): Promise<AdminUser> {
+  const existing = await prisma.user.findUnique({ where: { id } });
+  if (!existing) throw notFound('User not found');
+
+  const user = await prisma.user.update({
+    where: { id },
+    data: { mustResetPassword: true },
     select: PUBLIC_SELECT,
   });
   return toPublic(user);

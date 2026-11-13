@@ -15,6 +15,7 @@ const followUpRef = () => ({ id: ids.followUp, patientId: ids.patient, clinicId:
 beforeAll(async () => {
   const user = await prisma.user.create({
     data: {
+      username: `outreach-${Date.now()}`,
       email: `outreach-${Date.now()}@test.local`,
       fullName: 'Outreach Tester',
       passwordHash: 'x',
