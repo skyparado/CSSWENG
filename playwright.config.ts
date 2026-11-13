@@ -25,10 +25,19 @@ export default defineConfig({
     : [
         {
           command: 'npm run dev:backend',
-          // Real email to Mailpit (docker-compose.yml), so the send test can read it.
+          // Real email to Mailpit (docker-compose.yml), so the send tests can read it.
           // NODE_ENV=test matches CI and turns off the login rate limiter,
           // which the suite's many sign-ins would otherwise trip.
-          env: { NODE_ENV: 'test', EMAIL_PROVIDER: 'smtp', SMTP_URL: 'smtp://localhost:1025' },
+          // REMINDERS_ENABLED runs the reminder worker (needs Redis), which sends the
+          // reminder emails that e2e/reminders.spec.ts looks for in Mailpit. Exports,
+          // backups and purges are not exercised here, so their worker stays off.
+          env: {
+            NODE_ENV: 'test',
+            EMAIL_PROVIDER: 'smtp',
+            SMTP_URL: 'smtp://localhost:1025',
+            REMINDERS_ENABLED: 'true',
+            BACKGROUND_JOBS_ENABLED: 'false',
+          },
           url: 'http://localhost:4000/health',
           reuseExistingServer: true,
           timeout: 120_000,

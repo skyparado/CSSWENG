@@ -58,6 +58,28 @@ services:
         sync: false
       - key: EMAIL_FROM # e.g. "Dr. Pacio's Clinic <clinic@yourdomain.ph>"
         sync: false
+      # SMS reminders: "stub" only logs. When the clinic picks a provider set
+      # SMS_PROVIDER to twilio or semaphore and add that provider's credentials
+      # (see backend/.env.example). PUBLIC_BASE_URL is where delivery reports arrive.
+      - key: SMS_PROVIDER
+        value: stub
+      - key: PUBLIC_BASE_URL # e.g. https://clinic-emr.onrender.com (no trailing slash)
+        sync: false
+      # Nightly database backup (pg_dump, encrypted) to a SEPARATE bucket, and the
+      # retention purge. BACKUP_ENCRYPTION_KEY: 32 random bytes, base64 (as above);
+      # back it up somewhere other than the backups themselves, or they cannot be read.
+      - key: BACKUP_ENCRYPTION_KEY
+        sync: false
+      - key: BACKUP_S3_BUCKET
+        sync: false
+      - key: BACKUP_S3_ENDPOINT
+        sync: false
+      - key: BACKUP_S3_REGION
+        sync: false
+      - key: BACKUP_S3_ACCESS_KEY_ID
+        sync: false
+      - key: BACKUP_S3_SECRET_ACCESS_KEY
+        sync: false
 
   - type: keyvalue
     name: clinic-redis

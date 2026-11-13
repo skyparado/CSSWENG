@@ -19,3 +19,34 @@ export async function findActiveReminderConsent(
   if (!latest || !latest.isGranted || latest.withdrawnAt) return null;
   return latest;
 }
+
+export interface ReminderConsentView {
+  active: boolean;
+  isGranted: boolean;
+  consentedAt: Date;
+  withdrawnAt: Date | null;
+  recordedBy: { fullName: string };
+}
+
+/** The latest reminder consent decision per channel, with who recorded it (S12). */
+export async function latestReminderConsents(
+  patientId: string,
+): Promise<Partial<Record<ReminderChannel, ReminderConsentView>>> {
+  const rows = await prisma.patientConsent.findMany({
+    where: { patientId, consentType: 'REMINDER' },
+    orderBy: { consentedAt: 'desc' },
+    include: { recordedBy: { select: { fullName: true } } },
+  });
+  const out: Partial<Record<ReminderChannel, ReminderConsentView>> = {};
+  for (const r of rows) {
+    if (!r.channel || out[r.channel]) continue;
+    out[r.channel] = {
+      active: r.isGranted && !r.withdrawnAt,
+      isGranted: r.isGranted,
+      consentedAt: r.consentedAt,
+      withdrawnAt: r.withdrawnAt,
+      recordedBy: r.recordedBy,
+    };
+  }
+  return out;
+}

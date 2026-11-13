@@ -94,6 +94,8 @@ export const followUpCreateSchema = z.object({
   patientId: idSchema,
   clinicId: idSchema.optional(),
   appointmentId: idSchema.optional(),
+  /** The visit the task is set from; must be this patient's visit at this clinic. */
+  encounterId: idSchema.optional(),
   taskType: followUpTaskTypeSchema,
   reason: z.string().min(1).max(255),
   dueDate: calendarDateSchema,
@@ -121,9 +123,15 @@ const followUpFilterShape = {
   reason: z.string().max(255).optional(),
 };
 
+/** The S11 status chips. Derived from status and due date rather than stored. */
+export const followUpBucketSchema = z.enum(['overdue', 'due', 'booked', 'done', 'closed']);
+export type FollowUpBucket = z.infer<typeof followUpBucketSchema>;
+
 export const followUpQuerySchema = paginationSchema.extend({
   ...followUpFilterShape,
   status: followUpStatusSchema.optional(),
+  /** overdue: open and past due. due: open, due within 7 days. booked: scheduled. done: completed. closed: declined or unreachable. */
+  bucket: followUpBucketSchema.optional(),
 });
 export type FollowUpQuery = z.infer<typeof followUpQuerySchema>;
 

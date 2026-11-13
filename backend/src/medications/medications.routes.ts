@@ -47,6 +47,8 @@ interface StoredAcknowledgement {
   acknowledgedAt: string;
   acknowledgedById: string;
   referenceVersion: number;
+  /** Why the Doctor proceeded despite the alerts, if they said. */
+  reason?: string;
   alerts: SafetyAlert[];
 }
 
@@ -63,7 +65,7 @@ interface StoredAcknowledgement {
  */
 function acknowledge(
   alerts: SafetyAlert[],
-  body: { acknowledgeAlerts: boolean; acknowledgedAlerts?: AcknowledgedAlert[] },
+  body: { acknowledgeAlerts: boolean; acknowledgedAlerts?: AcknowledgedAlert[]; acknowledgementReason?: string },
   doctorId: string,
 ): StoredAcknowledgement | null {
   if (alerts.length === 0) return null;
@@ -79,6 +81,7 @@ function acknowledge(
     acknowledgedAt: new Date().toISOString(),
     acknowledgedById: doctorId,
     referenceVersion: getDrugReference().version,
+    ...(body.acknowledgementReason ? { reason: body.acknowledgementReason } : {}),
     alerts,
   };
 }
@@ -105,6 +108,8 @@ function auditAcknowledgement(
         medicationName: medication.medicationName,
         change,
         referenceVersion: ack.referenceVersion,
+        // The wording stays in the medication row; the audit log only notes that one was given.
+        reasonGiven: Boolean(ack.reason),
         alerts: ack.alerts as unknown as Prisma.InputJsonValue,
       },
     },
@@ -197,6 +202,7 @@ medicationsRouter.post(
       documentId?: string;
       acknowledgeAlerts: boolean;
       acknowledgedAlerts?: AcknowledgedAlert[];
+      acknowledgementReason?: string;
     };
     const clinicId = clinicForWrite(req, body.clinicId);
     const patient = await prisma.patient.findUnique({ where: { id: body.patientId } });
@@ -212,6 +218,7 @@ medicationsRouter.post(
     const {
       acknowledgeAlerts: _ack,
       acknowledgedAlerts: _acks,
+      acknowledgementReason: _reason,
       startDate,
       endDate,
       ...rest
@@ -248,9 +255,10 @@ medicationsRouter.patch(
     if (!existing) throw notFound('Medication not found');
     if (!existing.isCurrent) throw conflict('This version was already superseded; edit the latest one');
 
-    const { acknowledgeAlerts, acknowledgedAlerts, startDate, endDate, ...patch } = req.body as {
+    const { acknowledgeAlerts, acknowledgedAlerts, acknowledgementReason, startDate, endDate, ...patch } = req.body as {
       acknowledgeAlerts: boolean;
       acknowledgedAlerts?: AcknowledgedAlert[];
+      acknowledgementReason?: string;
       startDate?: string;
       endDate?: string;
       medicationName?: string;
@@ -271,7 +279,11 @@ medicationsRouter.patch(
     let ack: StoredAcknowledgement | null = null;
     if (rechecked) {
       const alerts = await safetyAlertsFor(existing.patientId, next.medicationName, existing.id);
-      ack = acknowledge(alerts, { acknowledgeAlerts, acknowledgedAlerts }, currentUser(req).userId);
+      ack = acknowledge(
+        alerts,
+        { acknowledgeAlerts, acknowledgedAlerts, acknowledgementReason },
+        currentUser(req).userId,
+      );
     }
 
     const {

@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { ApiError, api, patientFromRoute, patientName, type Appointment, type PatientRef } from '../api';
+import { ApiError, api, followUpIdFromRoute, patientFromRoute, patientName, type Appointment, type PatientRef } from '../api';
 import PatientPicker from '../PatientPicker';
 import { useLoad, useRoute, useSession } from '../session';
 import { SLOT_MINUTES, addDays, describeHours, formatTime, freeSlots, toMinutes, zonedParts, zonedToUtc } from '../time';
@@ -37,6 +37,9 @@ export default function Calendar() {
   const [mode, setMode] = useState<Mode>('book');
   const [selected, setSelected] = useState<Appointment>();
   const [patient, setPatient] = useState<PatientRef | undefined>(() => patientFromRoute(route));
+  // Set when we arrive from a follow-up's "Book" button: the new appointment is linked to that task.
+  const [followUpId, setFollowUpId] = useState<string | undefined>(() => followUpIdFromRoute(route));
+  const [linked, setLinked] = useState(false);
   const [date, setDate] = useState(today.date);
   const [visitType, setVisitType] = useState(VISIT_TYPES[0]);
   const [notes, setNotes] = useState('');
@@ -113,7 +116,19 @@ export default function Calendar() {
     } else if (patient) {
       api
         .book({ clinicId, patientId: patient.id, startsAt: startsAt.toISOString(), endsAt, visitType, reason: notes.trim() || undefined })
-        .then(done, fail);
+        .then(async (a) => {
+          if (followUpId) {
+            // Book first, then mark the task SCHEDULED; a failure here must not hide the booking.
+            await api.scheduleFollowUp(followUpId, a.id).then(
+              () => {
+                setLinked(true);
+                setFollowUpId(undefined);
+              },
+              (err: Error) => fail(new Error(`Booked, but the follow-up could not be linked: ${err.message}`)),
+            );
+          }
+          done(a);
+        }, fail);
     }
   };
 
@@ -178,6 +193,17 @@ export default function Calendar() {
         {clinic!.name}: {schedules.length ? describeHours(schedules).join(', ') : 'no operating hours set'}. A walk-in needs
         the Doctor's approval, which is recorded.
       </p>
+
+      {followUpId && (
+        <p className="notice" role="status" style={{ marginTop: 12 }}>
+          Booking for a follow-up task: the task becomes Booked once you confirm an appointment.
+        </p>
+      )}
+      {linked && (
+        <p className="notice" role="status" style={{ marginTop: 12 }}>
+          The follow-up task is now marked as booked. <a href="#/follow-ups">Back to follow-ups</a>
+        </p>
+      )}
 
       <div className="split" style={{ marginTop: 20 }}>
         <section className="card" aria-label="Calendar">

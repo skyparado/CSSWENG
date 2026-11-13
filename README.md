@@ -117,6 +117,31 @@ and a top bar to switch the active clinic.
 | S14 Prescription / Medical Certificate | `#/documents/new` | Doctor only; live PDF preview, signature upload, password to sign, duplicate-medicine/allergy alerts to acknowledge, auto-saved drafts, versions |
 | S15 Document Requests and Sending | `#/documents` | Log requests, Doctor queue, email a password-protected PDF or print, delivery history, paging |
 
+## Follow-ups, medications, reports and background jobs (Developer 3)
+
+| Screen | Route | Notes |
+| ------ | ----- | ----- |
+| S10 Medications and Allergies | `#/patients/<patientId>/medications` (Doctor only; also `#/medications` to pick a patient) | Allergy banner, status chips, add/update with allergy and duplicate alerts to acknowledge (optional reason), dated history |
+| S11 Follow-Ups and Procedures | `#/follow-ups` | Status chips with counts (Overdue / Due / Booked / Done / Closed), filters, Log Call, Book, mark complete, record declined, send reminder |
+| S12 Outreach Log | `#/follow-ups/<followUpId>/outreach` | Log calls, send SMS/email reminders, reminder consent, failed attempts, attempt history with delivery status |
+| S17 Reports | `#/reports` | Five reports (Doctor) / patient volume for the active clinic (Secretary), Recharts chart, PDF and CSV export |
+
+Reports: `GET /api/reports/{patient-volume|follow-up-compliance|overdue-patients|common-diagnoses|user-access-activity}?from=&to=&clinicId=`.
+Exports are BullMQ jobs: `POST /api/reports/exports`, poll `GET /api/reports/exports/:id`, then `GET .../download`.
+Every view and export is written to the audit log.
+
+**Background jobs** (BullMQ, started with the API unless `BACKGROUND_JOBS_ENABLED=false`):
+report exports; a nightly `pg_dump` backup, encrypted with `BACKUP_ENCRYPTION_KEY`, to a separate
+bucket (`BACKUP_S3_*`) together with a copy of the stored files; and a nightly retention purge
+(audit entries older than 5 years, expired exports, backups older than `BACKUP_RETENTION_DAYS`, never the
+newest backup). To restore: `npm run db:restore-backup --workspace backend -- --list`, then `-- --key ... --out file.dump`,
+then `pg_restore` into an empty database (the script prints the command).
+
+**SMS and email.** `SMS_PROVIDER=stub` (default) only logs. `twilio` and `semaphore` are implemented but not
+selected until the clinic chooses a provider; set that provider's credentials (see `backend/.env.example`) and
+`PUBLIC_BASE_URL`. Delivery reports arrive at `POST /api/webhooks/sms/twilio` (signature-checked) or
+`/api/webhooks/sms/generic?secret=` (shared secret). Email already works with any SMTP relay (`EMAIL_PROVIDER=smtp`).
+
 ## Testing
 
 ```bash
@@ -124,7 +149,8 @@ npm test            # all workspaces
 npm run test --workspace @clinic/backend
 ```
 
-End-to-end tests (Playwright) cover booking, documents, and a timed check that
+End-to-end tests (Playwright) cover booking, documents, follow-ups and the outreach log,
+reminders (consent, no clinical details, delivery to Mailpit), medications and allergies, and a timed check that
 every PDF (preview, generate, sign) is ready within 5 seconds. They use the
 seeded data and start the dev servers if they are not already running:
 

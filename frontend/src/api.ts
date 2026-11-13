@@ -62,13 +62,73 @@ export interface ClinicHours {
   schedules: ScheduleWindow[];
 }
 
+export type FollowUpStatus = 'OPEN' | 'SCHEDULED' | 'COMPLETED' | 'DECLINED' | 'UNREACHABLE';
+export type TaskType = 'FOLLOW_UP' | 'CHECK_UP' | 'LAB_TEST' | 'INJECTION' | 'PROCEDURE';
+export type Priority = 'LOW' | 'NORMAL' | 'HIGH';
+export type FollowUpBucket = 'overdue' | 'due' | 'booked' | 'done' | 'closed';
+
 export interface FollowUp {
   id: string;
   reason: string;
   dueDate: string;
-  status: string;
-  patient: PatientRef;
+  status: FollowUpStatus | string;
+  patient: PatientRef & { patientNumber?: string; mobileNumber?: string };
+  patientId?: string;
+  clinicId?: string;
+  taskType?: TaskType;
+  priority?: Priority;
+  appointmentId?: string | null;
+  /** Active reminder consent per channel (S11 "SMS on file" column). */
+  reminderConsent?: { SMS: boolean; EMAIL: boolean };
   daysOverdue?: number;
+}
+
+export interface FollowUpCounts {
+  all: number;
+  overdue: number;
+  due: number;
+  booked: number;
+  done: number;
+  closed: number;
+}
+
+export type OutreachChannel = 'CALL' | 'SMS' | 'EMAIL';
+export type OutreachOutcome =
+  | 'REACHED'
+  | 'NO_ANSWER'
+  | 'LEFT_MESSAGE'
+  | 'WRONG_NUMBER'
+  | 'DECLINED'
+  | 'BOOKED'
+  | 'SENT'
+  | 'FAILED';
+
+export interface OutreachLog {
+  id: string;
+  attemptNumber: number;
+  attemptedAt: string;
+  channel: OutreachChannel;
+  outcome: OutreachOutcome;
+  patientResponse?: string | null;
+  deliveryStatus?: 'DELIVERED' | 'FAILED' | null;
+  contactedBy?: { fullName: string } | null;
+}
+
+export interface ConsentView {
+  active: boolean;
+  isGranted: boolean;
+  consentedAt: string;
+  withdrawnAt?: string | null;
+  recordedBy: { fullName: string };
+}
+
+/** GET /api/follow-ups/:id: what S12 shows. */
+export interface FollowUpDetail extends FollowUp {
+  clinic: { id: string; name: string };
+  outreachLogs: OutreachLog[];
+  consents: Partial<Record<'SMS' | 'EMAIL', ConsentView>>;
+  failedAttempts: number;
+  unreachableAfter: number;
 }
 
 export interface Paged<T> {
@@ -130,22 +190,111 @@ export interface RequestDetail {
 }
 
 export interface SafetyAlert {
-  type: string;
+  type: 'ALLERGY_CONFLICT' | 'DUPLICATE_MEDICATION' | string;
   message: string;
+  severity?: 'INFO' | 'WARNING' | 'CRITICAL';
+  relatedId?: string;
 }
 
 export interface Allergy {
   id: string;
   allergenName: string;
   reaction?: string | null;
-  severity?: string | null;
+  severity?: 'MILD' | 'MODERATE' | 'SEVERE' | null;
+  recordedAt?: string;
+  voidedAt?: string | null;
+}
+
+export type MedicationStatus = 'ACTIVE' | 'ON_HOLD' | 'DISCONTINUED';
+export type MedicationSource = 'PRESCRIBED_HERE' | 'PATIENT_REPORTED' | 'OTHER_DOCTOR' | 'OTC';
+
+export interface Medication {
+  id: string;
+  medicationName: string;
+  strength?: string | null;
+  dose: string;
+  frequency: string;
+  route: string;
+  instructions?: string | null;
+  indication?: string | null;
+  startDate: string;
+  endDate?: string | null;
+  status: MedicationStatus;
+  discontinuationReason?: string | null;
+  prescribingDoctor: string;
+  source: MedicationSource;
+  isCurrent: boolean;
+  supersedesMedicationId?: string | null;
+  recordedAt: string;
+}
+
+/** The body of POST /api/medications (and PATCH, where everything is optional). */
+export interface MedicationInput {
+  patientId?: string;
+  medicationName: string;
+  strength?: string;
+  dose: string;
+  frequency: string;
+  route: string;
+  instructions?: string;
+  indication?: string;
+  startDate: string;
+  endDate?: string;
+  status: MedicationStatus;
+  discontinuationReason?: string;
+  prescribingDoctor: string;
+  source: MedicationSource;
+  acknowledgedAlerts?: Array<{ type: string; relatedId: string }>;
+  acknowledgementReason?: string;
+}
+
+export interface PatientDetail extends PatientRef {
+  patientNumber: string;
+  age?: number;
+  sex?: string;
+  mobileNumber?: string;
+  hmoProvider?: string | null;
+}
+
+/* ---------------------------------- Reports ---------------------------------- */
+
+export type ReportKey =
+  | 'patient-volume'
+  | 'follow-up-compliance'
+  | 'overdue-patients'
+  | 'common-diagnoses'
+  | 'user-access-activity';
+
+export interface ReportResult {
+  report: ReportKey;
+  title: string;
+  from: string;
+  to: string;
+  clinicId: string | null;
+  clinicName: string;
+  summary: Array<{ key: string; label: string; value: number | string; tone?: 'bad' | 'warn' }>;
+  columns: Array<{ key: string; label: string }>;
+  rows: Array<Record<string, string | number>>;
+  note?: string;
+}
+
+export interface ReportExportView {
+  id: string;
+  report: ReportKey;
+  format: 'PDF' | 'CSV';
+  status: 'QUEUED' | 'RUNNING' | 'READY' | 'FAILED' | 'EXPIRED';
+  fileName: string | null;
+  sizeBytes: number | null;
+  error: string | null;
+  createdAt: string;
+  completedAt: string | null;
 }
 
 /** An API failure; `details` carries e.g. `suggestions` (nearest free times) from a refused booking. */
 export class ApiError extends Error {
   constructor(
     message: string,
-    public details?: { suggestions?: string[] } | null,
+    public details?: { suggestions?: string[]; alerts?: SafetyAlert[] } | null,
     /**
      * How many sign-in attempts are left before the account locks. Only set
      * on a 401 from /api/auth/login, and only when the server recognised the
@@ -225,7 +374,51 @@ export const api = {
   clinicHours: () => call<{ items: ClinicHours[] }>('GET', '/api/clinics/schedules'),
 
   searchPatients: (q: string) => call<{ items: PatientRef[] }>('GET', `/api/patients?${qs({ q })}`),
+  patient: (id: string) => call<PatientDetail>('GET', `/api/patients/${id}`),
   allergies: (patientId: string) => call<{ items: Allergy[] }>('GET', `/api/allergies?${qs({ patientId })}`),
+  addAllergy: (body: { patientId: string; allergenName: string; reaction?: string; severity?: Allergy['severity'] }) =>
+    call<{ allergy: Allergy; alerts: SafetyAlert[] }>('POST', '/api/allergies', body),
+  voidAllergy: (id: string, reason: string) => call<Allergy>('POST', `/api/allergies/${id}/void`, { reason }),
+
+  medicationList: (patientId: string, includeHistory = false) =>
+    call<{ items: Medication[] }>('GET', `/api/medications?${qs({ patientId, includeHistory: String(includeHistory) })}`),
+  addMedication: (body: MedicationInput & { patientId: string }) => call<Medication>('POST', '/api/medications', body),
+  updateMedication: (id: string, body: Partial<MedicationInput>) => call<Medication>('PATCH', `/api/medications/${id}`, body),
+
+  followUps: (params: {
+    clinicId?: string;
+    bucket?: FollowUpBucket;
+    patientId?: string;
+    taskType?: TaskType;
+    priority?: Priority;
+    page?: number;
+    pageSize?: number;
+  }) => call<Paged<FollowUp>>('GET', `/api/follow-ups?${qs(params)}`),
+  followUpSummary: (clinicId?: string) => call<FollowUpCounts>('GET', `/api/follow-ups/summary?${qs({ clinicId })}`),
+  followUp: (id: string) => call<FollowUpDetail>('GET', `/api/follow-ups/${id}`),
+  createFollowUp: (body: {
+    patientId: string;
+    taskType: TaskType;
+    reason: string;
+    dueDate: string;
+    priority: Priority;
+  }) => call<FollowUp>('POST', '/api/follow-ups', body),
+  completeFollowUp: (id: string, closureNote?: string) =>
+    call<FollowUp>('POST', `/api/follow-ups/${id}/complete`, { closureNote }),
+  declineFollowUp: (id: string, closureNote: string) =>
+    call<FollowUp>('POST', `/api/follow-ups/${id}/decline`, { closureNote }),
+  scheduleFollowUp: (id: string, appointmentId: string) =>
+    call<FollowUp>('POST', `/api/follow-ups/${id}/schedule`, { appointmentId }),
+  remindFollowUp: (id: string, channel: 'SMS' | 'EMAIL') =>
+    call<{ queued: boolean; jobId?: string }>('POST', `/api/follow-ups/${id}/remind`, { channel }),
+  logCall: (body: { followUpId: string; outcome: OutreachOutcome; patientResponse?: string }) =>
+    call<OutreachLog>('POST', '/api/outreach-logs', body),
+
+  report: (report: ReportKey, params: { from: string; to: string; clinicId?: string }) =>
+    call<ReportResult>('GET', `/api/reports/${report}?${qs(params)}`),
+  requestExport: (body: { report: ReportKey; format: 'PDF' | 'CSV'; from: string; to: string; clinicId?: string }) =>
+    call<ReportExportView>('POST', '/api/reports/exports', body),
+  exportStatus: (id: string) => call<ReportExportView>('GET', `/api/reports/exports/${id}`),
 
   appointments: (clinicId: string, from: Date, to: Date) =>
     call<{ items: Appointment[] }>(
@@ -285,6 +478,14 @@ export const patientName = (p: PatientRef) => `${p.firstName} ${p.lastName}`;
 /** Hash link that carries a chosen patient to another screen (e.g. dashboard search → booking). */
 export const withPatient = (path: string, p: PatientRef) =>
   `${path}?${new URLSearchParams({ patientId: p.id, first: p.firstName, last: p.lastName })}`;
+
+/** Hash link to book an appointment for a follow-up task; the booking is linked to the task afterwards. */
+export const bookForFollowUp = (p: PatientRef, followUpId: string) =>
+  `${withPatient('/appointments', p)}&${new URLSearchParams({ followUpId })}`;
+
+/** The follow-up a booking is being made for, if any (see `bookForFollowUp`). */
+export const followUpIdFromRoute = (route: string) =>
+  new URLSearchParams(route.split('?')[1] ?? '').get('followUpId') ?? undefined;
 
 /** The patient carried by `withPatient`, if any. */
 export function patientFromRoute(route: string): PatientRef | undefined {

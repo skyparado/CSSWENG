@@ -84,6 +84,8 @@ export const medicationCreateSchema = z
     acknowledgeAlerts: z.boolean().default(false),
     /** The specific alerts accepted; when sent, every alert raised must be listed. */
     acknowledgedAlerts: z.array(acknowledgedAlertSchema).max(50).optional(),
+    /** Why the Doctor is proceeding despite the alerts (SDD 5.2); optional. */
+    acknowledgementReason: z.string().trim().max(255).optional(),
   })
   .superRefine((m, ctx) => {
     requireDiscontinuationReason(m, ctx);
@@ -112,6 +114,7 @@ export const medicationUpdateSchema = z
     source: medicationSourceSchema.optional(),
     acknowledgeAlerts: z.boolean().default(false),
     acknowledgedAlerts: z.array(acknowledgedAlertSchema).max(50).optional(),
+    acknowledgementReason: z.string().trim().max(255).optional(),
   })
   .superRefine((m, ctx) => {
     requireDiscontinuationReason(m, ctx);

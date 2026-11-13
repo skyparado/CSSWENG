@@ -17,3 +17,4 @@ export * from './results.js';
 export * from './audit.js';
 export * from './clinicalImage.js';
 export * from './tabletIntake.js';
+export * from './reports.js';

@@ -614,3 +614,46 @@ tr.nowrap td { white-space: nowrap; }
   background: #f7f9fc;
 }
 .clinic-picker .checkbox-row { white-space: normal; }
+
+/* S10 medications and allergies */
+.split-wide { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 20px; align-items: start; }
+.allergy { border-top: 1px solid var(--line); padding: 12px 0; }
+.dialog.wide { width: min(720px, 94vw); max-height: 92vh; overflow-y: auto; }
+.alert-box.warn { border-color: #f3c58f; }
+.alert-box.warn h3 { color: var(--amber); }
+
+/* S11 follow-up list */
+.pills button.chip-bad { border-color: var(--red); color: var(--red); }
+.pills button.chip-bad[aria-pressed='true'] { background: var(--red); color: #fff; }
+.badge.task { background: #e4ecf8; color: var(--navy); }
+.consent-ok { color: var(--green); font-weight: 600; }
+.more { position: relative; }
+.more summary { list-style: none; cursor: pointer; border: 2px solid var(--navy); border-radius: 8px; padding: 9px 16px; font-weight: 600; color: var(--navy); background: #fff; }
+.more summary::-webkit-details-marker { display: none; }
+.more-menu { position: absolute; right: 0; z-index: 5; background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 6px 20px rgba(15, 23, 42, 0.15); padding: 6px; min-width: 200px; display: flex; flex-direction: column; gap: 4px; }
+.more-menu button { border: 0; text-align: left; font-weight: 500; }
+.more-menu button:hover { background: #eaf1fb; }
+
+/* S12 outreach log */
+.outreach-grid { align-items: start; }
+.facts { display: grid; grid-template-columns: 110px 1fr; gap: 8px 12px; margin: 0; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; text-align: right; font-weight: 600; }
+.segments { display: inline-flex; gap: 6px; vertical-align: middle; }
+.segments i { width: 36px; height: 12px; border-radius: 3px; border: 2px solid #b8c2d1; display: inline-block; }
+.segments i.on { background: var(--red); border-color: var(--red); }
+fieldset.plain { border: 0; padding: 0; margin: 0; min-width: 0; }
+.label { font-weight: 600; padding: 0; margin: 12px 0 6px; }
+.seg { display: inline-flex; border: 2px solid var(--navy); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; }
+.seg button[aria-checked='true'] { background: var(--navy); color: #fff; }
+
+/* S17 reports */
+.report-controls { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; }
+.report-controls > div { min-width: 160px; }
+.stat.warn b, .stat.bad b { font-size: 38px; }
+.report-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+@media (max-width: 1100px) {
+  .split-wide, .report-body { grid-template-columns: 1fr; }
+  .filters { grid-template-columns: 1fr 1fr; }
+}

@@ -159,6 +159,7 @@ model Encounter {
   notes           ClinicalNote[]
   examFindings    ExamFinding[]
   labResults      LabResult[]
+  followUps       FollowUp[]
 
   @@index([patientId, visitDate])
   @@index([clinicId, visitDate])
@@ -338,6 +339,7 @@ model User {
   labResultsRecorded  LabResult[]      @relation("LabResultRecordedBy")
 
   startedTabletSessions TabletIntakeSession[] @relation("TabletIntakeSessionStarter")
+  reportExports         ReportExport[]        @relation("ReportExportRequestedBy")
   reviewedIntakeForms   TabletIntakeSubmission[] @relation("IntakeSubmissionReviewedBy")
 
   @@index([status])
@@ -581,9 +583,9 @@ model DocumentDelivery {
 //
 // Per the Database Design doc (1.4.5, 1.4.13-1.4.16, 1.5): foreign keys are
 // ON DELETE RESTRICT, clinical rows are never hard-deleted, and clinicId is set
-// from the session's active clinic and never re-tagged. Encounter and
-// IntakeSession tables do not exist yet; their optional FKs are added when
-// those modules land.
+// from the session's active clinic and never re-tagged. The Encounter and
+// TabletIntakeSession tables exist; FollowUp.encounterId and
+// PatientConsent.intakeSessionId link to them (Restrict, optional).
 
 enum ConsentType {
   DATA_PROCESSING
@@ -604,23 +606,26 @@ enum ConsentCaptureMethod {
 /// Evidence of a consent decision. Reminder consent is per channel; a consent
 /// is "active" when granted and `withdrawnAt` is null.
 model PatientConsent {
-  id             String               @id @default(cuid())
-  patientId      String
-  consentType    ConsentType
-  channel        ReminderChannel? // REMINDER consent only
-  isGranted      Boolean
-  captureMethod  ConsentCaptureMethod
-  consentedAt    DateTime             @default(now())
-  recordedById   String
-  withdrawnAt    DateTime?
-  withdrawnById  String?
-  consentVersion String?
+  id              String               @id @default(cuid())
+  patientId       String
+  consentType     ConsentType
+  channel         ReminderChannel? // REMINDER consent only
+  isGranted       Boolean
+  captureMethod   ConsentCaptureMethod
+  consentedAt     DateTime             @default(now())
+  recordedById    String
+  withdrawnAt     DateTime?
+  withdrawnById   String?
+  consentVersion  String?
+  /// Set when the consent was captured on the shared clinic tablet.
+  intakeSessionId String?
 
-  patient      Patient            @relation(fields: [patientId], references: [id], onDelete: Restrict)
-  recordedBy   User               @relation("ConsentRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
-  withdrawnBy  User?              @relation("ConsentWithdrawnBy", fields: [withdrawnById], references: [id], onDelete: Restrict)
-  outreachLogs OutreachLog[]
-  deliveries   ReminderDelivery[]
+  patient       Patient              @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  recordedBy    User                 @relation("ConsentRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+  withdrawnBy   User?                @relation("ConsentWithdrawnBy", fields: [withdrawnById], references: [id], onDelete: Restrict)
+  outreachLogs  OutreachLog[]
+  deliveries    ReminderDelivery[]
+  intakeSession TabletIntakeSession? @relation(fields: [intakeSessionId], references: [id], onDelete: Restrict)
 
   @@index([patientId, consentType, channel])
 }
@@ -654,6 +659,8 @@ model FollowUp {
   patientId     String
   clinicId      String
   appointmentId String?
+  /// The visit this task was set from (a follow-up belongs to one visit).
+  encounterId   String?
   taskType      FollowUpTaskType
 
   /// @encrypted
@@ -676,10 +683,12 @@ model FollowUp {
   completedBy  User?              @relation("FollowUpCompletedBy", fields: [completedById], references: [id], onDelete: Restrict)
   outreachLogs OutreachLog[]
   deliveries   ReminderDelivery[]
+  encounter    Encounter?         @relation(fields: [encounterId], references: [id], onDelete: Restrict)
 
   @@index([clinicId, status, dueDate])
   @@index([patientId])
   @@index([appointmentId])
+  @@index([encounterId])
 }
 
 enum OutreachChannel {
@@ -995,6 +1004,7 @@ model TabletIntakeSession {
   clinic             Clinic                  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   startedBySecretary User?                   @relation("TabletIntakeSessionStarter", fields: [startedBySecretaryId], references: [id], onDelete: SetNull)
   submission         TabletIntakeSubmission?
+  consents           PatientConsent[]
 
   @@index([status])
   @@index([clinicId, createdAt])
@@ -1044,4 +1054,44 @@ model UserClinic {
   @@id([userId, clinicId])
   @@index([userId])
   @@index([clinicId])
+}
+
+// ================================ Report exports =============================
+
+enum ExportFormat {
+  PDF
+  CSV
+}
+
+enum ExportStatus {
+  QUEUED
+  RUNNING
+  READY
+  FAILED
+  EXPIRED // the file was removed by the retention purge
+}
+
+/// A report export prepared by a background job (SDD 5.2: large exports are
+/// rendered in the background and the user is told when the file is ready).
+/// The file lives in the encrypted document store under `objectKey`.
+model ReportExport {
+  id            String       @id @default(cuid())
+  requestedById String
+  /// Which of the five reports (see @clinic/schemas reportKeySchema).
+  report        String
+  format        ExportFormat
+  /// { from, to, clinicId } as validated when the export was requested.
+  params        Json
+  status        ExportStatus @default(QUEUED)
+  objectKey     String?
+  fileName      String?
+  sizeBytes     Int?
+  error         String?
+  createdAt     DateTime     @default(now())
+  completedAt   DateTime?
+
+  requestedBy User @relation("ReportExportRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+
+  @@index([requestedById, createdAt])
+  @@index([status, createdAt])
 }

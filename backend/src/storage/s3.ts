@@ -1,5 +1,6 @@
 import {
   CreateBucketCommand,
+  DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
   PutObjectCommand,
@@ -74,4 +75,9 @@ export async function getObject(key: string): Promise<Buffer> {
   );
   const bytes = await out.Body!.transformToByteArray();
   return Buffer.from(bytes);
+}
+
+/** Delete one object (used by the retention purge for expired report exports). */
+export async function deleteObject(key: string): Promise<void> {
+  await s3.send(new DeleteObjectCommand({ Bucket: env.S3_BUCKET, Key: key }));
 }

@@ -1,5 +1,6 @@
 import { Router, type Request } from 'express';
 import type { FollowUp, Prisma } from '@prisma/client';
+import type { FollowUpBucket } from '@clinic/schemas';
 import {
   followUpCompleteSchema,
   followUpCreateSchema,
@@ -23,16 +24,21 @@ import {
   requireAuth,
   requireRole,
 } from '../auth/guards.js';
-import { findActiveReminderConsent } from '../consents/consents.service.js';
+import { findActiveReminderConsent, latestReminderConsents } from '../consents/consents.service.js';
+import { FAILED_CONTACT_OUTCOMES } from '@clinic/schemas';
 import { enqueueReminder } from '../reminders/queue.js';
 import { actorFromRequest } from '../audit/record.js';
 import { addDays, daysOverdue, todayInTimezone, toDateOnly } from './dates.js';
 import {
   assertAppointmentMatches,
+  assertEncounterMatches,
   auditFollowUpStatusChange,
+  bucketWhere,
+  followUpCounts,
   followUpInclude,
   followUpWhere,
   matchesReason,
+  reminderConsentFor,
   withPlainPatient,
   type FollowUpFilters,
 } from './followups.service.js';
@@ -42,6 +48,17 @@ export const followUpsRouter = Router();
 followUpsRouter.use(requireAuth);
 
 type ListQuery = FollowUpFilters & { page: number; pageSize: number };
+
+/** Plain patient fields plus whether each patient has active SMS / email reminder consent. */
+async function decorate<T extends { patientId: string; patient: Parameters<typeof withPlainPatient>[0]['patient'] }>(
+  items: T[],
+) {
+  const consent = await reminderConsentFor(items.map((i) => i.patientId));
+  return items.map((i) => ({
+    ...withPlainPatient(i),
+    reminderConsent: consent.get(i.patientId) ?? { SMS: false, EMAIL: false },
+  }));
+}
 
 /** Run a paginated list query with the shared filters plus list-specific conditions. */
 async function paginate(
@@ -62,7 +79,7 @@ async function paginate(
     const all = await prisma.followUp.findMany({ where, include: followUpInclude, orderBy });
     const matching = all.filter((f) => matchesReason(f, q.reason));
     return {
-      items: matching.slice((q.page - 1) * q.pageSize, q.page * q.pageSize),
+      items: await decorate(matching.slice((q.page - 1) * q.pageSize, q.page * q.pageSize)),
       total: matching.length,
       page: q.page,
       pageSize: q.pageSize,
@@ -79,7 +96,7 @@ async function paginate(
     }),
     prisma.followUp.count({ where }),
   ]);
-  return { items: items.map(withPlainPatient), total, page: q.page, pageSize: q.pageSize };
+  return { items: await decorate(items), total, page: q.page, pageSize: q.pageSize };
 }
 
 const byDueThenPriority: Prisma.FollowUpOrderByWithRelationInput[] = [
@@ -92,8 +109,20 @@ followUpsRouter.get(
   '/',
   validate(followUpQuerySchema, 'query'),
   asyncHandler(async (req, res) => {
-    const q = req.query as unknown as ListQuery & { status?: FollowUp['status'] };
-    res.json(await paginate(req, q, { status: q.status }, byDueThenPriority));
+    const q = req.query as unknown as ListQuery & { status?: FollowUp['status']; bucket?: FollowUpBucket };
+    // A chip (bucket) wins over a raw status; finished tasks list newest first.
+    const extra = q.bucket ? bucketWhere(q.bucket, todayInTimezone(env.CLINIC_TIMEZONE)) : { status: q.status };
+    const finished = q.bucket === 'done' || q.bucket === 'closed';
+    res.json(await paginate(req, q, extra, finished ? [{ dueDate: 'desc' }] : byDueThenPriority));
+  }),
+);
+
+/** GET /api/follow-ups/summary — the counts on the S11 status chips, for the active clinic. */
+followUpsRouter.get(
+  '/summary',
+  asyncHandler(async (req, res) => {
+    const clinicId = clinicForRead(req, req.query.clinicId as string | undefined);
+    res.json(await followUpCounts(clinicId, todayInTimezone(env.CLINIC_TIMEZONE)));
   }),
 );
 
@@ -176,7 +205,11 @@ function changeStatus(
   });
 }
 
-/** GET /api/follow-ups/:id — one task with its outreach history. */
+/**
+ * GET /api/follow-ups/:id — one task with everything S12 shows: the attempt
+ * history (who made each one, delivery status), the patient's reminder consent
+ * per channel and how close the task is to being marked unreachable.
+ */
 followUpsRouter.get(
   '/:id',
   validate(idParamSchema, 'params'),
@@ -185,12 +218,25 @@ followUpsRouter.get(
       where: { id: req.params.id },
       include: {
         ...followUpInclude,
-        outreachLogs: { orderBy: { attemptNumber: 'asc' } },
+        outreachLogs: {
+          orderBy: { attemptNumber: 'asc' },
+          include: { contactedBy: { select: { fullName: true } } },
+        },
       },
     });
     if (!followUp) throw notFound('Follow-up not found');
     assertClinicAccess(req, followUp.clinicId);
-    res.json(withPlainPatient(followUp));
+
+    const consents = await latestReminderConsents(followUp.patientId);
+    const failed = followUp.outreachLogs.filter((l) =>
+      (FAILED_CONTACT_OUTCOMES as readonly string[]).includes(l.outcome),
+    ).length;
+    res.json({
+      ...withPlainPatient(followUp),
+      consents,
+      failedAttempts: failed,
+      unreachableAfter: env.UNREACHABLE_AFTER_ATTEMPTS,
+    });
   }),
 );
 
@@ -204,6 +250,7 @@ followUpsRouter.post(
       patientId: string;
       clinicId?: string;
       appointmentId?: string;
+      encounterId?: string;
       taskType: FollowUp['taskType'];
       reason: string;
       dueDate: string;
@@ -224,12 +271,17 @@ followUpsRouter.post(
       const appt = await prisma.appointment.findUnique({ where: { id: body.appointmentId } });
       assertAppointmentMatches(appt, { patientId: body.patientId, clinicId });
     }
+    if (body.encounterId) {
+      const encounter = await prisma.encounter.findUnique({ where: { id: body.encounterId } });
+      assertEncounterMatches(encounter, { patientId: body.patientId, clinicId });
+    }
 
     const followUp = await prisma.followUp.create({
       data: {
         patientId: body.patientId,
         clinicId,
         appointmentId: body.appointmentId,
+        encounterId: body.encounterId,
         taskType: body.taskType,
         reason: body.reason,
         dueDate: toDateOnly(body.dueDate),
