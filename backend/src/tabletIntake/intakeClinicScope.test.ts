@@ -59,11 +59,14 @@ async function submissionAt(clinicId: string) {
     .post(`/api/tablet-intake/tablet/${session.token}/submit`)
     .send(payload())
     .expect(201);
-  createdPatientIds.push(submitted.body.patientId);
+  expect(submitted.body.patientId).toBeUndefined();
+
+  // The tablet is not told the patient id any more; read it from the row.
   const row = await prisma.tabletIntakeSubmission.findUniqueOrThrow({
     where: { sessionId: session.id },
-    select: { id: true },
+    select: { id: true, patientId: true },
   });
+  createdPatientIds.push(row.patientId);
   return { sessionId: session.id, submissionId: row.id };
 }
 

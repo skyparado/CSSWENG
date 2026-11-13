@@ -4,6 +4,7 @@ import {
   intakeFormSubmitSchema,
   intakeReviewSchema,
   intakeSubmissionListQuerySchema,
+  SEE_SECRETARY_MESSAGE,
   idParamSchema,
   type IntakeSubmissionListQuery,
 } from '@clinic/schemas';
@@ -192,6 +193,14 @@ tabletIntakeRouter.post(
   validate(intakeFormSubmitSchema),
   asyncHandler(async (req, res) => {
     const result = await submitSession(req.params.token, req.body);
-    res.status(201).json(result);
+
+    // The tablet is unauthenticated and left in a waiting room, so it is told
+    // only that the form went in. The patient id and whether a record already
+    // existed stay server-side: either would confirm to whoever picks the
+    // tablet up next that this person is a patient here (QA 8).
+    res.status(201).json({
+      submittedAt: result.submittedAt,
+      ...(result.patientCreated ? {} : { message: SEE_SECRETARY_MESSAGE }),
+    });
   }),
 );

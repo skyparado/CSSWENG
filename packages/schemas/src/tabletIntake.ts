@@ -109,3 +109,22 @@ export const tabletIntakeSessionAdminSchema = z.object({
   createdAt: z.date(),
 });
 export type TabletIntakeSessionAdmin = z.infer<typeof tabletIntakeSessionAdminSchema>;
+
+/**
+ * The only thing the tablet is told when the typed details already match a
+ * patient on file. The tablet sits unattended in a waiting room, so it learns
+ * nothing about the record: not whether one was created, not its id, nothing
+ * that would confirm a person is a patient of this clinic to whoever is
+ * holding the device next.
+ */
+export const SEE_SECRETARY_MESSAGE = 'Please see the secretary.';
+
+/**
+ * What the tablet gets back from a submit. Deliberately almost empty; staff
+ * read the real outcome from the review queue, which is behind auth.
+ */
+export const intakeSubmitResultSchema = z.object({
+  submittedAt: z.coerce.date().nullable(),
+  message: z.string().optional(),
+});
+export type IntakeSubmitResult = z.infer<typeof intakeSubmitResultSchema>;

@@ -114,11 +114,13 @@ async function findOrCreatePatient(
   session: { clinicId: string; startedBySecretaryId: string },
 ) {
   // Patient columns are encrypted with a random IV, so dedup matches on the
-  // blind indexes (normalised first + last name + mobile) instead.
+  // blind indexes instead. Name, birth date and phone together, per QA 8:
+  // name and phone alone would match a parent and child sharing a number.
   const match = await prisma.patient.findFirst({
     where: {
       firstNameIdx: indexes.firstName(payload.firstName),
       lastNameIdx: indexes.lastName(payload.lastName),
+      dobIdx: indexes.dob(payload.dateOfBirth),
       mobileIdx: indexes.mobile(payload.mobileNumber),
       voidedAt: null,
     },

@@ -55,12 +55,15 @@ async function submitOne(): Promise<{ submissionId: string; patientId: string }>
     .post(`/api/tablet-intake/tablet/${started.body.token}/submit`)
     .send(payload())
     .expect(201);
-  createdPatientIds.push(submitted.body.patientId);
+  expect(submitted.body.patientId).toBeUndefined();
 
+  // The tablet is not told the patient id, so read it the way staff would:
+  // from the submission row behind the review queue.
   const submission = await prisma.tabletIntakeSubmission.findUniqueOrThrow({
     where: { sessionId: started.body.id },
     select: { id: true, patientId: true },
   });
+  createdPatientIds.push(submission.patientId);
   return { submissionId: submission.id, patientId: submission.patientId };
 }
 

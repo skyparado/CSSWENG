@@ -43,6 +43,20 @@ function fullPayload(overrides: Partial<Record<string, unknown>> = {}) {
   };
 }
 
+/**
+ * The patient a submission landed on. The tablet is not told the id any more,
+ * so tests read it from the submission row the way staff would read it from
+ * the review queue.
+ */
+async function patientIdForSession(sessionId: string): Promise<string> {
+  const row = await prisma.tabletIntakeSubmission.findFirst({
+    where: { sessionId },
+    select: { patientId: true },
+  });
+  if (!row) throw new Error(`No submission for session ${sessionId}`);
+  return row.patientId;
+}
+
 beforeAll(async () => {
   // The clinic comes first: the staff routes sit behind requireClinicAccess,
   // so each agent has to be assigned to it and have it selected.
@@ -161,9 +175,11 @@ describe('POST /api/tablet-intake/tablet/:token/submit', () => {
       .post(`/api/tablet-intake/tablet/${start.body.token}/submit`)
       .send(fullPayload({ mobileNumber: '+63-917-555-0101' }));
     expect(submit.status).toBe(201);
-    expect(submit.body.patientCreated).toBe(true);
-    expect(submit.body.patientId).toMatch(/^[a-z0-9]+$/);
-    createdPatientIds.push(submit.body.patientId);
+    // The tablet learns nothing about the record (QA 8).
+    expect(submit.body.patientId).toBeUndefined();
+    expect(submit.body.patientCreated).toBeUndefined();
+    expect(submit.body.message).toBeUndefined();
+    createdPatientIds.push(await patientIdForSession(start.body.id));
 
     // Session is now SUBMITTED; subsequent reads reflect that and don't leak form data.
     const read = await supertest(app).get(`/api/tablet-intake/tablet/${start.body.token}`);
@@ -183,7 +199,7 @@ describe('POST /api/tablet-intake/tablet/:token/submit', () => {
       .post(`/api/tablet-intake/tablet/${start.body.token}/submit`)
       .send(fullPayload({ mobileNumber: '+63-917-555-0102' }));
     expect(first.status).toBe(201);
-    createdPatientIds.push(first.body.patientId);
+    createdPatientIds.push(await patientIdForSession(start.body.id));
 
     const second = await supertest(app)
       .post(`/api/tablet-intake/tablet/${start.body.token}/submit`)
@@ -209,7 +225,7 @@ describe('POST /api/tablet-intake/tablet/:token/submit', () => {
     expect(res.status).toBe(400);
   });
 
-  it('dedups on blind indexes: same name + mobile reuses the existing patient', async () => {
+  it('dedups on blind indexes: same name, birth date and mobile reuses the existing patient', async () => {
     // Patient columns are encrypted with a random IV, so dedup matches the
     // HMAC blind indexes (firstNameIdx/lastNameIdx/mobileIdx) instead.
     const mobile = '+63-917-555-0199';
@@ -220,8 +236,8 @@ describe('POST /api/tablet-intake/tablet/:token/submit', () => {
     const first = await supertest(app)
       .post(`/api/tablet-intake/tablet/${start1.body.token}/submit`)
       .send(fullPayload({ firstName: 'Dedup', lastName: 'Target', mobileNumber: mobile }));
-    expect(first.body.patientCreated).toBe(true);
-    createdPatientIds.push(first.body.patientId);
+    const firstPatientId = await patientIdForSession(start1.body.id);
+    createdPatientIds.push(firstPatientId);
 
     const start2 = await secretaryAgent
       .post('/api/tablet-intake/sessions')
@@ -231,8 +247,14 @@ describe('POST /api/tablet-intake/tablet/:token/submit', () => {
       .post(`/api/tablet-intake/tablet/${start2.body.token}/submit`)
       .send(fullPayload({ firstName: 'dedup', lastName: 'TARGET', mobileNumber: '+63 917 555 0199' }));
     expect(second.status).toBe(201);
-    expect(second.body.patientCreated).toBe(false);
-    expect(second.body.patientId).toBe(first.body.patientId);
+    // Matched an existing record, so the tablet is told only to see the
+    // secretary: no id, and no hint that a record already existed beyond the
+    // message the patient in front of it is meant to read.
+    expect(second.body.message).toBe('Please see the secretary.');
+    expect(second.body.patientId).toBeUndefined();
+    expect(second.body.patientCreated).toBeUndefined();
+    // Staff still see it resolved to the same patient.
+    expect(await patientIdForSession(start2.body.id)).toBe(firstPatientId);
   });
 });
 
@@ -289,7 +311,7 @@ describe('cancel', () => {
       .post(`/api/tablet-intake/tablet/${start.body.token}/submit`)
       .send(fullPayload({ mobileNumber: '+63-917-555-0106' }));
     expect(submit.status).toBe(201);
-    createdPatientIds.push(submit.body.patientId);
+    createdPatientIds.push(await patientIdForSession(start.body.id));
 
     const cancel = await secretaryAgent.post(`/api/tablet-intake/sessions/${start.body.id}/cancel`);
     expect(cancel.status).toBe(400);
@@ -328,10 +350,10 @@ describe('consent capture (QA 8.4)', () => {
       .post(`/api/tablet-intake/tablet/${start.body.token}/submit`)
       .send(fullPayload({ mobileNumber: '+63-917-555-0140' }));
     expect(submit.status).toBe(201);
-    createdPatientIds.push(submit.body.patientId);
+    createdPatientIds.push(await patientIdForSession(start.body.id));
 
     const consents = await prisma.patientConsent.findMany({
-      where: { patientId: submit.body.patientId },
+      where: { patientId: await patientIdForSession(start.body.id) },
       orderBy: { consentType: 'asc' },
     });
 
@@ -367,16 +389,16 @@ describe('consent capture (QA 8.4)', () => {
         }),
       );
     expect(submit.status).toBe(201);
-    createdPatientIds.push(submit.body.patientId);
+    createdPatientIds.push(await patientIdForSession(start.body.id));
 
     const photo = await prisma.patientConsent.findFirst({
-      where: { patientId: submit.body.patientId, consentType: 'CLINICAL_PHOTOGRAPHY' },
+      where: { patientId: await patientIdForSession(start.body.id), consentType: 'CLINICAL_PHOTOGRAPHY' },
     });
     // A refusal the clinic has to honor is worth as much as a grant.
     expect(photo?.isGranted).toBe(false);
 
     const privacy = await prisma.patientConsent.findFirst({
-      where: { patientId: submit.body.patientId, consentType: 'DATA_PROCESSING' },
+      where: { patientId: await patientIdForSession(start.body.id), consentType: 'DATA_PROCESSING' },
     });
     expect(privacy?.isGranted).toBe(true);
   });
@@ -408,5 +430,76 @@ describe('consent capture (QA 8.4)', () => {
       where: { id: start.body.id },
     });
     expect(session?.status).toBe('ACTIVE');
+  });
+});
+
+
+describe('what the tablet is allowed to learn (QA 8)', () => {
+  it('tells a returning patient to see the secretary and nothing else', async () => {
+    const shared = {
+      firstName: 'Returning',
+      lastName: 'Visitor',
+      dateOfBirth: '1975-02-02',
+      mobileNumber: '+63-917-555-0150',
+    };
+
+    const first = await secretaryAgent.post('/api/tablet-intake/sessions').send({ clinicId });
+    createdSessionIds.push(first.body.id);
+    await supertest(app)
+      .post(`/api/tablet-intake/tablet/${first.body.token}/submit`)
+      .send(fullPayload(shared))
+      .expect(201);
+    createdPatientIds.push(await patientIdForSession(first.body.id));
+
+    const second = await secretaryAgent.post('/api/tablet-intake/sessions').send({ clinicId });
+    createdSessionIds.push(second.body.id);
+    const res = await supertest(app)
+      .post(`/api/tablet-intake/tablet/${second.body.token}/submit`)
+      .send(fullPayload(shared));
+
+    expect(res.status).toBe(201);
+    expect(res.body.message).toBe('Please see the secretary.');
+    // The whole body, not just the fields we remembered to check: nothing that
+    // identifies the record may reach a tablet left in a waiting room.
+    const body = JSON.stringify(res.body);
+    expect(body).not.toContain('patientId');
+    expect(body).not.toContain('patientCreated');
+    expect(body).not.toContain('sessionId');
+    expect(Object.keys(res.body).sort()).toEqual(['message', 'submittedAt']);
+  });
+
+  it('matches on birth date too, so a parent and child sharing a number stay separate', async () => {
+    const family = {
+      firstName: 'Shared',
+      lastName: 'Number',
+      mobileNumber: '+63-917-555-0151',
+    };
+
+    const parentSession = await secretaryAgent
+      .post('/api/tablet-intake/sessions')
+      .send({ clinicId });
+    createdSessionIds.push(parentSession.body.id);
+    await supertest(app)
+      .post(`/api/tablet-intake/tablet/${parentSession.body.token}/submit`)
+      .send(fullPayload({ ...family, dateOfBirth: '1968-04-04' }))
+      .expect(201);
+    const parentId = await patientIdForSession(parentSession.body.id);
+    createdPatientIds.push(parentId);
+
+    const childSession = await secretaryAgent
+      .post('/api/tablet-intake/sessions')
+      .send({ clinicId });
+    createdSessionIds.push(childSession.body.id);
+    const child = await supertest(app)
+      .post(`/api/tablet-intake/tablet/${childSession.body.token}/submit`)
+      .send(fullPayload({ ...family, dateOfBirth: '2014-09-09' }));
+    expect(child.status).toBe(201);
+    // A different birth date is a different person, so this is a new record
+    // and the tablet gets no "see the secretary".
+    expect(child.body.message).toBeUndefined();
+
+    const childId = await patientIdForSession(childSession.body.id);
+    createdPatientIds.push(childId);
+    expect(childId).not.toBe(parentId);
   });
 });
