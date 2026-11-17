@@ -164,4 +164,17 @@ test.describe('medications for the Secretary', () => {
     await expect(page.getByText('Only the Doctor can view medications and allergies.')).toBeVisible();
     await expect(page.getByRole('link', { name: 'Medications' })).toHaveCount(0); // not in the menu
   });
+
+  test('the Doctor marks the medication list reviewed for this visit', async ({ page }) => {
+    const card = page.getByRole('region', { name: 'Medication review' });
+    await expect(card).toContainText('Not reviewed yet.');
+    await expect(card).toContainText('Review due this visit');
+
+    await card.getByLabel('Review note').fill('Patient confirmed no other medicines');
+    await card.getByRole('button', { name: /Reviewed$/ }).click();
+
+    await expect(card).toContainText('✓ Reviewed today');
+    await expect(card).toContainText('Patient confirmed no other medicines');
+    await expect(card.getByRole('button', { name: /Reviewed$/ })).toHaveCount(0);
+  });
 });

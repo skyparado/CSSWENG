@@ -358,6 +358,16 @@ export interface RightsRequest {
   decidedBy?: { fullName: string } | null;
 }
 
+/** The Doctor confirming the medication list is current at a visit. */
+export interface MedicationReview {
+  id: string;
+  patientId: string;
+  activeCount: number;
+  note?: string | null;
+  reviewedAt: string;
+  reviewedBy: { fullName: string };
+}
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const isBlob = body instanceof Blob;
   const res = await fetch(path, {
@@ -457,6 +467,11 @@ export const api = {
     call<{
       items: Array<{ id: string; action: string; resourceId: string | null; metadata: Record<string, unknown> | null; createdAt: string }>;
     }>('GET', '/api/maintenance/backups'),
+
+  medicationReviews: (patientId: string) =>
+    call<{ items: MedicationReview[] }>('GET', `/api/medication-reviews?${qs({ patientId })}`),
+  reviewMedicationList: (patientId: string, note?: string) =>
+    call<MedicationReview>('POST', '/api/medication-reviews', { patientId, note }),
 
   report: (report: ReportKey, params: { from: string; to: string; clinicId?: string }) =>
     call<ReportResult>('GET', `/api/reports/${report}?${qs(params)}`),

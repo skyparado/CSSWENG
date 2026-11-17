@@ -193,3 +193,15 @@ export interface SafetyAlert {
   /** The allergy or existing medication that triggered the alert. */
   relatedId: string;
 }
+
+/* ------------------------- Medication review per visit ------------------------- */
+
+/** POST /api/medication-reviews: the Doctor confirms the patient's medication list is current. */
+export const medicationReviewCreateSchema = z.object({
+  patientId: idSchema,
+  /** Optional, e.g. "patient also takes vitamin A, added". */
+  note: z.string().trim().max(1000).optional(),
+});
+export type MedicationReviewCreate = z.infer<typeof medicationReviewCreateSchema>;
+
+export const medicationReviewQuerySchema = z.object({ patientId: idSchema });

@@ -37,6 +37,7 @@ const ACTIONS: Array<{ value: string; label: string; group: string }> = [
   { value: 'INTAKE_SESSION_STARTED', label: 'Intake started', group: 'Intake' },
   { value: 'INTAKE_SESSION_SUBMITTED', label: 'Intake submitted', group: 'Intake' },
   { value: 'INTAKE_SESSION_CANCELLED', label: 'Intake cancelled', group: 'Intake' },
+  { value: 'MEDICATION_LIST_REVIEWED', label: 'Medication list reviewed', group: 'Patients' },
   { value: 'RIGHTS_REQUEST_RECORDED', label: 'Rights request recorded', group: 'Privacy' },
   { value: 'RIGHTS_REQUEST_COMPLETED', label: 'Rights request completed', group: 'Privacy' },
   { value: 'RIGHTS_REQUEST_DENIED', label: 'Rights request denied', group: 'Privacy' },

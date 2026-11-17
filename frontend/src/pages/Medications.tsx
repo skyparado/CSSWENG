@@ -10,6 +10,7 @@ import {
   type MedicationStatus,
   type SafetyAlert,
 } from '../api';
+import MedicationReviewCard from './MedicationReviewCard';
 import PatientPicker from '../PatientPicker';
 import { go, useLoad, useSession } from '../session';
 import { zonedParts } from '../time';
@@ -115,6 +116,8 @@ export default function Medications({ patientId }: { patientId: string }) {
           {notice}
         </p>
       )}
+
+      <MedicationReviewCard patientId={patientId} currentCount={items.filter((m) => m.status !== 'DISCONTINUED').length} />
 
       <div className="split-wide">
         <div className="stack">

@@ -91,6 +91,7 @@ model Patient {
 
   tabletIntakeSubmissions TabletIntakeSubmission[]
   rightsRequests          PatientRightsRequest[]
+  medicationReviews       MedicationReview[]
 
   @@index([lastNameIdx])
   @@index([firstNameIdx])
@@ -354,6 +355,7 @@ model User {
   reviewedIntakeForms   TabletIntakeSubmission[] @relation("IntakeSubmissionReviewedBy")
   rightsRequestsRecorded PatientRightsRequest[]   @relation("RightsRequestRecordedBy")
   rightsRequestsDecided  PatientRightsRequest[]   @relation("RightsRequestDecidedBy")
+  medicationReviews      MedicationReview[]
 
   @@index([status])
   @@index([role])
@@ -402,6 +404,7 @@ model Clinic {
 
   tabletSessions TabletIntakeSession[]
   rightsRequests PatientRightsRequest[]
+  medicationReviews MedicationReview[]
 
   @@index([isActive])
 }
@@ -1159,4 +1162,23 @@ model PatientRightsRequest {
 
   @@index([clinicId, status, receivedAt])
   @@index([patientId, receivedAt])
+}
+
+/// The Doctor confirming, at a visit, that the patient's medication list is
+/// current (Dev 3, medication review per visit). Append-only: one row per review.
+model MedicationReview {
+  id           String   @id @default(cuid())
+  patientId    String
+  clinicId     String
+  /// How many current medications were on the list when it was reviewed.
+  activeCount  Int
+  note         String? // app-encrypted
+  reviewedById String
+  reviewedAt   DateTime @default(now())
+
+  patient    Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  clinic     Clinic  @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  reviewedBy User    @relation(fields: [reviewedById], references: [id], onDelete: Restrict)
+
+  @@index([patientId, reviewedAt])
 }
