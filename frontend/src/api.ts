@@ -337,6 +337,27 @@ export function notifyApiActivity(): void {
   }
 }
 
+export type RightsRequestType = 'ACCESS' | 'COPY' | 'CORRECTION';
+export type RightsRequestChannel = 'IN_PERSON' | 'PHONE' | 'EMAIL' | 'WRITTEN';
+export type RightsRequestStatus = 'PENDING' | 'COMPLETED' | 'DENIED';
+
+/** A patient's request to access, copy or correct their record (SDD 7.4). */
+export interface RightsRequest {
+  id: string;
+  patientId: string;
+  clinicId: string;
+  requestType: RightsRequestType;
+  receivedVia: RightsRequestChannel;
+  details?: string | null;
+  status: RightsRequestStatus;
+  receivedAt: string;
+  decidedAt?: string | null;
+  decisionNote?: string | null;
+  patient: PatientRef & { patientNumber?: string };
+  recordedBy: { fullName: string };
+  decidedBy?: { fullName: string } | null;
+}
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const isBlob = body instanceof Blob;
   const res = await fetch(path, {
@@ -417,6 +438,25 @@ export const api = {
     call<{ queued: boolean; jobId?: string }>('POST', `/api/follow-ups/${id}/remind`, { channel }),
   logCall: (body: { followUpId: string; outcome: OutreachOutcome; patientResponse?: string }) =>
     call<OutreachLog>('POST', '/api/outreach-logs', body),
+
+  rightsRequests: (params: { status?: RightsRequestStatus; patientId?: string; clinicId?: string } = {}) =>
+    call<{ items: RightsRequest[] }>('GET', `/api/rights-requests?${qs(params)}`),
+  recordRightsRequest: (body: {
+    patientId: string;
+    requestType: RightsRequestType;
+    receivedVia: RightsRequestChannel;
+    details?: string;
+  }) => call<RightsRequest>('POST', '/api/rights-requests', body),
+  decideRightsRequest: (id: string, status: 'COMPLETED' | 'DENIED', decisionNote: string) =>
+    call<RightsRequest>('POST', `/api/rights-requests/${id}/decision`, { status, decisionNote }),
+
+  /** Doctor only: run the nightly jobs now (the free hosting plan sleeps through their schedule). */
+  runBackupNow: () => call<{ queued: boolean; jobId?: string }>('POST', '/api/maintenance/backup'),
+  runReminderScanNow: () => call<{ queued: boolean; jobId?: string }>('POST', '/api/maintenance/reminder-scan'),
+  backupHistory: () =>
+    call<{
+      items: Array<{ id: string; action: string; resourceId: string | null; metadata: Record<string, unknown> | null; createdAt: string }>;
+    }>('GET', '/api/maintenance/backups'),
 
   report: (report: ReportKey, params: { from: string; to: string; clinicId?: string }) =>
     call<ReportResult>('GET', `/api/reports/${report}?${qs(params)}`),

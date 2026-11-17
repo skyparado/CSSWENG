@@ -90,6 +90,7 @@ model Patient {
   labResults       LabResult[]
 
   tabletIntakeSubmissions TabletIntakeSubmission[]
+  rightsRequests          PatientRightsRequest[]
 
   @@index([lastNameIdx])
   @@index([firstNameIdx])
@@ -351,6 +352,8 @@ model User {
   startedTabletSessions TabletIntakeSession[] @relation("TabletIntakeSessionStarter")
   reportExports         ReportExport[]        @relation("ReportExportRequestedBy")
   reviewedIntakeForms   TabletIntakeSubmission[] @relation("IntakeSubmissionReviewedBy")
+  rightsRequestsRecorded PatientRightsRequest[]   @relation("RightsRequestRecordedBy")
+  rightsRequestsDecided  PatientRightsRequest[]   @relation("RightsRequestDecidedBy")
 
   @@index([status])
   @@index([role])
@@ -398,6 +401,7 @@ model Clinic {
   labResults         LabResult[]
 
   tabletSessions TabletIntakeSession[]
+  rightsRequests PatientRightsRequest[]
 
   @@index([isActive])
 }
@@ -1106,4 +1110,53 @@ model ReportExport {
 
   @@index([requestedById, createdAt])
   @@index([status, createdAt])
+}
+
+// ============ Patient rights requests (Dev 3, SDD 7.4 "Rights of the patient") ===
+
+/// What the patient asked for under Section 16 of the Data Privacy Act (RA 10173).
+enum RightsRequestType {
+  ACCESS
+  COPY
+  CORRECTION
+}
+
+/// How the request reached the clinic.
+enum RightsRequestChannel {
+  IN_PERSON
+  PHONE
+  EMAIL
+  WRITTEN
+}
+
+enum RightsRequestStatus {
+  PENDING
+  COMPLETED
+  DENIED
+}
+
+/// A patient's request to access, copy or correct their record. Either staff
+/// role records it; only the Doctor completes or denies it. Free text is
+/// app-encrypted because it can hold personal or clinical detail.
+model PatientRightsRequest {
+  id           String               @id @default(cuid())
+  patientId    String
+  clinicId     String
+  requestType  RightsRequestType
+  receivedVia  RightsRequestChannel
+  details      String? // app-encrypted: what the patient asked for
+  status       RightsRequestStatus  @default(PENDING)
+  receivedAt   DateTime             @default(now())
+  recordedById String
+  decidedById  String?
+  decidedAt    DateTime?
+  decisionNote String? // app-encrypted: what was done, or why it was denied
+
+  patient    Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  clinic     Clinic  @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  recordedBy User    @relation("RightsRequestRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+  decidedBy  User?   @relation("RightsRequestDecidedBy", fields: [decidedById], references: [id], onDelete: Restrict)
+
+  @@index([clinicId, status, receivedAt])
+  @@index([patientId, receivedAt])
 }

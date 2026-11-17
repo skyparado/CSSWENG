@@ -4,6 +4,7 @@ import { api, type ReportExportView, type ReportKey } from '../api';
 import { chartFor, visibleTabs } from '../reportCharts';
 import { useLoad, useSession } from '../session';
 import { addDays, zonedParts } from '../time';
+import SystemJobs from './SystemJobs';
 
 /** S17 Reports: five read-only reports with a Recharts chart, a table, and PDF/CSV exports prepared by a background job. */
 export default function Reports() {
@@ -207,6 +208,7 @@ export default function Reports() {
       <p className="muted" style={{ marginTop: 16 }}>
         Reports are read-only. Every report view and export is recorded in the audit log. Large exports are prepared in the background.
       </p>
+      {doctor && <SystemJobs />}
     </>
   );
 }

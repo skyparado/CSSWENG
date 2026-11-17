@@ -7,6 +7,7 @@ import Calendar from './pages/Calendar';
 import DocumentEditor from './pages/DocumentEditor';
 import Documents from './pages/Documents';
 import FollowUps from './pages/FollowUps';
+import RightsRequests from './pages/RightsRequests';
 import Outreach, { followUpIdFromOutreachRoute } from './pages/Outreach';
 import Medications, { MedicationsLanding, patientIdFromMedicationsRoute } from './pages/Medications';
 import Patients from './pages/Patients';
@@ -65,6 +66,7 @@ const MENU: Array<{ label: string; path: string; doctorOnly?: boolean }> = [
   { label: 'Documents', path: '/documents' },
   { label: 'Patient Intake', path: '/intake' },
   { label: 'Reports', path: '/reports' },
+  { label: 'Rights Requests', path: '/rights-requests' },
   { label: 'User Accounts', path: '/users', doctorOnly: true },
   { label: 'Audit Log', path: '/audit', doctorOnly: true },
 ];
@@ -210,6 +212,7 @@ function Routes() {
   else if (route.startsWith('/images'))
     page = doctor ? <ClinicalImagesLanding /> : <p>Only the Doctor can view clinical images.</p>;
   else if (route === '/intake') page = <Intake />;
+  else if (route === '/rights-requests') page = <RightsRequests />;
   else if (route === '/users')
     page = doctor ? <Users /> : <p>Only the Doctor can manage staff accounts.</p>;
   else if (route === '/audit')

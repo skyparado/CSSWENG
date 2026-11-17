@@ -37,6 +37,13 @@ const ACTIONS: Array<{ value: string; label: string; group: string }> = [
   { value: 'INTAKE_SESSION_STARTED', label: 'Intake started', group: 'Intake' },
   { value: 'INTAKE_SESSION_SUBMITTED', label: 'Intake submitted', group: 'Intake' },
   { value: 'INTAKE_SESSION_CANCELLED', label: 'Intake cancelled', group: 'Intake' },
+  { value: 'RIGHTS_REQUEST_RECORDED', label: 'Rights request recorded', group: 'Privacy' },
+  { value: 'RIGHTS_REQUEST_COMPLETED', label: 'Rights request completed', group: 'Privacy' },
+  { value: 'RIGHTS_REQUEST_DENIED', label: 'Rights request denied', group: 'Privacy' },
+  { value: 'BACKUP_REQUESTED', label: 'Backup requested', group: 'Maintenance' },
+  { value: 'BACKUP_COMPLETED', label: 'Backup completed', group: 'Maintenance' },
+  { value: 'BACKUP_FAILED', label: 'Backup failed', group: 'Maintenance' },
+  { value: 'REMINDER_SCAN_REQUESTED', label: 'Reminder check requested', group: 'Maintenance' },
   { value: 'HTTP_REQUEST', label: 'Raw HTTP request', group: 'Other' },
 ];
 

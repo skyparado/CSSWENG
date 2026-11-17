@@ -14,6 +14,8 @@ import { authRouter } from './auth/auth.routes.js';
 import { refreshSessionUser } from './auth/sessionRefresh.js';
 import { usersRouter } from './users/users.routes.js';
 import { consentsRouter } from './consents/consents.routes.js';
+import { rightsRouter } from './rights/rights.routes.js';
+import { maintenanceRouter } from './maintenance/maintenance.routes.js';
 import { followUpsRouter } from './followups/followups.routes.js';
 import { outreachRouter } from './followups/outreach.routes.js';
 import { medicationsRouter } from './medications/medications.routes.js';
@@ -105,6 +107,8 @@ export function createApp(): Express {
   app.use('/api/documents', documentsRouter);
   // Follow-ups, reminders and outreach; consents; medications and allergies.
   app.use('/api/consents', consentsRouter);
+  app.use('/api/rights-requests', rightsRouter);
+  app.use('/api/maintenance', maintenanceRouter);
   app.use('/api/follow-ups', followUpsRouter);
   app.use('/api/outreach-logs', outreachRouter);
   app.use('/api/medications', medicationsRouter);
