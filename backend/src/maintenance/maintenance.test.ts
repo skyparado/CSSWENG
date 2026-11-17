@@ -18,6 +18,7 @@ import {
 } from './backup.js';
 import { yearsAgo } from './purge.js';
 import { handleMaintenanceJob } from './queue.js';
+import { env } from '../env.js';
 
 const key = randomBytes(32);
 
@@ -81,7 +82,8 @@ describe('runBackup', () => {
 
     const put = send.mock.calls.map((c) => c[0]).find((cmd) => cmd.constructor.name === 'PutObjectCommand');
     expect(put.input.Key).toBe('db/2026-11-09/emr-2026-11-09T02-00-00-000Z.dump.enc');
-    expect(put.input.Bucket).toBe('clinic-backups');
+    // The configured backup bucket (clinic-backups unless BACKUP_S3_BUCKET is set in .env).
+    expect(put.input.Bucket).toBe(env.BACKUP_S3_BUCKET);
     expect(put.input.ServerSideEncryption).toBe('AES256');
     expect((put.input.Body as Buffer).includes(Buffer.from('patient-records'))).toBe(false);
     expect(decryptBackup(put.input.Body as Buffer, key).equals(dump)).toBe(true);
