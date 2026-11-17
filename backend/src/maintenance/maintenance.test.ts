@@ -51,7 +51,7 @@ describe('backup encryption', () => {
 
 describe('backup key', () => {
   it('is required, and must be 32 bytes', () => {
-    expect(() => loadBackupKey(undefined)).toThrow(/not set/);
+    expect(() => loadBackupKey('')).toThrow(/not set/);
     expect(() => loadBackupKey(Buffer.from('short').toString('base64'))).toThrow(/32 bytes/);
     expect(loadBackupKey(key.toString('base64')).equals(key)).toBe(true);
   });
