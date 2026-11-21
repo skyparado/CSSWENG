@@ -34,6 +34,11 @@ services:
       # Back both up: losing either makes stored patient data unreadable or unsearchable.
       - key: FIELD_ENCRYPTION_KEY
         sync: false
+      # Used by prisma-field-encryption. It must start with "k1.aesgcm256."; generate with:
+      #   node -e "console.log('k1.aesgcm256.' + require('crypto').randomBytes(32).toString('base64'))"
+      # The server will not start without it.
+      - key: PRISMA_FIELD_ENCRYPTION_KEY
+        sync: false
       - key: BLIND_INDEX_KEY
         sync: false
       # S3-compatible storage for PDFs and signatures (AWS S3, Cloudflare R2, …).
@@ -80,6 +85,12 @@ services:
         sync: false
       - key: BACKUP_S3_SECRET_ACCESS_KEY
         sync: false
+
+      # Loads the sample patients on first start (random passwords, printed once in
+      # the service logs). Does nothing once the data is there. Remove or set to
+      # "false" for a real clinic database. See docs/DEPLOYMENT.md.
+      - key: DEMO_SEED
+        value: 'true'
 
   - type: keyvalue
     name: clinic-redis

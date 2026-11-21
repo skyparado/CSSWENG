@@ -22,12 +22,19 @@ function fmtDate(d: Date): string {
 }
 
 /** Letterhead shared by every document Dr. Pacio issues. */
-function letterhead(clinicName: string, clinicAddress?: string): string {
+function letterhead(
+  clinicName: string,
+  clinicAddress?: string,
+  clinicPhone?: string,
+  clinicSchedule?: string,
+): string {
   return `<div class="letterhead">
     <div class="dr">Angeline Pacio, MD</div>
     <div>General Ophthalmologist</div>
     <div>Diplomate, Philippine Board of Ophthalmology</div>
-    <div class="clinic">${esc(clinicName)}${clinicAddress ? `<br>${esc(clinicAddress)}` : ''}</div>
+    <div class="clinic">${esc(clinicName)}${clinicAddress ? `<br>${esc(clinicAddress)}` : ''}${
+      clinicPhone ? `<br>Tel. ${esc(clinicPhone)}` : ''
+    }${clinicSchedule ? `<br>Clinic hours: ${esc(clinicSchedule)}` : ''}</div>
   </div>`;
 }
 
@@ -35,7 +42,13 @@ function letterhead(clinicName: string, clinicAddress?: string): string {
  * Signature block. `signatureDataUri` is the Doctor's uploaded signature image,
  * passed only when the document is signed; unsigned renders carry a draft stamp.
  */
-function signature(name: string, license?: string, signatureDataUri?: string): string {
+function signature(
+  name: string,
+  license?: string,
+  signatureDataUri?: string,
+  ptr?: string,
+  s2?: string,
+): string {
   const mark = signatureDataUri
     ? `<img class="sig-img" src="${esc(signatureDataUri)}" alt="Signature">`
     : '<div class="draft">DRAFT · NOT SIGNED</div>';
@@ -43,6 +56,8 @@ function signature(name: string, license?: string, signatureDataUri?: string): s
       <div class="sig-space">${mark}</div>
       <div class="line">${esc(name)}</div>
       ${license ? `<div class="label">License No. ${esc(license)}</div>` : ''}
+      ${ptr ? `<div class="label">PTR No. ${esc(ptr)}</div>` : ''}
+      ${s2 ? `<div class="label">S2 No. ${esc(s2)}</div>` : ''}
     </div>`;
 }
 
@@ -80,7 +95,7 @@ export function renderPrescriptionHtml(p: PrescriptionPayload, signatureDataUri?
     .join('');
 
   return `<!doctype html><html><head><meta charset="utf-8"><style>${baseStyle}</style></head><body>
-    ${letterhead(p.clinicName, p.clinicAddress)}
+    ${letterhead(p.clinicName, p.clinicAddress, p.clinicPhone, p.clinicSchedule)}
     <h1>Prescription</h1>
     <div class="meta">
       <div><span class="label">Patient:</span> ${esc(p.patientName)}${
@@ -92,7 +107,7 @@ export function renderPrescriptionHtml(p: PrescriptionPayload, signatureDataUri?
       <thead><tr><th>Drug</th><th>Dosage</th><th>Frequency</th><th>Duration</th><th>Notes</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
-    ${signature(p.prescriberName, p.prescriberLicense, signatureDataUri)}
+    ${signature(p.prescriberName, p.prescriberLicense, signatureDataUri, p.prescriberPtr, p.prescriberS2)}
   </body></html>`;
 }
 
@@ -108,13 +123,13 @@ export function renderMedicalCertificateHtml(
       : '';
 
   return `<!doctype html><html><head><meta charset="utf-8"><style>${baseStyle}</style></head><body>
-    ${letterhead(p.clinicName, p.clinicAddress)}
+    ${letterhead(p.clinicName, p.clinicAddress, p.clinicPhone, p.clinicSchedule)}
     <h1>Medical Certificate</h1>
     <div class="meta"><span class="label">Date:</span> ${esc(fmtDate(p.issuedOn))}</div>
     <p>This is to certify that <strong>${esc(p.patientName)}</strong> was examined and found to have:</p>
     <p><strong>${esc(p.diagnosis)}</strong></p>
     ${p.recommendation ? `<p>${esc(p.recommendation)}</p>` : ''}
     ${rest}
-    ${signature(p.prescriberName, p.prescriberLicense, signatureDataUri)}
+    ${signature(p.prescriberName, p.prescriberLicense, signatureDataUri, p.prescriberPtr, p.prescriberS2)}
   </body></html>`;
 }

@@ -16,6 +16,8 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.ts",
+    "db:seed:demo": "tsx src/demo/cli.ts",
+    "start:render": "prisma migrate deploy && node dist/demo/cli.js --if-enabled && node dist/index.js",
     "db:encrypt-existing": "tsx prisma/encryptExisting.ts",
     "db:restore-backup": "tsx prisma/restoreBackup.ts"
   },

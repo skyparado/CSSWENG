@@ -26,6 +26,12 @@ export const prescriptionPayloadSchema = z.object({
   clinicAddress: z.string().max(300).optional(),
   prescriberName: z.string().min(1).max(200),
   prescriberLicense: z.string().max(100).optional(),
+  /** Prescriber's PRC licence, PTR (professional tax receipt) and S2 numbers, as on her pad. */
+  prescriberPtr: z.string().trim().max(50).optional(),
+  prescriberS2: z.string().trim().max(50).optional(),
+  /** Filled from the clinic record by the server: contact number and consultation hours. */
+  clinicPhone: z.string().max(60).optional(),
+  clinicSchedule: z.string().max(300).optional(),
   issuedOn: z.coerce.date(),
   items: z
     .array(
@@ -48,6 +54,12 @@ export const medicalCertificatePayloadSchema = z.object({
   clinicAddress: z.string().max(300).optional(),
   prescriberName: z.string().min(1).max(200),
   prescriberLicense: z.string().max(100).optional(),
+  /** Prescriber's PRC licence, PTR (professional tax receipt) and S2 numbers, as on her pad. */
+  prescriberPtr: z.string().trim().max(50).optional(),
+  prescriberS2: z.string().trim().max(50).optional(),
+  /** Filled from the clinic record by the server: contact number and consultation hours. */
+  clinicPhone: z.string().max(60).optional(),
+  clinicSchedule: z.string().max(300).optional(),
   issuedOn: z.coerce.date(),
   diagnosis: z.string().min(1).max(1000),
   recommendation: z.string().max(1000).optional(),

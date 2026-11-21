@@ -164,3 +164,16 @@ describe('sendDocument', () => {
     await expect(sendDocument('d1', 'u-sec', 'PRINT')).rejects.toMatchObject({ status: 400 });
   });
 });
+
+describe('formatClinicSchedule', () => {
+  it('lists days in order with 12-hour times, and is undefined with no hours', async () => {
+    const { formatClinicSchedule } = await import('./documents.service.js');
+    expect(
+      formatClinicSchedule([
+        { dayOfWeek: 4, openTime: '10:00', closeTime: '12:00' },
+        { dayOfWeek: 1, openTime: '13:00', closeTime: '16:00' },
+      ]),
+    ).toBe('Mon 1:00 PM to 4:00 PM; Thu 10:00 AM to 12:00 PM');
+    expect(formatClinicSchedule([])).toBeUndefined();
+  });
+});
