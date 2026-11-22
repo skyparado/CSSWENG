@@ -48,7 +48,16 @@ function previousValues(cmp: ComparisonResponse | undefined, visitDate: string) 
 }
 
 /** S07 Consultation Note and Examination Findings (Doctor only). */
-export default function ConsultationNote({ patientId, encounterId }: { patientId: string; encounterId: string }) {
+export default function ConsultationNote({
+  patientId,
+  encounterId,
+  isNew = false,
+}: {
+  patientId: string;
+  encounterId: string;
+  /** True when this visit was just created by "+ New Note" this session (App passes ?new=1). */
+  isNew?: boolean;
+}) {
   const { user, clinic } = useSession();
   const [summary, setSummary] = useState<ChartSummary>();
   const [encounter, setEncounter] = useState<Encounter>();
@@ -60,6 +69,8 @@ export default function ConsultationNote({ patientId, encounterId }: { patientId
   const [previous, setPrevious] = useState<{ values: Map<string, string>; date?: string }>({ values: new Map() });
   const [saveState, setSaveState] = useState<{ at?: Date; saving?: boolean; error?: string }>({});
   const [confirming, setConfirming] = useState(false);
+  const [discardPrompt, setDiscardPrompt] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
   const [loadError, setLoadError] = useState<string>();
 
   const dirty = useRef(false);
@@ -189,6 +200,55 @@ export default function ConsultationNote({ patientId, encounterId }: { patientId
   const changed = (key: string, value: string) => {
     const prev = previous.values.get(key);
     return Boolean(prev && value && prev !== value);
+  };
+
+  /** True once the doctor has entered anything the chart would keep. */
+  const hasContent = (): boolean =>
+    Boolean(draft.subjective?.trim() || draft.assessment?.trim() || draft.plan?.trim()) ||
+    draft.diagnosisItems.length > 0 ||
+    findings.size > 0 ||
+    Object.values(cells).some((c) => c.value.trim() !== '');
+
+  const leave = () => go(`/patients/${p.id}`);
+
+  /** Keep the work as an unsigned draft: flush any pending autosave, then leave. */
+  const keepAsDraft = async () => {
+    setDiscardPrompt(false);
+    try {
+      if (dirty.current) await saveDraft();
+    } finally {
+      leave();
+    }
+  };
+
+  /** Delete this unsigned visit, then return to the chart. */
+  const discard = async () => {
+    clearTimeout(timer.current);
+    dirty.current = false;
+    setDiscarding(true);
+    try {
+      await clinicalApi.discardVisit(encounterId);
+      leave();
+    } catch (err) {
+      setDiscardPrompt(false);
+      setDiscarding(false);
+      setSaveState({ error: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  /**
+   * Cancel (S07). An empty visit that this session just started leaves no trace —
+   * discard it silently so no phantom "unsigned note" shows on the chart (S06).
+   * A visit with content, or one that already existed, is never deleted without
+   * the doctor's say-so: ask whether to keep it as an unsigned draft or discard it.
+   */
+  const onCancel = () => {
+    clearTimeout(timer.current);
+    if (!hasContent()) {
+      if (isNew) return void discard();
+      return leave(); // a pre-existing empty visit is left as it is, never silently deleted
+    }
+    setDiscardPrompt(true);
   };
 
   return (
@@ -329,6 +389,8 @@ export default function ConsultationNote({ patientId, encounterId }: { patientId
             )}
           </section>
 
+          <EyeDrawing patientId={p.id} encounterId={encounterId} locked={locked} />
+
           {signed && note && <Addenda note={note} encounterId={encounterId} onAdded={(a) => setNote({ ...note, addenda: [...note.addenda, a] })} />}
         </div>
 
@@ -357,7 +419,7 @@ export default function ConsultationNote({ patientId, encounterId }: { patientId
         </div>
         {!signed && (
           <>
-            <button type="button" onClick={() => go(`/patients/${p.id}`)}>
+            <button type="button" onClick={onCancel} disabled={discarding}>
               Cancel
             </button>
             <button
@@ -392,6 +454,26 @@ export default function ConsultationNote({ patientId, encounterId }: { patientId
               </button>
               <button type="button" className="primary" onClick={() => void sign()}>
                 Sign and Lock
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {discardPrompt && (
+        <div className="backdrop" role="presentation">
+          <div className="card dialog" role="dialog" aria-modal="true" aria-labelledby="discard-title">
+            <h2 id="discard-title">Discard this note?</h2>
+            <p>
+              This visit has unsaved or unsigned content. Keep it as an unsigned draft you can finish later, or discard the
+              visit and its findings. Discarding cannot be undone.
+            </p>
+            <div className="footer-bar">
+              <button type="button" onClick={() => void keepAsDraft()} disabled={discarding}>
+                Keep as unsigned draft
+              </button>
+              <button type="button" className="danger" onClick={() => void discard()} disabled={discarding}>
+                {discarding ? 'Discarding…' : 'Discard note'}
               </button>
             </div>
           </div>
@@ -584,5 +666,86 @@ function FollowUpCard({ patientId, clinicId, existing }: { patientId: string; cl
       )}
       <p className="muted small">The secretary will see this in the follow-up list for reminders.</p>
     </section>
+  );
+}
+
+/** The four blank eye-diagram templates the doctor can draw on (SDD 5.7, S09). */
+const EYE_TEMPLATES: Array<{ key: string; segment: 'ANTERIOR' | 'POSTERIOR'; eye: 'OD' | 'OS' }> = [
+  { key: 'ANTERIOR_OD', segment: 'ANTERIOR', eye: 'OD' },
+  { key: 'ANTERIOR_OS', segment: 'ANTERIOR', eye: 'OS' },
+  { key: 'POSTERIOR_OD', segment: 'POSTERIOR', eye: 'OD' },
+  { key: 'POSTERIOR_OS', segment: 'POSTERIOR', eye: 'OS' },
+];
+
+/**
+ * S07 item 7 — Eye drawing and images.
+ *
+ * Outline diagrams of each eye, plus the way into S09 for THIS visit. "Open
+ * Drawing" and "Upload image" carry the patient, the visit (encounter) and the
+ * chosen blank template to S09 as query params:
+ *   #/patients/:patientId/images?visit=:encounterId&template=ANTERIOR_OD
+ * Per the agreed contract, selecting a template creates no database record —
+ * S09 clones the template and saves the image only on the first stroke/save, so
+ * opening a diagram by mistake never clutters the chart. The template rendering
+ * and the lazy save live in S09 (Developer 4); this screen only links in.
+ */
+function EyeDrawing({ patientId, encounterId, locked }: { patientId: string; encounterId: string; locked: boolean }) {
+  const drawHref = (template: string) => `#/patients/${patientId}/images?visit=${encounterId}&template=${template}`;
+  const uploadHref = `#/patients/${patientId}/images?visit=${encounterId}`;
+
+  return (
+    <section className="card">
+      <div className="row between">
+        <h2>Eye drawing and images</h2>
+        <a href={uploadHref}>Upload image</a>
+      </div>
+      <p className="muted small">
+        {locked
+          ? 'Open a diagram to view this visit’s drawings in the image tool.'
+          : 'Choose an eye diagram to draw on the tablet, or upload a clinical photo. Drawings are saved as a layer over the template — nothing is saved until you draw.'}
+      </p>
+      <div className="eye-templates" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
+        {EYE_TEMPLATES.map((t) => (
+          <a
+            key={t.key}
+            className="btn"
+            href={drawHref(t.key)}
+            style={{ display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left', padding: 12 }}
+          >
+            <EyeOutline segment={t.segment} />
+            <span>
+              <strong>{t.segment === 'ANTERIOR' ? 'Anterior segment' : 'Posterior segment'}</strong>
+              <br />
+              <span className="muted small">{t.eye === 'OD' ? 'Right eye (OD)' : 'Left eye (OS)'} · Open Drawing</span>
+            </span>
+          </a>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/** A simple outline of the eye for the S07 template tiles; the real drawing templates live in S09. */
+function EyeOutline({ segment }: { segment: 'ANTERIOR' | 'POSTERIOR' }) {
+  return (
+    <svg width="44" height="44" viewBox="0 0 48 48" aria-hidden focusable="false" style={{ flex: 'none', color: 'var(--navy)' }}>
+      <circle cx="24" cy="24" r="20" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      {segment === 'ANTERIOR' ? (
+        <>
+          <circle cx="24" cy="24" r="10" fill="none" stroke="currentColor" strokeWidth="1.5" />
+          <circle cx="24" cy="24" r="4" fill="currentColor" />
+        </>
+      ) : (
+        <>
+          <circle cx="30" cy="24" r="5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+          <path
+            d="M30 24 C 22 20, 16 22, 10 18 M30 24 C 22 28, 16 26, 10 30"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1"
+          />
+        </>
+      )}
+    </svg>
   );
 }

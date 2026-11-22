@@ -23,7 +23,10 @@ export class EncounterError extends Error {
   }
 }
 
-type Db = Pick<typeof import("../prisma.js").prisma, "patient" | "appointment" | "encounter" | "clinicalNote" | "user">;
+type Db = Pick<
+  typeof import("../prisma.js").prisma,
+  "patient" | "appointment" | "encounter" | "clinicalNote" | "user" | "examFinding" | "labResult"
+>;
 
 /** Visit dates are clinic-local. All clinics are in Manila for now (Clinic.timezone defaults to it). */
 // Shared with the patients module; re-exported for the results services.
@@ -252,4 +255,57 @@ export async function addAddendum(db: Db, encounterId: string, input: CreateAdde
   });
   // AUDIT (Lance): "note.addendum_added"
   return toAddendum(created);
+}
+
+// ------------------------------- Discard -----------------------------------
+
+/**
+ * Discard an unsigned visit (S07 Cancel). Removes the encounter together with
+ * its draft primary note and any examination findings entered during it, so a
+ * cancelled "+ New Note" leaves no phantom unsigned visit on the chart (S06).
+ *
+ * Guarded so only an UNSIGNED visit can be deleted:
+ *  - a signed encounter, or any SIGNED note / addendum, is refused (409);
+ *  - lab results are permanent (insert-only, SDD 1.5), so a visit that has any
+ *    is kept and the doctor is asked to leave it or sign it instead.
+ *
+ * The frontend decides WHEN to call this: silently when it created the visit
+ * this session and nothing was entered, or on an explicit "Discard note" after
+ * warning that content will be lost. The backend never deletes a signed record.
+ */
+export async function discardEncounter(db: Db, id: string, actor: Actor) {
+  requireDoctor(actor, "discard a visit");
+  const enc = await loadEncounter(db, id);
+
+  if (enc.status === "SIGNED") {
+    throw new EncounterError(409, "ENCOUNTER_SIGNED", "A signed visit cannot be discarded.");
+  }
+
+  const notes = await db.clinicalNote.findMany({ where: { encounterId: id } });
+  if (notes.some((n) => n.status === "SIGNED" || n.noteType === "ADDENDUM")) {
+    throw new EncounterError(409, "HAS_SIGNED_CONTENT", "This visit has signed content and cannot be discarded.");
+  }
+
+  const labs = await db.labResult.findMany({ where: { encounterId: id } });
+  if (labs.length > 0) {
+    throw new EncounterError(
+      409,
+      "HAS_LAB_RESULTS",
+      "This visit has recorded lab results, which are permanent. Keep it as a draft or sign it instead.",
+    );
+  }
+
+  // Children first: findings and the draft note are editable while the visit is
+  // OPEN, so they delete cleanly; then the encounter itself.
+  await db.examFinding.deleteMany({ where: { encounterId: id } });
+  await db.clinicalNote.deleteMany({ where: { encounterId: id } });
+  try {
+    await db.encounter.deleteMany({ where: { id } });
+  } catch {
+    // A follow-up or other record still points at the visit (ON DELETE RESTRICT).
+    throw new EncounterError(409, "ENCOUNTER_HAS_RELATED", "This visit has related records and cannot be discarded.");
+  }
+
+  // AUDIT (Lance): "encounter.discarded"
+  return { discarded: true as const, id };
 }

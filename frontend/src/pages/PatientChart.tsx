@@ -64,7 +64,8 @@ export default function PatientChart({ patientId }: { patientId: string }) {
     setStarting(true);
     try {
       const enc = await clinicalApi.startVisit({ patientId: p.id, type: 'FOLLOW_UP' });
-      go(`/patients/${p.id}/visits/${enc.id}`);
+      // ?new=1 marks a visit created this session, so Cancel can discard it if left empty.
+      go(`/patients/${p.id}/visits/${enc.id}?new=1`);
     } catch (err) {
       setFailure(err instanceof Error ? err.message : String(err));
       setStarting(false);
