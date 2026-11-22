@@ -10,8 +10,6 @@ services:
     branch: main
     healthCheckPath: /health/ready
     envVars:
-      - key: PRISMA_FIELD_ENCRYPTION_KEY
-        sync: false
       - key: NODE_ENV
         value: production
       - key: DATABASE_URL
