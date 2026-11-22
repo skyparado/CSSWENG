@@ -46,7 +46,10 @@ function patientPage(route: string): ReactNode | undefined {
   if (parts[1] === 'new' && parts.length === 2) return <PatientRegister />;
   const id = parts[1]!;
   if (parts.length === 2) return <PatientChart key={id} patientId={id} />;
-  if (parts[2] === 'visits' && parts[3]) return <ConsultationNote key={parts[3]} patientId={id} encounterId={parts[3]} />;
+  if (parts[2] === 'visits' && parts[3]) {
+    const isNew = new URLSearchParams(query).get('new') === '1';
+    return <ConsultationNote key={parts[3]} patientId={id} encounterId={parts[3]} isNew={isNew} />;
+  }
   if (parts[2] === 'compare') {
     const current = new URLSearchParams(query).get('current') ?? undefined;
     return <Comparison key={id} patientId={id} currentEncounterId={current} />;

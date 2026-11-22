@@ -13,6 +13,7 @@ import {
   EncounterError,
   addAddendum,
   createEncounter,
+  discardEncounter,
   getEncounter,
   listEncounters,
   saveDraft,
@@ -32,12 +33,16 @@ const wrap = (fn: Handler) => (req: Request, res: Response, next: NextFunction) 
  *   POST  /api/encounters/:id/note/sign           sign and lock (doctor); body { version }
  *   POST  /api/encounters/:id/note/addenda        dated addendum on a signed note (doctor);
  *                                                 body { addendumReason, ...SOAP fields being added }
+ *   DELETE /api/encounters/:id                    discard an unsigned visit (doctor); 409 once signed
  *
  * Examination findings for a visit are under /api/encounters/:id/findings
  * (see results/results.routes.ts).
  */
 export function createEncounterRouter(
-  db: Pick<typeof import("../prisma.js").prisma, "patient" | "appointment" | "encounter" | "clinicalNote" | "user">,
+  db: Pick<
+    typeof import("../prisma.js").prisma,
+    "patient" | "appointment" | "encounter" | "clinicalNote" | "user" | "examFinding" | "labResult"
+  >,
 ): Router {
   const router = Router();
 
@@ -90,6 +95,13 @@ export function createEncounterRouter(
       const actor = getActor(req);
       const input = CreateAddendumSchema.parse(req.body);
       res.status(201).json(await addAddendum(db, req.params.id!, input, actor));
+    }),
+  );
+
+  router.delete(
+    "/:id",
+    wrap(async (req, res) => {
+      res.json(await discardEncounter(db, req.params.id!, getActor(req)));
     }),
   );
 
