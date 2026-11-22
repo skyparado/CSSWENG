@@ -8,7 +8,7 @@ import { AuditActions } from '../audit/actions.js';
 import { actorFromRequest, recordAudit } from '../audit/record.js';
 import { getObject } from '../storage/s3.js';
 import { resolveReportScope, runReport, type ReportActor } from './reports.service.js';
-import { createExportRow, exportFileName, toView, type ExportParams } from './exports.service.js';
+import { authorizeExport, savedParams, createExportRow, exportFileName, toView, type ExportParams } from './exports.service.js';
 import { enqueueExport } from './exports.queue.js';
 
 export const reportsRouter = Router();
@@ -33,6 +33,7 @@ reportsRouter.post(
     // Same scope rules as viewing; an export can never widen what the user may see.
     reportQuerySchema.parse({ from: body.from, to: body.to, clinicId: body.clinicId });
     const clinicId = resolveReportScope(actorOf(req), body.report, body.clinicId) ?? null;
+    await authorizeExport(currentUser(req).userId, body.report, clinicId, currentUser(req).activeClinicId);
     const params: ExportParams = { from: body.from, to: body.to, clinicId };
 
     const row = await createExportRow({
@@ -49,12 +50,10 @@ reportsRouter.post(
     });
     try {
       await enqueueExport(row.id);
-    } catch (err) {
-      await prisma.reportExport.update({
-        where: { id: row.id },
-        data: { status: 'FAILED', error: 'The job queue is unavailable', completedAt: new Date() },
-      });
-      throw new HttpError(503, 'Exports are temporarily unavailable');
+    } catch {
+      // The database request survives a Redis outage. The worker republishes its stable job id.
+      res.status(202).json(toView(row));
+      return;
     }
     res.status(202).json(toView(row));
   }),
@@ -65,6 +64,8 @@ async function loadOwnExport(req: Request) {
   const user = currentUser(req);
   const row = await prisma.reportExport.findUnique({ where: { id: req.params.id } });
   if (!row || row.requestedById !== user.userId) throw notFound('Export not found');
+  const params = savedParams(row);
+  await authorizeExport(user.userId, row.report as ReportKey, params.clinicId, user.activeClinicId ?? '');
   return row;
 }
 
@@ -91,7 +92,7 @@ reportsRouter.get(
       action: AuditActions.REPORT_DOWNLOADED,
       resourceType: 'ReportExport',
       resourceId: row.id,
-      metadata: { report: row.report, format: row.format },
+      metadata: { report: row.report, format: row.format, clinicId: savedParams(row).clinicId },
     });
     const name = row.fileName ?? exportFileName(row.report as ReportKey, row.params as unknown as ExportParams, row.format);
     res.setHeader('Content-Type', row.format === 'PDF' ? 'application/pdf' : 'text/csv; charset=utf-8');

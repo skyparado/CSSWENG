@@ -1,4 +1,5 @@
 import { prisma } from '../prisma.js';
+import { lockAuditChain } from '../audit/audit.service.js';
 import { env } from '../env.js';
 import { AuditActions } from '../audit/actions.js';
 import { recordAudit, SYSTEM_ACTOR } from '../audit/record.js';
@@ -35,6 +36,7 @@ export async function purgeAuditLog(now: Date = new Date()): Promise<AuditPurgeR
   const cutoff = yearsAgo(now, env.AUDIT_RETENTION_YEARS);
   return prisma.$transaction(
     async (tx) => {
+      await lockAuditChain(tx);
       await tx.$executeRaw`SELECT set_config('app.audit_retention_purge', 'on', true)`;
 
       let deleted = 0;
@@ -79,7 +81,7 @@ export async function purgeAuditLog(now: Date = new Date()): Promise<AuditPurgeR
 export async function purgeExpiredExports(now: Date = new Date()): Promise<number> {
   const cutoff = new Date(now.getTime() - env.REPORT_EXPORT_RETENTION_DAYS * 86_400_000);
   const old = await prisma.reportExport.findMany({
-    where: { createdAt: { lt: cutoff }, status: { in: ['READY', 'FAILED', 'QUEUED'] } },
+    where: { createdAt: { lt: cutoff }, status: { in: ['READY', 'FAILED', 'QUEUED', 'RETRYING'] } },
     select: { id: true, objectKey: true },
   });
   for (const e of old) {

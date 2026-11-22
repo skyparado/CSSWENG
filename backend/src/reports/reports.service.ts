@@ -25,7 +25,7 @@ export function resolveReportScope(
   report: ReportKey,
   requestedClinicId?: string,
 ): string | undefined {
-  if (actor.role === 'DOCTOR') return requestedClinicId;
+  if (actor.role === 'DOCTOR') return requestedClinicId === 'all' ? undefined : requestedClinicId ?? actor.activeClinicId;
 
   if ((DOCTOR_ONLY_REPORTS as readonly string[]).includes(report)) {
     throw new HttpError(403, 'Your role is not permitted to view this report');
@@ -35,6 +35,20 @@ export function resolveReportScope(
     throw new HttpError(403, 'You can only view your active clinic');
   }
   return actor.activeClinicId;
+}
+
+/** Keyset paging bounds each database read. The API and exporters consume the same rows. */
+async function* reportRows<T extends { id: string }>(
+  read: (page: { take: number; cursor?: { id: string }; skip?: number }) => Promise<T[]>,
+) {
+  const take = 250;
+  let cursor: { id: string } | undefined;
+  for (;;) {
+    const batch: T[] = await read(cursor ? { cursor, skip: 1, take } : { take });
+    yield* batch;
+    if (batch.length < take) return;
+    cursor = { id: batch[batch.length - 1]!.id };
+  }
 }
 
 interface ClinicInfo {
@@ -80,34 +94,44 @@ async function patientVolume(q: ReportQuery, clinicId: string | undefined): Prom
       ...(clinicId ? { clinicId } : {}),
       startsAt: { gte: new Date(start.getTime() - 86_400_000), lt: new Date(end.getTime() + 86_400_000) },
     },
-    select: { clinicId: true, startsAt: true, walkIn: true, status: true },
+    select: { clinicId: true, startsAt: true, walkIn: true, status: true, encounter: { select: { id: true } } },
   });
 
-  const byDayClinic = new Map<
-    string,
-    { date: string; clinic: string; booked: number; walkIn: number; seen: number; noShow: number }
-  >();
+  const encounters = await prisma.encounter.findMany({
+    where: { clinicId, appointmentId: null, visitDate: { gte: toDateOnly(q.from), lte: toDateOnly(q.to) } },
+    select: { clinicId: true, visitDate: true, type: true },
+  });
+  type Volume = { date: string; clinic: string; booked: number; walkIn: number; seen: number; noShow: number; visits: number };
+  const byDayClinic = new Map<string, Volume>();
+  function rowFor(date: string, id: string): Volume {
+    const key = `${date}|${id}`;
+    const row = byDayClinic.get(key) ?? { date, clinic: nameOf(clinics, id), booked: 0, walkIn: 0, seen: 0, noShow: 0, visits: 0 };
+    byDayClinic.set(key, row);
+    return row;
+  }
   for (const a of appts) {
     const date = localDate(a.startsAt, tzOf(clinics, a.clinicId));
-    if (date < q.from || date > q.to) continue;
-    const key = `${date}|${a.clinicId}`;
-    const row =
-      byDayClinic.get(key) ?? { date, clinic: nameOf(clinics, a.clinicId), booked: 0, walkIn: 0, seen: 0, noShow: 0 };
-    byDayClinic.set(key, row);
-    if (a.status !== 'CANCELLED') {
-      if (a.walkIn) row.walkIn += 1;
-      else row.booked += 1;
-    }
-    if (a.status === 'COMPLETED') row.seen += 1;
-    if (a.status === 'NO_SHOW') row.noShow += 1;
+    if (date < q.from || date > q.to || a.status === 'CANCELLED') continue;
+    const row = rowFor(date, a.clinicId);
+    row.visits++;
+    if (a.walkIn) row.walkIn++;
+    else row.booked++;
+    if (a.status === 'COMPLETED' || a.encounter) row.seen++;
+    if (a.status === 'NO_SHOW') row.noShow++;
+  }
+  for (const visit of encounters) {
+    const row = rowFor(visit.visitDate.toISOString().slice(0, 10), visit.clinicId);
+    row.visits++;
+    row.seen++;
+    if (visit.type === 'WALK_IN') row.walkIn++;
   }
 
   const rows = [...byDayClinic.values()].sort((a, b) => a.date.localeCompare(b.date) || a.clinic.localeCompare(b.clinic));
-  const sum = (k: 'booked' | 'walkIn' | 'seen' | 'noShow') => rows.reduce((n, r) => n + r[k], 0);
+  const sum = (k: 'visits' | 'booked' | 'walkIn' | 'seen' | 'noShow') => rows.reduce((n, r) => n + r[k], 0);
   return {
     ...envelope('patient-volume', 'Patient Volume', q, clinicId, clinics),
     summary: [
-      { key: 'totalVisits', label: 'Total visits', value: sum('booked') + sum('walkIn') },
+      { key: 'totalVisits', label: 'Total visits', value: sum('visits') },
       { key: 'walkIns', label: 'Walk-ins', value: sum('walkIn') },
       { key: 'seen', label: 'Seen', value: sum('seen') },
       { key: 'noShows', label: 'No-shows', value: sum('noShow'), tone: 'bad' },
@@ -119,8 +143,10 @@ async function patientVolume(q: ReportQuery, clinicId: string | undefined): Prom
       { key: 'walkIn', label: 'Walk-in' },
       { key: 'seen', label: 'Seen' },
       { key: 'noShow', label: 'No-show' },
+      { key: 'visits', label: 'Total visits' },
     ],
     rows,
+    note: 'Volume counts non-cancelled appointments on their scheduled day, including no-shows, plus standalone encounters on their visit date. A standalone encounter counts as seen. Its booking classification is known only if recorded as a walk-in.',
   };
 }
 
@@ -203,28 +229,28 @@ const TASK_LABEL: Record<string, string> = {
   PROCEDURE: 'Procedure',
 };
 
-const OVERDUE_LIMIT = 500;
 
 async function overduePatients(q: ReportQuery, clinicId: string | undefined): Promise<ReportResult> {
   const clinics = await clinicMap();
   const today = todayInTimezone(env.CLINIC_TIMEZONE);
-  const overdue = await prisma.followUp.findMany({
-    where: { ...(clinicId ? { clinicId } : {}), status: 'OPEN', dueDate: { lt: toDateOnly(today) } },
-    orderBy: [{ dueDate: 'asc' }],
-    take: OVERDUE_LIMIT,
-    include: { patient: { select: { id: true, patientSeq: true, firstName: true, lastName: true } } },
-  });
-
-  const rows = overdue.map((f) => ({
-    patient: `${decrypt(f.patient.firstName)} ${decrypt(f.patient.lastName)}`,
-    patientNumber: formatPatientNumber(f.patient.patientSeq),
-    clinic: nameOf(clinics, f.clinicId),
-    task: TASK_LABEL[f.taskType] ?? f.taskType,
-    dueDate: f.dueDate.toISOString().slice(0, 10),
-    daysOverdue: daysOverdue(f.dueDate, today),
-    priority: f.priority,
+  const overdue = reportRows((page) => prisma.followUp.findMany({
+    ...page,
+    where: { clinicId, status: 'OPEN', dueDate: { gte: toDateOnly(q.from), lte: toDateOnly(q.to), lt: toDateOnly(today) } },
+    orderBy: [{ dueDate: 'asc' }, { id: 'asc' }],
+    select: { id: true, patientId: true, clinicId: true, taskType: true, dueDate: true, priority: true,
+      patient: { select: { patientSeq: true, firstName: true, lastName: true } } },
   }));
-  const patients = new Set(overdue.map((f) => f.patientId));
+  const rows = [];
+  const patients = new Set<string>();
+  for await (const f of overdue) {
+    patients.add(f.patientId);
+    rows.push({
+      patient: `${decrypt(f.patient.firstName)} ${decrypt(f.patient.lastName)}`,
+      patientNumber: formatPatientNumber(f.patient.patientSeq),
+      clinic: nameOf(clinics, f.clinicId), task: TASK_LABEL[f.taskType] ?? f.taskType,
+      dueDate: f.dueDate.toISOString().slice(0, 10), daysOverdue: daysOverdue(f.dueDate, today), priority: f.priority,
+    });
+  }
   return {
     ...envelope('overdue-patients', 'Overdue Patients', q, clinicId, clinics),
     summary: [
@@ -242,9 +268,7 @@ async function overduePatients(q: ReportQuery, clinicId: string | undefined): Pr
       { key: 'priority', label: 'Priority' },
     ],
     rows,
-    note:
-      `As of today (${today}); the date range does not apply to this report.` +
-      (overdue.length === OVERDUE_LIMIT ? ` Showing the ${OVERDUE_LIMIT} longest overdue.` : ''),
+    note: `Open tasks today (${today}) whose due dates fall in the selected inclusive range and before today. Days overdue are measured from the due date to today.`,
   };
 }
 
@@ -300,7 +324,7 @@ async function commonDiagnoses(q: ReportQuery, clinicId: string | undefined): Pr
       { key: 'count', label: 'Visits' },
       { key: 'share', label: 'Share' },
     ],
-    rows: ranked.slice(0, 50).map((r, i) => ({
+    rows: ranked.map((r, i) => ({
       rank: i + 1,
       diagnosis: r.label,
       code: r.code,
@@ -314,21 +338,21 @@ async function commonDiagnoses(q: ReportQuery, clinicId: string | undefined): Pr
 /* ---------------------------- User access activity -------------------------- */
 
 const RECORD_PATH = /^\/api\/(patients|encounters|lab-results|medications|allergies|clinical-images|documents|follow-ups|outreach-logs)\b/;
-const AUDIT_ROW_CAP = 200_000;
+
 
 async function userAccessActivity(q: ReportQuery, clinicId: string | undefined): Promise<ReportResult> {
   const clinics = await clinicMap();
   const { start, end } = rangeBounds(q.from, q.to, env.CLINIC_TIMEZONE);
-  const entries = await prisma.auditLog.findMany({
-    where: { createdAt: { gte: start, lt: end } },
-    select: { userId: true, userRole: true, action: true, method: true, path: true, statusCode: true, createdAt: true },
-    orderBy: { createdAt: 'asc' },
-    take: AUDIT_ROW_CAP,
-  });
+  const entries = reportRows((page) => prisma.auditLog.findMany({
+    ...page,
+    where: { createdAt: { gte: start, lt: end }, ...(clinicId ? { metadata: { path: ['clinicId'], equals: clinicId } } : {}) },
+    select: { id: true, userId: true, userRole: true, action: true, method: true, path: true, statusCode: true, createdAt: true },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  }));
 
   type Row = { userId: string | null; role: string; logins: number; failed: number; views: number; refusals: number; changes: number; last: Date };
   const byUser = new Map<string, Row>();
-  for (const e of entries) {
+  for await (const e of entries) {
     const key = e.userId ?? 'anonymous';
     const row =
       byUser.get(key) ??
@@ -383,9 +407,8 @@ async function userAccessActivity(q: ReportQuery, clinicId: string | undefined):
       { key: 'lastActive', label: 'Last active' },
     ],
     rows,
-    note:
-      'Built from the audit trail across all clinics (the audit trail does not record a clinic).' +
-      (entries.length === AUDIT_ROW_CAP ? ` Limited to the first ${AUDIT_ROW_CAP} entries.` : ''),
+    note: clinicId ? 'Includes events with this recorded clinic. Events without clinic context appear only in All clinics.'
+      : 'Includes events from all clinics and events with unknown clinic context.',
   };
 }
 

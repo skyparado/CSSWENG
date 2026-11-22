@@ -69,7 +69,7 @@ export type FollowUpBucket = 'overdue' | 'due' | 'booked' | 'done' | 'closed';
 
 export interface FollowUp {
   id: string;
-  reason: string;
+  reason?: string;
   dueDate: string;
   status: FollowUpStatus | string;
   patient: PatientRef & { patientNumber?: string; mobileNumber?: string };
@@ -104,6 +104,7 @@ export type OutreachOutcome =
   | 'FAILED';
 
 export interface OutreachLog {
+  providerMessageId?: string | null;
   id: string;
   attemptNumber: number;
   attemptedAt: string;
@@ -124,6 +125,8 @@ export interface ConsentView {
 
 /** GET /api/follow-ups/:id: what S12 shows. */
 export interface FollowUpDetail extends FollowUp {
+  channelAvailability: Record<'SMS' | 'EMAIL', boolean>;
+  deliveries: { channel: string; updatedAt: string }[];
   clinic: { id: string; name: string };
   outreachLogs: OutreachLog[];
   consents: Partial<Record<'SMS' | 'EMAIL', ConsentView>>;
@@ -208,7 +211,11 @@ export interface Allergy {
 export type MedicationStatus = 'ACTIVE' | 'ON_HOLD' | 'DISCONTINUED';
 export type MedicationSource = 'PRESCRIBED_HERE' | 'PATIENT_REPORTED' | 'OTHER_DOCTOR' | 'OTC';
 
+export interface ReportedMedicine { submissionId: string; itemIndex: number; name: string; clinicId: string; reportedAt: string }
+export interface MedicineReference { version: number; approved: boolean; drugs: unknown[]; classes: unknown[] }
 export interface Medication {
+  recordedBy?: { fullName: string };
+  recordedById: string;
   id: string;
   medicationName: string;
   strength?: string | null;
@@ -282,7 +289,7 @@ export interface ReportExportView {
   id: string;
   report: ReportKey;
   format: 'PDF' | 'CSV';
-  status: 'QUEUED' | 'RUNNING' | 'READY' | 'FAILED' | 'EXPIRED';
+  status: 'QUEUED' | 'RETRYING' | 'RUNNING' | 'READY' | 'FAILED' | 'EXPIRED';
   fileName: string | null;
   sizeBytes: number | null;
   error: string | null;
@@ -384,9 +391,13 @@ export const api = {
     call<{ allergy: Allergy; alerts: SafetyAlert[] }>('POST', '/api/allergies', body),
   voidAllergy: (id: string, reason: string) => call<Allergy>('POST', `/api/allergies/${id}/void`, { reason }),
 
+  reportedMedicines: (patientId: string) => call<{ items: ReportedMedicine[] }>('GET', `/api/medications/reported?${qs({ patientId })}`),
+  dismissMedicine: (patientId: string, item: ReportedMedicine) => call<void>('POST', '/api/medications/reported/dismiss', { patientId, submissionId: item.submissionId, itemIndex: item.itemIndex }),
+  medicineReference: () => call<MedicineReference>('GET', '/api/medications/reference'),
+  approveReference: (body: { drugs: unknown[]; classes: unknown[]; expectedVersion: number }) => call<MedicineReference>('POST', '/api/medications/reference', body),
   medicationList: (patientId: string, includeHistory = false) =>
     call<{ items: Medication[] }>('GET', `/api/medications?${qs({ patientId, includeHistory: String(includeHistory) })}`),
-  addMedication: (body: MedicationInput & { patientId: string }) => call<Medication>('POST', '/api/medications', body),
+  addMedication: (body: MedicationInput & { patientId: string; clinicId?: string; reportedItem?: { submissionId: string; itemIndex: number } }) => call<Medication>('POST', '/api/medications', body),
   updateMedication: (id: string, body: Partial<MedicationInput>) => call<Medication>('PATCH', `/api/medications/${id}`, body),
 
   followUps: (params: {
@@ -395,12 +406,15 @@ export const api = {
     patientId?: string;
     taskType?: TaskType;
     priority?: Priority;
+    reason?: string;
     page?: number;
     pageSize?: number;
   }) => call<Paged<FollowUp>>('GET', `/api/follow-ups?${qs(params)}`),
   followUpSummary: (clinicId?: string) => call<FollowUpCounts>('GET', `/api/follow-ups/summary?${qs({ clinicId })}`),
   followUp: (id: string) => call<FollowUpDetail>('GET', `/api/follow-ups/${id}`),
   createFollowUp: (body: {
+    clinicId?: string;
+    recallIntervalDays?: number;
     patientId: string;
     taskType: TaskType;
     reason: string;

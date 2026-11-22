@@ -110,11 +110,13 @@ export const followUpCreateSchema = z.object({
   dueDate: calendarDateSchema,
   priority: followUpPrioritySchema.default('NORMAL'),
   recallRule: z.string().max(100).optional(),
+  recallIntervalDays: z.number().int().positive().max(36500).optional(),
 });
 export type FollowUpCreate = z.infer<typeof followUpCreateSchema>;
 
 /** Doctor-only: change the plan for a task that is still open. */
 export const followUpUpdateSchema = z.object({
+  recallIntervalDays: z.number().int().positive().max(36500).nullable().optional(),
   taskType: followUpTaskTypeSchema.optional(),
   reason: z.string().min(1).max(255).optional(),
   dueDate: calendarDateSchema.optional(),
@@ -218,8 +220,7 @@ export const outreachCreateSchema = z
     channel: z.literal('CALL').default('CALL'),
     outcome: outreachOutcomeSchema,
     patientResponse: z.string().max(500).optional(),
-    attemptedAt: z.coerce.date().optional(),
-  })
+  }).strict()
   .refine((o) => o.outcome !== 'SENT', {
     message: 'SENT is reserved for automated reminders',
     path: ['outcome'],

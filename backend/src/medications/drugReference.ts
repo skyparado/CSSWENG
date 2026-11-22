@@ -100,12 +100,14 @@ export function getDrugReference(): DrugReference {
   const raw = env.DRUG_REFERENCE_PATH
     ? JSON.parse(readFileSync(env.DRUG_REFERENCE_PATH, 'utf8'))
     : DEFAULT_DRUG_REFERENCE;
-  cached = parseDrugReference(raw);
+  // A file supplies candidate data. Only the authenticated Doctor workflow can publish approval.
+  const candidate = parseDrugReference(raw);
+  cached = { ...candidate, approval: { approvedBy: null, approvedAt: null }, approved: false };
   if (!cached.approved && env.NODE_ENV === 'production') {
     // eslint-disable-next-line no-console
     console.warn(
       `[medications] drug reference v${cached.version} has no Doctor approval recorded; ` +
-        'set DRUG_REFERENCE_PATH to the approved list (see medications/drugReference.ts).',
+        'review and approve the lookup in Medications and Allergies.',
     );
   }
   return cached;

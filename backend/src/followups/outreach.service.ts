@@ -6,10 +6,19 @@ import type {
 } from '@prisma/client';
 import { FAILED_CONTACT_OUTCOMES } from '@clinic/schemas';
 import { prisma } from '../prisma.js';
+import { notFound } from '../http.js';
 import { env } from '../env.js';
-import { SYSTEM_ACTOR, type AuditActor } from '../audit/record.js';
+import { SYSTEM_ACTOR, auditPatientChange, type AuditActor } from '../audit/record.js';
 import type { AuditTx } from '../audit/audit.service.js';
 import { auditFollowUpStatusChange } from './followups.service.js';
+
+export function presentAttempt<T extends { providerMessageId: string | null; patientResponse: string | null; responseIsAdministrative: boolean }>(
+  log: T, role: string,
+) {
+  const { responseIsAdministrative, ...row } = log;
+  return { ...row, patientResponse: role === 'DOCTOR' || responseIsAdministrative ? row.patientResponse : null,
+    ...(row.providerMessageId?.startsWith('stub-') ? { outcome: 'SIMULATED', deliveryStatus: null } : {}) };
+}
 
 export interface LogAttemptInput {
   followUp: { id: string; patientId: string; clinicId: string };
@@ -40,7 +49,7 @@ export interface LogAttemptInput {
  * run one after the other and cannot be handed the same attempt number. The
  * `(followUpId, attemptNumber)` unique index is the backstop.
  */
-export async function logOutreachAttempt(input: LogAttemptInput): Promise<OutreachLog> {
+export async function logOutreachAttempt(input: LogAttemptInput, transaction?: AuditTx): Promise<OutreachLog> {
   if ((input.channel === 'SMS' || input.channel === 'EMAIL') && !input.consentId) {
     // Database Design 1.5: no SMS/email row without the consent that allowed it.
     throw new Error('SMS and email outreach requires a reminder consent');
@@ -49,9 +58,13 @@ export async function logOutreachAttempt(input: LogAttemptInput): Promise<Outrea
   const { followUp } = input;
   const actor = input.actor ?? SYSTEM_ACTOR;
 
-  return prisma.$transaction(async (tx) => {
+  const run = async (tx: AuditTx) => {
     await tx.$queryRaw`SELECT "id" FROM "FollowUp" WHERE "id" = ${followUp.id} FOR UPDATE`;
 
+    if (input.providerMessageId) {
+      const existing = await tx.outreachLog.findFirst({ where: { followUpId: followUp.id, channel: input.channel, providerMessageId: input.providerMessageId } });
+      if (existing) return existing;
+    }
     const last = await tx.outreachLog.aggregate({
       where: { followUpId: followUp.id },
       _max: { attemptNumber: true },
@@ -69,6 +82,7 @@ export async function logOutreachAttempt(input: LogAttemptInput): Promise<Outrea
         attemptedAt: input.attemptedAt,
         outcome: input.outcome,
         patientResponse: input.patientResponse,
+        responseIsAdministrative: actor.userRole === 'SECRETARY' && input.channel === 'CALL',
         providerMessageId: input.providerMessageId,
         deliveryStatus: input.deliveryStatus,
         contactedById: input.contactedById,
@@ -91,7 +105,7 @@ export async function logOutreachAttempt(input: LogAttemptInput): Promise<Outrea
           via: 'OUTREACH_DECLINED',
         });
       }
-    } else if ((FAILED_CONTACT_OUTCOMES as readonly string[]).includes(input.outcome)) {
+    } else if (input.deliveryStatus === 'FAILED' || (FAILED_CONTACT_OUTCOMES as readonly string[]).includes(input.outcome)) {
       await markUnreachableIfExhausted(followUp.id, env.UNREACHABLE_AFTER_ATTEMPTS, {
         tx,
         actor,
@@ -99,8 +113,11 @@ export async function logOutreachAttempt(input: LogAttemptInput): Promise<Outrea
       });
     }
 
+    await auditPatientChange(tx, actor, 'OUTREACH_RECORDED', 'OutreachLog', log,
+      { followUpId: followUp.id, channel: input.channel, outcome: input.outcome, attemptNumber });
     return log;
-  });
+  };
+  return transaction ? run(transaction) : prisma.$transaction(run);
 }
 
 /** Mark an open task UNREACHABLE once it has used up its failed attempts. */
@@ -115,7 +132,7 @@ export async function markUnreachableIfExhausted(
 ): Promise<boolean> {
   const run = async (db: AuditTx) => {
     const failed = await db.outreachLog.count({
-      where: { followUpId, outcome: { in: [...FAILED_CONTACT_OUTCOMES] } },
+      where: { followUpId, OR: [{ outcome: { in: [...FAILED_CONTACT_OUTCOMES] } }, { deliveryStatus: 'FAILED' }] },
     });
     if (failed < limit) return false;
     const { count } = await db.followUp.updateMany({
@@ -148,10 +165,32 @@ export async function markUnreachableIfExhausted(
 export async function recordDeliveryReport(
   providerMessageId: string,
   deliveryStatus: DeliveryStatus,
+  claimId?: string,
 ): Promise<number> {
-  const { count } = await prisma.outreachLog.updateMany({
-    where: { providerMessageId },
-    data: { deliveryStatus },
+  return prisma.$transaction(async (tx) => {
+    if (claimId) {
+      const claim = await tx.reminderDelivery.findUnique({ where: { id: claimId }, select: { followUpId: true } });
+      if (!claim) throw notFound('Unknown delivery');
+      await tx.$queryRaw`SELECT id FROM "FollowUp" WHERE id = ${claim.followUpId} FOR UPDATE`;
+      const row = await tx.reminderDelivery.findUnique({ where: { id: claimId }, include: { followUp: true } });
+      if (!row || row.channel !== 'SMS' || !row.consentId ||
+          !['SENT', 'DISPATCHING', 'UNCERTAIN'].includes(row.status) ||
+          (row.providerMessageId && row.providerMessageId !== providerMessageId)) throw notFound('Unknown delivery');
+      if (!row.providerMessageId) await tx.reminderDelivery.update({ where: { id: claimId },
+        data: { status: 'SENT', providerMessageId, sentAt: row.sentAt ?? new Date() } });
+      await logOutreachAttempt({ followUp: row.followUp, channel: 'SMS', consentId: row.consentId, outcome: 'SENT', providerMessageId }, tx);
+    }
+    const logs = await tx.outreachLog.findMany({ where: { providerMessageId, channel: 'SMS' } });
+    let updated = 0;
+    for (const log of logs) {
+      await tx.$queryRaw`SELECT id FROM "FollowUp" WHERE id = ${log.followUpId} FOR UPDATE`;
+      const changed = await tx.outreachLog.updateMany({ where: { id: log.id, deliveryStatus: null }, data: { deliveryStatus } });
+      if (!changed.count) continue;
+      await auditPatientChange(tx, SYSTEM_ACTOR, 'OUTREACH_DELIVERY_UPDATED', 'OutreachLog', log, { deliveryStatus });
+      if (deliveryStatus === 'FAILED') await markUnreachableIfExhausted(log.followUpId, env.UNREACHABLE_AFTER_ATTEMPTS, { tx });
+      updated++;
+    }
+    await tx.reminderDelivery.updateMany({ where: { providerMessageId, channel: 'SMS', deliveryStatus: null }, data: { deliveryStatus } });
+    return updated;
   });
-  return count;
 }

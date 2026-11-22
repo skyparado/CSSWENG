@@ -14,6 +14,10 @@ export type AuditInput = Omit<HashableEntry, 'createdAt'>;
  */
 const WRITE_LOCK_KEY = 723842137;
 
+export function lockAuditChain(tx: AuditTx) {
+  return tx.$executeRaw`SELECT pg_advisory_xact_lock(${WRITE_LOCK_KEY})`;
+}
+
 /** A transaction client, so an audit row can commit or roll back with the change it records. */
 export type AuditTx = Omit<
   typeof prisma,
@@ -29,14 +33,14 @@ export type AuditTx = Omit<
  */
 export async function writeAudit(input: AuditInput, tx?: AuditTx) {
   const run = async (db: AuditTx) => {
-    await db.$executeRaw`SELECT pg_advisory_xact_lock(${WRITE_LOCK_KEY})`;
+    await lockAuditChain(db);
 
     const latest = await db.auditLog.findFirst({
       orderBy: { createdAt: 'desc' },
-      select: { entryHash: true },
+      select: { entryHash: true, createdAt: true },
     });
     const previousHash = latest?.entryHash ?? '';
-    const createdAt = new Date();
+    const createdAt = new Date(Math.max(Date.now(), latest ? latest.createdAt.getTime() + 1 : 0));
 
     const entryHash = computeEntryHash({ ...input, createdAt }, previousHash);
 

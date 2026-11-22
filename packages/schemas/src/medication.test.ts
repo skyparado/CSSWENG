@@ -85,8 +85,9 @@ describe('medicationUpdateSchema', () => {
     });
   });
 
-  it('still requires a reason to discontinue', () => {
-    expect(medicationUpdateSchema.safeParse({ status: 'DISCONTINUED' }).success).toBe(false);
+  it('accepts an omitted reason for merged validation and rejects an explicit blank when discontinuing', () => {
+    expect(medicationUpdateSchema.safeParse({ status: 'DISCONTINUED' }).success).toBe(true);
+    expect(medicationUpdateSchema.safeParse({ status: 'DISCONTINUED', discontinuationReason: ' ' }).success).toBe(false);
     expect(
       medicationUpdateSchema.safeParse({ status: 'DISCONTINUED', discontinuationReason: 'Done' }).success,
     ).toBe(true);

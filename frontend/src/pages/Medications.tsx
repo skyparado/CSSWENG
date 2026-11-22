@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import {
-  ApiError,
+  ApiError, type ReportedMedicine,
   api,
   patientName,
   type Allergy,
@@ -54,6 +54,8 @@ export default function Medications({ patientId }: { patientId: string }) {
   const history = useLoad(() => api.medicationList(patientId, true), [patientId]);
   const allergies = useLoad(() => api.allergies(patientId), [patientId]);
 
+  const reported = useLoad(() => api.reportedMedicines(patientId), [patientId]);
+  const [reviewing, setReviewing] = useState<ReportedMedicine>();
   const [filter, setFilter] = useState<Filter>('ALL');
   const [editing, setEditing] = useState<Medication | 'new'>();
   const [addingAllergy, setAddingAllergy] = useState(false);
@@ -62,6 +64,7 @@ export default function Medications({ patientId }: { patientId: string }) {
   const [notice, setNotice] = useState<string>();
 
   const reloadAll = () => {
+    reported.reload();
     meds.reload();
     history.reload();
     allergies.reload();
@@ -78,7 +81,7 @@ export default function Medications({ patientId }: { patientId: string }) {
   const byId = new Map((history.data?.items ?? []).map((m) => [m.id, m]));
   const events = [...(history.data?.items ?? [])]
     .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))
-    .map((m) => ({ id: m.id, at: m.recordedAt, text: describeChange(m, m.supersedesMedicationId ? byId.get(m.supersedesMedicationId) : undefined), by: m.prescribingDoctor }));
+    .map((m) => ({ id: m.id, at: m.recordedAt, text: describeChange(m, m.supersedesMedicationId ? byId.get(m.supersedesMedicationId) : undefined), by: m.recordedBy?.fullName ?? m.recordedById, prescriber: m.prescribingDoctor }));
   const eventsShown = showAllHistory ? events : events.slice(0, 3);
   const fmt = (iso: string) => new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: clinic!.timezone }).format(new Date(iso));
 
@@ -107,7 +110,7 @@ export default function Medications({ patientId }: { patientId: string }) {
 
       {allergies.data.items.length > 0 && (
         <p className="alert" role="alert" style={{ marginBottom: 16 }}>
-          ⚠ ALLERGY: {allergies.data.items.map((a) => `${a.allergenName}${a.reaction ? ` (${a.reaction}${a.severity ? `, ${SEVERITY_LABEL[a.severity].toLowerCase()}` : ''})` : ''}`).join(' · ')}
+          ⚠ ALLERGY: {allergies.data.items.map((a) => [a.allergenName, a.reaction, a.severity ? SEVERITY_LABEL[a.severity] : 'Severity not recorded'].filter(Boolean).join(' · ')).join(' / ')}
         </p>
       )}
       {notice && (
@@ -184,7 +187,7 @@ export default function Medications({ patientId }: { patientId: string }) {
                 <li key={e.id}>
                   <strong>{fmt(e.at)}</strong>
                   <br />
-                  {e.text} · {e.by}
+                  {e.text} · Changed by {e.by} · Prescriber: {e.prescriber}
                 </li>
               ))}
             </ul>
@@ -197,6 +200,17 @@ export default function Medications({ patientId }: { patientId: string }) {
         </div>
 
         <aside className="stack">
+          <section className="card" aria-label="Tablet-reported medicines">
+            <h2>Tablet-reported medicines</h2>
+            {reported.error && <p role="alert">{reported.error}</p>}
+            {reported.data?.items.length === 0 && <p>No medicines awaiting a decision.</p>}
+            {reported.data?.items.map((item) => <div key={`${item.submissionId}-${item.itemIndex}`}>
+              <strong>{item.name}</strong>
+              <button onClick={() => { setReviewing(item); setEditing('new'); }}>Add to list</button>
+              <button onClick={() => api.dismissMedicine(patientId, item).then(reported.reload, (e: Error) => setNotice(e.message))}>Dismiss</button>
+            </div>)}
+          </section>
+          <ReferenceEditor />
           <section className="card" aria-label="Allergies">
             <div className="row" style={{ justifyContent: 'space-between' }}>
               <h2 style={{ margin: 0 }}>Allergies</h2>
@@ -235,9 +249,11 @@ export default function Medications({ patientId }: { patientId: string }) {
           patientId={patientId}
           existing={editing === 'new' ? undefined : editing}
           defaultDoctor={user.fullName}
+          reportedItem={reviewing}
           today={today}
-          onClose={() => setEditing(undefined)}
+          onClose={() => { setReviewing(undefined); setEditing(undefined); }}
           onSaved={(msg) => {
+            setReviewing(undefined);
             setEditing(undefined);
             setNotice(msg);
             reloadAll();
@@ -307,6 +323,7 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 function MedicationDialog({
   patientId,
   existing,
+  reportedItem,
   defaultDoctor,
   today,
   onClose,
@@ -314,13 +331,14 @@ function MedicationDialog({
 }: {
   patientId: string;
   existing?: Medication;
+  reportedItem?: ReportedMedicine;
   defaultDoctor: string;
   today: string;
   onClose: () => void;
   onSaved: (message: string) => void;
 }) {
   const [f, setF] = useState({
-    medicationName: existing?.medicationName ?? '',
+    medicationName: existing?.medicationName ?? reportedItem?.name ?? '',
     strength: existing?.strength ?? '',
     dose: existing?.dose ?? '',
     frequency: existing?.frequency ?? '',
@@ -330,7 +348,7 @@ function MedicationDialog({
     startDate: existing?.startDate.slice(0, 10) ?? today,
     status: (existing?.status ?? 'ACTIVE') as MedicationStatus,
     discontinuationReason: existing?.discontinuationReason ?? '',
-    source: (existing?.source ?? 'PRESCRIBED_HERE') as MedicationSource,
+    source: (existing?.source ?? (reportedItem ? 'PATIENT_REPORTED' : 'PRESCRIBED_HERE')) as MedicationSource,
     prescribingDoctor: existing?.prescribingDoctor ?? defaultDoctor,
   });
   const [alerts, setAlerts] = useState<SafetyAlert[]>();
@@ -363,7 +381,7 @@ function MedicationDialog({
           }
         : {}),
     };
-    const request = existing ? api.updateMedication(existing.id, body) : api.addMedication({ ...body, patientId });
+    const request = existing ? api.updateMedication(existing.id, body) : api.addMedication({ ...body, patientId, clinicId: reportedItem?.clinicId, reportedItem });
     request.then(
       (saved) => onSaved(`${saved.medicationName} ${existing ? 'updated' : 'added'}${acknowledge ? ' (safety alerts acknowledged)' : ''}.`),
       (err: Error) => {
@@ -549,4 +567,26 @@ function RemoveAllergyDialog({ allergy, onClose, onDone }: { allergy: Allergy; o
       </form>
     </Modal>
   );
+}
+
+
+function ReferenceEditor() {
+  const reference = useLoad(api.medicineReference, []);
+  const [draft, setDraft] = useState<{ version: number; text: string }>();
+  const [error, setError] = useState('');
+  const current = reference.data;
+  return <details className="card"><summary>Medication and allergen lookup</summary>
+    {reference.error && <p role="alert">{reference.error}</p>}
+    {current && <p>Version {current.version} · {current.approved ? 'Doctor-approved' : 'Unapproved starter data'}</p>}
+    {current && !draft && <button onClick={() => setDraft({ version: current.version, text: JSON.stringify({ drugs: current.drugs, classes: current.classes }, null, 2) })}>Review lookup data</button>}
+    {draft && <><label htmlFor="lookup">Medicines, aliases and allergen classes (JSON)</label>
+      <textarea id="lookup" rows={12} value={draft.text} onChange={(e) => setDraft({ ...draft, text: e.target.value })} />
+      <button onClick={async () => { try {
+        const { drugs, classes } = JSON.parse(draft.text);
+        await api.approveReference({ drugs, classes, expectedVersion: draft.version });
+        setDraft(undefined); setError(''); reference.reload();
+      } catch (e) { setError((e as Error).message); } }}>Approve and publish version</button>
+      <button onClick={() => { setDraft(undefined); reference.reload(); }}>Cancel</button></>}
+    {error && <p role="alert">{error}</p>}
+  </details>;
 }

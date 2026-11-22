@@ -19,20 +19,19 @@ describe('chartFor', () => {
     expect(chartFor(base)).toBeNull();
   });
 
-  it('adds up the clinics of one day into a single stacked bar', () => {
+  it('keeps each clinic and date separate', () => {
     const chart = chartFor({
       ...base,
       rows: [
-        { date: '2026-11-03', clinic: 'UERM', booked: 2, walkIn: 1, seen: 3, noShow: 0 },
-        { date: '2026-11-03', clinic: 'Tamesis', booked: 1, walkIn: 0, seen: 1, noShow: 0 },
-        { date: '2026-11-02', clinic: 'UERM', booked: 4, walkIn: 0, seen: 4, noShow: 0 },
+        { date: '2026-11-03', clinic: 'UERM', booked: 2, visits: 3, walkIn: 1, seen: 3, noShow: 0 },
+        { date: '2026-11-03', clinic: 'Tamesis', booked: 1, visits: 1, walkIn: 0, seen: 1, noShow: 0 },
+        { date: '2026-11-02', clinic: 'UERM', booked: 4, visits: 4, walkIn: 0, seen: 4, noShow: 0 },
       ],
     });
-    expect(chart?.data).toEqual([
-      { label: 'Nov 2', booked: 4, walkIn: 0 },
-      { label: 'Nov 3', booked: 3, walkIn: 1 },
+    expect(chart?.data.map(({ label, visits }) => [label, visits])).toEqual([
+      ['Nov 3 · UERM', 3], ['Nov 3 · Tamesis', 1], ['Nov 2 · UERM', 4],
     ]);
-    expect(chart?.series.map((s) => s.key)).toEqual(['booked', 'walkIn']);
+    expect(chart?.series.map((s) => s.key)).toEqual(['visits']);
   });
 
   it('plots compliance per clinic with a series for every outcome', () => {

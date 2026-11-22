@@ -17,6 +17,7 @@
     "prisma:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.ts",
     "db:encrypt-existing": "tsx prisma/encryptExisting.ts",
+    "db:restore-drill": "node --import tsx prisma/restoreDrill.ts",
     "db:restore-backup": "tsx prisma/restoreBackup.ts"
   },
   "prisma": {

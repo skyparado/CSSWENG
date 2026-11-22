@@ -14,7 +14,8 @@ import { prisma } from '../prisma.js';
 import { asyncHandler, badRequest, HttpError, notFound, validate } from '../http.js';
 import { checkWithinOperatingHours, nearestFreeTimes } from './operatingHours.js';
 import { actorFromRequest } from '../audit/record.js';
-import { closeFollowUpsForCompletedAppointment } from '../followups/followups.service.js';
+import type { AuditTx } from '../audit/audit.service.js';
+import { reconcileAppointment } from '../followups/followups.service.js';
 import { requireAuth, requireDoctor } from '../auth/middleware.js';
 import { assertClinicAccess, clinicForRead, clinicForWrite, currentUser } from '../auth/guards.js';
 import { toPatientRef } from '../patients/patient.mapper.js';
@@ -76,8 +77,8 @@ async function assertBookable(
 }
 
 /** Append-only history entry describing the appointment after a change. */
-function eventFor(appt: Appointment, action: AppointmentAction, actorId: string, reason?: string) {
-  return prisma.appointmentEvent.create({
+function eventFor(appt: Appointment, action: AppointmentAction, actorId: string, reason?: string, db: AuditTx = prisma) {
+  return db.appointmentEvent.create({
     data: {
       appointmentId: appt.id,
       action,
@@ -246,17 +247,18 @@ appointmentsRouter.patch(
     // Re-validate only when the time window actually changes.
     if (moved) await assertBookable(existing.clinicId, startsAt, endsAt, { excludeId: existing.id });
 
-    const appt = await prisma.appointment.update({
-      where: { id: existing.id },
-      data: { startsAt: patch.startsAt, endsAt: patch.endsAt, reason: patch.reason, status: patch.status },
+    const appt = await prisma.$transaction(async (tx) => {
+      const row = await tx.appointment.update({
+        where: { id: existing.id, status: existing.status },
+        data: { startsAt: patch.startsAt, endsAt: patch.endsAt, reason: patch.reason, status: patch.status },
+      });
+      const userId = currentUser(req).userId;
+      if (moved) await eventFor(row, 'RESCHEDULED', userId, undefined, tx);
+      if (patch.status && patch.status !== existing.status) await eventFor(row, 'STATUS_CHANGED', userId, undefined, tx);
+      if (patch.status === 'COMPLETED' || patch.status === 'NO_SHOW')
+        await reconcileAppointment(tx, row.id, patch.status, userId, actorFromRequest(req));
+      return row;
     });
-    const userId = currentUser(req).userId;
-    if (moved) await eventFor(appt, 'RESCHEDULED', userId);
-    if (patch.status && patch.status !== existing.status) await eventFor(appt, 'STATUS_CHANGED', userId);
-    // A completed visit closes the follow-up tasks linked to it (FR-5.5.9).
-    if (patch.status === 'COMPLETED') {
-      await closeFollowUpsForCompletedAppointment(appt.id, userId, actorFromRequest(req));
-    }
     res.json(appt);
   }),
 );
@@ -270,11 +272,12 @@ appointmentsRouter.delete(
     const existing = await loadAppointment(req);
     if (existing.status === 'CANCELLED') throw badRequest('Appointment is already cancelled');
     const { reason } = req.body as AppointmentCancel;
-    const appt = await prisma.appointment.update({
-      where: { id: existing.id },
-      data: { status: 'CANCELLED', cancelReason: reason },
+    const appt = await prisma.$transaction(async (tx) => {
+      const row = await tx.appointment.update({ where: { id: existing.id, status: existing.status }, data: { status: 'CANCELLED', cancelReason: reason } });
+      await eventFor(row, 'CANCELLED', currentUser(req).userId, reason, tx);
+      await reconcileAppointment(tx, row.id, 'CANCELLED', currentUser(req).userId, actorFromRequest(req));
+      return row;
     });
-    await eventFor(appt, 'CANCELLED', currentUser(req).userId, reason);
     res.json(appt);
   }),
 );

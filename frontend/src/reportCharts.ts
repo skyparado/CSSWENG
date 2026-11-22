@@ -37,23 +37,11 @@ export function chartFor(r: ReportResult): ChartSpec | null {
 
   switch (r.report) {
     case 'patient-volume': {
-      // One bar per day, adding up the clinics that day.
-      const byDay = new Map<string, { label: string; booked: number; walkIn: number }>();
-      for (const row of r.rows) {
-        const date = String(row.date);
-        const d = byDay.get(date) ?? { label: shortDate(date), booked: 0, walkIn: 0 };
-        d.booked += num(row.booked);
-        d.walkIn += num(row.walkIn);
-        byDay.set(date, d);
-      }
       return {
-        title: 'Visits per day',
-        data: [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, d]) => d),
+        title: 'Visits per clinic and day',
+        data: r.rows.map((row) => ({ ...row, label: `${shortDate(String(row.date))} · ${row.clinic}` })),
         xKey: 'label',
-        series: [
-          { key: 'booked', label: 'Booked', color: NAVY },
-          { key: 'walkIn', label: 'Walk-in', color: AMBER },
-        ],
+        series: [{ key: 'visits', label: 'Visits', color: NAVY }],
       };
     }
     case 'follow-up-compliance':

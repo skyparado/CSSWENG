@@ -130,17 +130,11 @@ Reports: `GET /api/reports/{patient-volume|follow-up-compliance|overdue-patients
 Exports are BullMQ jobs: `POST /api/reports/exports`, poll `GET /api/reports/exports/:id`, then `GET .../download`.
 Every view and export is written to the audit log.
 
-**Background jobs** (BullMQ, started with the API unless `BACKGROUND_JOBS_ENABLED=false`):
-report exports; a nightly `pg_dump` backup, encrypted with `BACKUP_ENCRYPTION_KEY`, to a separate
-bucket (`BACKUP_S3_*`) together with a copy of the stored files; and a nightly retention purge
-(audit entries older than 5 years, expired exports, backups older than `BACKUP_RETENTION_DAYS`, never the
-newest backup). To restore: `npm run db:restore-backup --workspace backend -- --list`, then `-- --key ... --out file.dump`,
-then `pg_restore` into an empty database (the script prints the command).
+The Doctor can review each tablet-reported medicine and approve versioned medication and allergen lookup data in S10. S11 shows seven follow-ups per page. The Doctor can configure a routine recall interval on a check-up. Secretaries see scheduling and contact details for their active clinic.
 
-**SMS and email.** `SMS_PROVIDER=stub` (default) only logs. `twilio` and `semaphore` are implemented but not
-selected until the clinic chooses a provider; set that provider's credentials (see `backend/.env.example`) and
-`PUBLIC_BASE_URL`. Delivery reports arrive at `POST /api/webhooks/sms/twilio` (signature-checked) or
-`/api/webhooks/sms/generic?secret=` (shared secret). Email already works with any SMTP relay (`EMAIL_PROVIDER=smtp`).
+BullMQ generates report exports, daily encrypted database and uploaded-file snapshots, and a separate daily audit archive. The standalone worker, recovery commands and isolated restore drill are documented in [Running the clinic jobs](WORKER.md).
+
+SMS and email providers require clinic selection and configuration. Disabled channels are labelled in Outreach. Twilio supports signed final status callbacks. SMTP acceptance remains pending a final delivery or bounce report.
 
 ## Testing
 

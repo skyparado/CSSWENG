@@ -3,7 +3,6 @@ import express, { Router } from 'express';
 import type { DeliveryStatus } from '@prisma/client';
 import { z } from 'zod';
 import { env } from '../env.js';
-import { prisma } from '../prisma.js';
 import { asyncHandler, HttpError } from '../http.js';
 import { recordDeliveryReport } from '../followups/outreach.service.js';
 
@@ -24,9 +23,7 @@ const safeEqual = (a: string, b: string) => {
 
 /** Apply a provider report to the outreach row and the reminder send record. Returns rows updated. */
 export async function applyDeliveryReport(providerMessageId: string, status: DeliveryStatus): Promise<number> {
-  const rows = await recordDeliveryReport(providerMessageId, status);
-  await prisma.reminderDelivery.updateMany({ where: { providerMessageId }, data: { deliveryStatus: status } });
-  return rows;
+  return recordDeliveryReport(providerMessageId, status);
 }
 
 /**
@@ -56,13 +53,17 @@ smsWebhooksRouter.post(
     const params = req.body as Record<string, string>;
     const expected = twilioSignature(
       env.TWILIO_AUTH_TOKEN,
-      `${env.PUBLIC_BASE_URL}/api/webhooks/sms/twilio`,
+      `${env.PUBLIC_BASE_URL}${req.originalUrl}`,
       params,
     );
     if (!safeEqual(req.get('x-twilio-signature') ?? '', expected)) throw new HttpError(403, 'Invalid signature');
 
     const status = TWILIO_STATUS[(params.MessageStatus ?? '').toLowerCase()];
-    if (status && params.MessageSid) await applyDeliveryReport(params.MessageSid, status);
+    if (status && params.MessageSid) {
+      // The signed callback URL carries our durable claim id, even when the worker crashed before storing the SID.
+      const id = req.query.delivery;
+      await recordDeliveryReport(params.MessageSid, status, typeof id === 'string' ? id : undefined);
+    }
     res.status(204).end();
   }),
 );
@@ -72,12 +73,12 @@ const genericReportSchema = z.object({
   status: z.enum(['DELIVERED', 'FAILED']),
 });
 
-/** POST /api/webhooks/sms/generic?secret=... { providerMessageId, status } — for any provider that can call a URL. */
+/** POST /api/webhooks/sms/generic (x-webhook-secret header) { providerMessageId, status } — for any provider that can call a URL. */
 smsWebhooksRouter.post(
   '/generic',
   asyncHandler(async (req, res) => {
     if (!env.SMS_WEBHOOK_SECRET) throw new HttpError(404, 'Not found');
-    const given = (req.query.secret as string | undefined) ?? req.get('x-webhook-secret') ?? '';
+    const given = req.get('x-webhook-secret') ?? '';
     if (!safeEqual(given, env.SMS_WEBHOOK_SECRET)) throw new HttpError(403, 'Invalid secret');
 
     const report = genericReportSchema.parse(req.body);
