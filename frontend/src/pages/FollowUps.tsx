@@ -21,7 +21,7 @@ import {
 import { go, useLoad, useSession } from '../session';
 import { zonedParts } from '../time';
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 7;
 type Chip = 'all' | FollowUpBucket;
 const CHIPS: Array<{ key: Chip; label: string; tone?: string }> = [
   { key: 'all', label: 'All' },
@@ -42,6 +42,7 @@ export default function FollowUps() {
   const [clinicId, setClinicId] = useState(clinic!.id);
   const [patient, setPatient] = useState<PatientRef>();
   const [taskType, setTaskType] = useState<TaskType | ''>('');
+  const [reasonFilter, setReasonFilter] = useState('');
   const [priority, setPriority] = useState<Priority | ''>('');
   const [page, setPage] = useState(1);
   const [creating, setCreating] = useState(false);
@@ -58,10 +59,11 @@ export default function FollowUps() {
         patientId: patient?.id,
         taskType: taskType || undefined,
         priority: priority || undefined,
+        reason: doctor && reasonFilter.trim() || undefined,
         page,
         pageSize: PAGE_SIZE,
       }),
-    [clinicId, chip, patient?.id, taskType, priority, page],
+    [clinicId, chip, patient?.id, taskType, priority, reasonFilter, doctor, page],
   );
 
   const refresh = () => {
@@ -138,6 +140,7 @@ export default function FollowUps() {
           </select>
         </div>
         <div>
+          {doctor && <><label htmlFor="fu-reason">Reason</label><input id="fu-reason" value={reasonFilter} onChange={(e) => reset(setReasonFilter)(e.target.value)} /></>}
           <label htmlFor="fu-priority">Priority</label>
           <select id="fu-priority" value={priority} onChange={(e) => reset(setPriority)(e.target.value as Priority | '')}>
             <option value="">All priorities</option>
@@ -201,6 +204,7 @@ export default function FollowUps() {
                     </td>
                     <td>
                       <div className="row" style={{ flexWrap: 'nowrap' }}>
+                        <button onClick={() => go(`/patients/${f.patient.id}`)}>Open Patient</button>
                         <button onClick={() => go(`/follow-ups/${f.id}/outreach`)} aria-label={`Log call for ${patientName(f.patient)}`}>
                           Log Call
                         </button>
@@ -252,7 +256,7 @@ export default function FollowUps() {
       </p>
 
       {creating && (
-        <NewFollowUpDialog
+        <NewFollowUpDialog clinicId={clinicId} clinicName={clinicName}
           today={today}
           onClose={() => setCreating(false)}
           onSaved={() => {
@@ -350,22 +354,24 @@ export function NoteDialog({
   );
 }
 
-function NewFollowUpDialog({ today, onClose, onSaved }: { today: string; onClose: () => void; onSaved: () => void }) {
+function NewFollowUpDialog({ clinicId, clinicName, today, onClose, onSaved }: { clinicId: string; clinicName: string; today: string; onClose: () => void; onSaved: () => void }) {
   const [patient, setPatient] = useState<PatientRef>();
   const [taskType, setTaskType] = useState<TaskType>('CHECK_UP');
   const [reason, setReason] = useState('');
+  const [interval, setIntervalDays] = useState('');
   const [dueDate, setDueDate] = useState(today);
   const [priority, setPriority] = useState<Priority>('NORMAL');
   const [error, setError] = useState<string>();
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!patient) return setError('Choose a patient');
-    api.createFollowUp({ patientId: patient.id, taskType, reason: reason.trim(), dueDate, priority }).then(onSaved, (err: Error) => setError(err.message));
+    api.createFollowUp({ clinicId, patientId: patient.id, taskType, recallIntervalDays: taskType === 'CHECK_UP' && interval ? Number(interval) : undefined, reason: reason.trim(), dueDate, priority }).then(onSaved, (err: Error) => setError(err.message));
   };
   return (
     <div className="backdrop" role="presentation">
       <form className="card dialog" role="dialog" aria-modal="true" aria-label="New follow-up" onSubmit={submit}>
         <h2>New follow-up</h2>
+        <p>Clinic · {clinicName}</p>
         <label htmlFor="nf-patient">Patient</label>
         <PatientPicker id="nf-patient" value={patient} onChange={setPatient} />
         <label htmlFor="nf-type">Task type</label>
@@ -376,6 +382,8 @@ function NewFollowUpDialog({ today, onClose, onSaved }: { today: string; onClose
             </option>
           ))}
         </select>
+        {taskType === 'CHECK_UP' && <><label htmlFor="nf-recall">Routine recall interval after completion (days, optional)</label>
+          <input id="nf-recall" type="number" min={1} max={36500} value={interval} onChange={(e) => setIntervalDays(e.target.value)} /></>}
         <label htmlFor="nf-reason">Reason</label>
         <input id="nf-reason" value={reason} onChange={(e) => setReason(e.target.value)} required maxLength={255} />
         <div className="grid2">

@@ -3,11 +3,12 @@ import request from 'supertest';
 
 const db = vi.hoisted(() => ({
   clinic: { findMany: vi.fn() },
+  encounter: { findMany: vi.fn() },
   appointment: { findMany: vi.fn() },
   followUp: { findMany: vi.fn() },
   clinicalNote: { findMany: vi.fn() },
   auditLog: { findMany: vi.fn() },
-  user: { findMany: vi.fn() },
+  user: { findMany: vi.fn(), findUnique: vi.fn() },
   reportExport: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
 }));
 const audit = vi.hoisted(() => ({ writeAudit: vi.fn() }));
@@ -40,6 +41,8 @@ beforeEach(() => {
   vi.resetAllMocks();
   db.clinic.findMany.mockResolvedValue(CLINICS);
   db.appointment.findMany.mockResolvedValue([]);
+  db.encounter.findMany.mockResolvedValue([]);
+  db.user.findUnique.mockImplementation(async ({ where }) => ({ role: where.id === 'u-sec' ? 'SECRETARY' : 'DOCTOR', status: 'ACTIVE', clinics: [{ clinicId: 'c1' }] }));
   db.followUp.findMany.mockResolvedValue([]);
   db.clinicalNote.findMany.mockResolvedValue([]);
   db.auditLog.findMany.mockResolvedValue([]);
@@ -83,7 +86,8 @@ describe('who may see which report and clinic (SDD Table 7-1)', () => {
 
   it('lets the Doctor see all clinics, or pick one', () => {
     const doc = { userId: 'd', role: 'DOCTOR' as const, activeClinicId: 'c1' };
-    expect(resolveReportScope(doc, 'follow-up-compliance')).toBeUndefined();
+    expect(resolveReportScope(doc, 'follow-up-compliance')).toBe('c1');
+    expect(resolveReportScope(doc, 'follow-up-compliance', 'all')).toBeUndefined();
     expect(resolveReportScope(doc, 'patient-volume', 'c2')).toBe('c2');
   });
 
@@ -143,8 +147,8 @@ describe('patient volume', () => {
     const result = await runReport('patient-volume', { from: '2026-11-02', to: '2026-11-08' }, { userId: 'd', role: 'DOCTOR' });
 
     expect(result.rows).toEqual([
-      { date: '2026-11-02', clinic: 'UERM', booked: 3, walkIn: 1, seen: 3, noShow: 1 },
-      { date: '2026-11-04', clinic: 'Happy Eyes', booked: 1, walkIn: 0, seen: 0, noShow: 0 },
+      { date: '2026-11-02', clinic: 'UERM', booked: 3, walkIn: 1, seen: 3, noShow: 1, visits: 4 },
+      { date: '2026-11-04', clinic: 'Happy Eyes', booked: 1, walkIn: 0, seen: 0, noShow: 0, visits: 1 },
     ]);
     expect(result.summary.map((s) => [s.key, s.value])).toEqual([
       ['totalVisits', 5],
@@ -287,7 +291,7 @@ describe('user access activity', () => {
 
 describe('exports', () => {
   const body = { report: 'patient-volume', format: 'CSV', from: '2026-11-02', to: '2026-11-08' };
-  const row = { id: 'x1', report: 'patient-volume', format: 'CSV', status: 'QUEUED', createdAt: new Date(), completedAt: null, fileName: null, sizeBytes: null, error: null };
+  const row = { id: 'x1', params: { from: body.from, to: body.to, clinicId: 'c1' }, report: 'patient-volume', format: 'CSV', status: 'QUEUED', createdAt: new Date(), completedAt: null, fileName: null, sizeBytes: null, error: null };
 
   it('queues a background job, records the request, and answers 202 without rendering anything', async () => {
     db.reportExport.create.mockResolvedValue(row);
@@ -312,12 +316,13 @@ describe('exports', () => {
     expect(queue.enqueueExport).not.toHaveBeenCalled();
   });
 
-  it('fails the export and answers 503 when the queue is down', async () => {
+  it('keeps the export queued for the worker to recover when Redis is temporarily down', async () => {
     db.reportExport.create.mockResolvedValue(row);
     queue.enqueueExport.mockRejectedValue(new Error('ECONNREFUSED'));
     const res = await request(doctorApp).post('/api/reports/exports').send(body);
-    expect(res.status).toBe(503);
-    expect(db.reportExport.update.mock.calls[0][0].data).toMatchObject({ status: 'FAILED' });
+    expect(res.status).toBe(202);
+    expect(res.body).toMatchObject({ id: 'x1', status: 'QUEUED' });
+    expect(db.reportExport.update).not.toHaveBeenCalled();
   });
 
   it("shows only the requester's own export", async () => {

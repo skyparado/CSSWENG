@@ -1,5 +1,5 @@
 import { Router, type Request } from 'express';
-import { Prisma, type Medication, type MedicationSource, type MedicationStatus } from '@prisma/client';
+import { Prisma, type Medication, type MedicationStatus } from '@prisma/client';
 import {
   idParamSchema,
   medicationCheckSchema,
@@ -8,36 +8,41 @@ import {
   medicationUpdateSchema,
   type AcknowledgedAlert,
   type SafetyAlert,
+  type MedicationCreate,
 } from '@clinic/schemas';
 import { prisma } from '../prisma.js';
 import { asyncHandler, conflict, notFound, validate } from '../http.js';
 import { clinicForWrite, currentUser, requireAuth, requireRole } from '../auth/guards.js';
 import { toDateOnly } from '../followups/dates.js';
 import { AuditActions } from '../audit/actions.js';
-import { actorFromRequest, recordAudit } from '../audit/record.js';
+import { actorFromRequest, recordAudit, auditPatientChange } from '../audit/record.js';
 import type { AuditTx } from '../audit/audit.service.js';
 import { checkMedicationSafety } from './medicationSafety.js';
-import { getDrugReference } from './drugReference.js';
+import { type DrugReference } from './drugReference.js';
+import { activeReference, decideItem, lockPatient, reviewRouter } from './review.js';
 
 export const medicationsRouter = Router();
 
 // Medications and allergies are clinical data: Doctor only (SDD Table 7-1).
-medicationsRouter.use(requireAuth, requireRole('DOCTOR'));
+medicationsRouter.use(requireAuth, requireRole('DOCTOR'), reviewRouter);
 
 /** Run the allergy and duplicate checks against the patient's recorded data. */
 async function safetyAlertsFor(
   patientId: string,
   medicationName: string,
   excludeMedicationId?: string,
+  db: AuditTx = prisma,
+  reference?: DrugReference,
 ): Promise<SafetyAlert[]> {
   const [allergies, currentMedications] = await Promise.all([
-    prisma.allergy.findMany({ where: { patientId, voidedAt: null } }),
-    prisma.medication.findMany({ where: { patientId, isCurrent: true } }),
+    db.allergy.findMany({ where: { patientId, voidedAt: null } }),
+    db.medication.findMany({ where: { patientId, isCurrent: true } }),
   ]);
   return checkMedicationSafety({
     medicationName,
     allergies,
     currentMedications,
+    reference: reference ?? await activeReference(db),
     excludeMedicationId,
   });
 }
@@ -56,10 +61,8 @@ interface StoredAcknowledgement {
  * Refuse with the alerts unless the Doctor acknowledged them (FR-5.6.7).
  *
  * The alerts that get saved are the ones the SERVER just computed, never text
- * from the client. Two ways to acknowledge:
- *  - `acknowledgedAlerts`: the specific alerts, which must cover every alert
- *    raised now (so an allergy added since the Doctor looked is not waved through);
- *  - `acknowledgeAlerts: true`: accept whatever the server raises for this save.
+ * from the client. The list must cover each current alert. A blanket flag
+ * cannot acknowledge an alert that appeared since the Doctor saw the preview.
  *
  * Returns null when there was nothing to acknowledge.
  */
@@ -67,20 +70,21 @@ function acknowledge(
   alerts: SafetyAlert[],
   body: { acknowledgeAlerts: boolean; acknowledgedAlerts?: AcknowledgedAlert[]; acknowledgementReason?: string },
   doctorId: string,
+  referenceVersion: number,
 ): StoredAcknowledgement | null {
   if (alerts.length === 0) return null;
 
   const listed = body.acknowledgedAlerts;
   const accepted = listed
     ? alerts.every((a) => listed.some((l) => l.type === a.type && l.relatedId === a.relatedId))
-    : body.acknowledgeAlerts;
+    : false;
   if (!accepted) {
     throw conflict('Medication safety alerts must be acknowledged', { alerts });
   }
   return {
     acknowledgedAt: new Date().toISOString(),
     acknowledgedById: doctorId,
-    referenceVersion: getDrugReference().version,
+    referenceVersion,
     ...(body.acknowledgementReason ? { reason: body.acknowledgementReason } : {}),
     alerts,
   };
@@ -105,12 +109,11 @@ function auditAcknowledgement(
         acknowledgedAt: ack.acknowledgedAt,
         patientId: medication.patientId,
         clinicId: medication.clinicId,
-        medicationName: medication.medicationName,
         change,
         referenceVersion: ack.referenceVersion,
         // The wording stays in the medication row; the audit log only notes that one was given.
         reasonGiven: Boolean(ack.reason),
-        alerts: ack.alerts as unknown as Prisma.InputJsonValue,
+        alerts: ack.alerts.map(({ type, relatedId }) => ({ type, relatedId })),
       },
     },
     tx,
@@ -133,6 +136,7 @@ medicationsRouter.get(
         status: q.status,
         isCurrent: q.includeHistory ? undefined : true,
       },
+      include: { recordedBy: { select: { fullName: true } } },
       orderBy: [{ recordedAt: 'desc' }],
     });
     res.json({ items });
@@ -162,7 +166,7 @@ medicationsRouter.get(
     const start = await prisma.medication.findUnique({ where: { id: req.params.id } });
     if (!start) throw notFound('Medication not found');
 
-    const all = await prisma.medication.findMany({ where: { patientId: start.patientId } });
+    const all = await prisma.medication.findMany({ where: { patientId: start.patientId }, include: { recordedBy: { select: { fullName: true } } } });
     const byId = new Map(all.map((m) => [m.id, m]));
     const bySupersedes = new Map(
       all.filter((m) => m.supersedesMedicationId).map((m) => [m.supersedesMedicationId as string, m]),
@@ -183,39 +187,13 @@ medicationsRouter.post(
   '/',
   validate(medicationCreateSchema),
   asyncHandler(async (req, res) => {
-    const body = req.body as {
-      patientId: string;
-      clinicId?: string;
-      medicationName: string;
-      strength?: string;
-      dose: string;
-      frequency: string;
-      route: string;
-      instructions?: string;
-      indication?: string;
-      startDate: string;
-      endDate?: string;
-      status: MedicationStatus;
-      discontinuationReason?: string;
-      prescribingDoctor: string;
-      source: MedicationSource;
-      documentId?: string;
-      acknowledgeAlerts: boolean;
-      acknowledgedAlerts?: AcknowledgedAlert[];
-      acknowledgementReason?: string;
-    };
+    const body = req.body as MedicationCreate;
     const clinicId = clinicForWrite(req, body.clinicId);
     const patient = await prisma.patient.findUnique({ where: { id: body.patientId } });
     if (!patient) throw notFound('Patient not found');
 
-    // A discontinued entry is history, not something being taken: nothing to warn about.
-    let ack: StoredAcknowledgement | null = null;
-    if (body.status !== 'DISCONTINUED') {
-      const alerts = await safetyAlertsFor(body.patientId, body.medicationName);
-      ack = acknowledge(alerts, body, currentUser(req).userId);
-    }
-
     const {
+      reportedItem,
       acknowledgeAlerts: _ack,
       acknowledgedAlerts: _acks,
       acknowledgementReason: _reason,
@@ -224,18 +202,25 @@ medicationsRouter.post(
       ...rest
     } = body;
     const medication = await prisma.$transaction(async (tx) => {
+      await lockPatient(tx, body.patientId);
+      const reference = await activeReference(tx);
+      const alerts = body.status === 'DISCONTINUED' && !reportedItem ? [] : await safetyAlertsFor(body.patientId, body.medicationName, undefined, tx, reference);
+      const ack = acknowledge(alerts, body, currentUser(req).userId, reference.version);
       const created = await tx.medication.create({
         data: {
           ...rest,
+          source: reportedItem ? 'PATIENT_REPORTED' : rest.source,
           clinicId,
           startDate: toDateOnly(startDate),
           endDate: endDate ? toDateOnly(endDate) : undefined,
           recordedById: currentUser(req).userId,
-          lookupVersion: getDrugReference().version,
+          lookupVersion: reference.version,
           safetyAcknowledgements: ack ? (ack as unknown as Prisma.InputJsonValue) : undefined,
         },
       });
       if (ack) await auditAcknowledgement(req, tx, created, ack, 'CREATED');
+      await auditPatientChange(tx, actorFromRequest(req), 'MEDICATION_CREATED', 'Medication', created);
+      if (reportedItem) await decideItem(tx, actorFromRequest(req), reportedItem, body.patientId, created);
       return created;
     });
     res.status(201).json(medication);
@@ -268,6 +253,12 @@ medicationsRouter.patch(
 
     const next = { ...existing, ...stripUndefined(patch) } as Medication;
 
+    medicationCreateSchema.parse({
+      ...Object.fromEntries(Object.entries(next).filter(([, value]) => value !== null)),
+      startDate: startDate ?? existing.startDate.toISOString().slice(0, 10),
+      endDate: endDate ?? existing.endDate?.toISOString().slice(0, 10),
+    });
+
     // Re-check when the drug changes, or when the medication starts being taken
     // again: DISCONTINUED -> ACTIVE/ON_HOLD, or ON_HOLD -> ACTIVE. An allergy or
     // a duplicate may have been recorded while it was off the list.
@@ -276,16 +267,6 @@ medicationsRouter.patch(
       (existing.status === 'DISCONTINUED' && next.status !== 'DISCONTINUED') ||
       (existing.status === 'ON_HOLD' && next.status === 'ACTIVE');
     const rechecked = next.status !== 'DISCONTINUED' && (renamed || resumed);
-    let ack: StoredAcknowledgement | null = null;
-    if (rechecked) {
-      const alerts = await safetyAlertsFor(existing.patientId, next.medicationName, existing.id);
-      ack = acknowledge(
-        alerts,
-        { acknowledgeAlerts, acknowledgedAlerts, acknowledgementReason },
-        currentUser(req).userId,
-      );
-    }
-
     const {
       id: _id,
       recordedAt: _recordedAt,
@@ -295,7 +276,19 @@ medicationsRouter.patch(
     } = next;
 
     const created = await prisma.$transaction(async (tx) => {
-      await tx.medication.update({ where: { id: existing.id }, data: { isCurrent: false } });
+      await lockPatient(tx, existing.patientId);
+      const reference = await activeReference(tx);
+      let ack: StoredAcknowledgement | null = null;
+      if (rechecked) {
+        const alerts = await safetyAlertsFor(existing.patientId, next.medicationName, existing.id, tx, reference);
+        ack = acknowledge(
+          alerts,
+          { acknowledgeAlerts, acknowledgedAlerts, acknowledgementReason },
+          currentUser(req).userId,
+          reference.version,
+        );
+      }
+      await tx.medication.update({ where: { id: existing.id, isCurrent: true }, data: { isCurrent: false } });
       const version = await tx.medication.create({
         data: {
           ...carried,
@@ -305,10 +298,12 @@ medicationsRouter.patch(
           recordedById: currentUser(req).userId,
           // An acknowledgement belongs to the save that made it; it is not inherited.
           safetyAcknowledgements: ack ? (ack as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
-          lookupVersion: rechecked ? getDrugReference().version : existing.lookupVersion,
+          lookupVersion: rechecked ? reference.version : existing.lookupVersion,
         },
       });
       if (ack) await auditAcknowledgement(req, tx, version, ack, 'UPDATED');
+      await auditPatientChange(tx, actorFromRequest(req), 'MEDICATION_UPDATED', 'Medication', version,
+        { previousVersionId: existing.id, fields: Object.keys(req.body).filter((k) => !k.startsWith('acknowledge')) });
       return version;
     });
     res.json(created);

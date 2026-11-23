@@ -3,6 +3,7 @@ import { writeAudit, type AuditTx } from './audit.service.js';
 import type { AuditAction } from './actions.js';
 
 export interface AuditActor {
+  clinicId?: string;
   userId: string | null;
   userEmail: string | null;
   userRole: string | null;
@@ -25,6 +26,7 @@ export const SYSTEM_ACTOR: AuditActor = {
 export function actorFromRequest(req: Request): AuditActor {
   const user = req.session?.user;
   return {
+    clinicId: user?.activeClinicId,
     userId: user?.userId ?? null,
     userEmail: null,
     userRole: user?.role ?? null,
@@ -64,14 +66,15 @@ export function wasAudited(res: Response): boolean {
 }
 
 export function recordAudit(actor: AuditActor, event: AuditEvent, tx?: AuditTx) {
+  const { clinicId, ...identity } = actor;
   return writeAudit(
     {
-      ...actor,
+      ...identity,
       action: event.action,
       resourceType: event.resourceType,
       resourceId: event.resourceId,
       statusCode: null,
-      metadata: event.metadata ?? null,
+      metadata: clinicId ? { clinicId, ...event.metadata } : event.metadata ?? null,
     },
     tx,
   );
@@ -99,8 +102,16 @@ export function recordEvent(
     statusCode: details.statusCode ?? res.statusCode ?? null,
     ipAddress: req.ip ?? null,
     userAgent: req.get('user-agent') ?? null,
-    metadata: details.metadata ?? null,
+    metadata: sessionUser?.activeClinicId && (details.metadata == null || typeof details.metadata === 'object')
+      ? { clinicId: sessionUser.activeClinicId, ...details.metadata as object } : details.metadata ?? null,
   }).catch((err) => {
     console.error(`audit write failed for ${details.action}:`, err);
   });
+}
+
+/** Store identifiers and changed field names. Clinical values stay in the protected record. */
+export function auditPatientChange(tx: AuditTx, actor: AuditActor, action: AuditAction, resourceType: string,
+  row: { id: string; clinicId: string; patientId: string }, changes: Record<string, unknown> = {}) {
+  return recordAudit(actor, { action, resourceType, resourceId: row.id,
+    metadata: { patientId: row.patientId, clinicId: row.clinicId, ...changes } }, tx);
 }

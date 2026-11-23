@@ -114,6 +114,7 @@ const envSchema = z.object({
   BACKUP_S3_SECRET_ACCESS_KEY: z.string().optional(),
   // 32 random bytes, base64. Backups are encrypted with it; losing it makes them unreadable.
   BACKUP_ENCRYPTION_KEY: z.string().optional(),
+  PG_RESTORE_PATH: z.string().default('pg_restore'),
   PG_DUMP_PATH: z.string().default('pg_dump'),
 
   PRISMA_FIELD_ENCRYPTION_KEY: z

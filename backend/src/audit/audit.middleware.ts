@@ -64,7 +64,7 @@ export function auditMiddleware(
       statusCode: res.statusCode,
       ipAddress: snapshot.ipAddress,
       userAgent: snapshot.userAgent,
-      metadata: null,
+      metadata: sessionUser?.activeClinicId ? { clinicId: sessionUser.activeClinicId } : null,
     }).catch((err) => {
       // Avoid taking down the request path if the audit DB is unreachable.
       // eslint-disable-next-line no-console

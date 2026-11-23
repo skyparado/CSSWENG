@@ -1,6 +1,6 @@
 import { Worker, type Job } from 'bullmq';
 import type { ReminderChannel } from '@prisma/client';
-import { createGateways, type Gateways } from './gateway.js';
+import { channelAvailability, createGateways, type Gateways } from './gateway.js';
 import {
   REMINDER_QUEUE,
   SCAN_JOB,
@@ -9,6 +9,7 @@ import {
   closeReminderQueue,
   enqueueReminder,
   scheduleDailyScan,
+  recoverPendingReminders,
 } from './queue.js';
 import {
   findFollowUpsNeedingReminder,
@@ -16,15 +17,23 @@ import {
   type ReminderJobData,
 } from './reminders.service.js';
 
+import { HttpError } from '../http.js';
+
 const CHANNELS: ReminderChannel[] = ['SMS', 'EMAIL'];
 
 /** Queue a reminder job for every follow-up that needs one. */
 export async function runScan(): Promise<number> {
   let queued = 0;
   for (const channel of CHANNELS) {
+    if (!channelAvailability()[channel]) continue;
     for (const followUpId of await findFollowUpsNeedingReminder(channel)) {
-      await enqueueReminder({ followUpId, channel }, { dedupe: true });
-      queued += 1;
+      try {
+        await enqueueReminder({ followUpId, channel });
+        queued++;
+      } catch (err) {
+        // A concurrent worker may have claimed the task or the patient may have withdrawn consent.
+        if (!(err instanceof HttpError && err.status === 409)) throw err;
+      }
     }
   }
   return queued;
@@ -49,6 +58,7 @@ export async function handleJob(
 }
 
 let worker: Worker | undefined;
+let recoveryTimer: ReturnType<typeof setInterval> | undefined;
 
 /** Start the reminder worker and the daily scan schedule. */
 export async function startReminderWorker(): Promise<void> {
@@ -59,11 +69,10 @@ export async function startReminderWorker(): Promise<void> {
     connection: bullConnection(),
     concurrency: 5,
   });
-  worker.on('failed', (job, err) => {
+  worker.on('failed', (job) => {
     // eslint-disable-next-line no-console
     console.error(
-      `[reminders] ${job?.name ?? 'job'} ${job?.id ?? ''} failed (attempt ${job?.attemptsMade ?? '?'}):`,
-      err.message,
+      `[reminders] ${job?.name ?? 'job'} ${job?.id ?? ''} failed (attempt ${job?.attemptsMade ?? '?'}).`,
     );
   });
   worker.on('error', (err) => {
@@ -72,9 +81,13 @@ export async function startReminderWorker(): Promise<void> {
   });
 
   await scheduleDailyScan();
+  await recoverPendingReminders();
+  recoveryTimer = setInterval(() => { void recoverPendingReminders().catch(() => console.error('[reminders] queue recovery will retry')); }, 60000);
+  recoveryTimer.unref();
 }
 
 export async function stopReminderWorker(): Promise<void> {
+  clearInterval(recoveryTimer);
   await worker?.close();
   worker = undefined;
   await closeReminderQueue();

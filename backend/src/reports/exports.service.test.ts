@@ -4,6 +4,8 @@ const db = vi.hoisted(() => ({
   reportExport: { findUnique: vi.fn(), update: vi.fn() },
   clinic: { findMany: vi.fn() },
   appointment: { findMany: vi.fn() },
+  encounter: { findMany: vi.fn() },
+  user: { findUnique: vi.fn() },
   $transaction: vi.fn(),
 }));
 const audit = vi.hoisted(() => ({ writeAudit: vi.fn() }));
@@ -19,7 +21,7 @@ import { handleExportJob } from './exports.queue.js';
 
 const params = { from: '2026-11-02', to: '2026-11-08', clinicId: null };
 const base = {
-  id: 'x1',
+  id: 'x1', requestedById: 'u-doc',
   report: 'patient-volume',
   format: 'CSV',
   status: 'QUEUED',
@@ -42,6 +44,11 @@ const deps = (): ExportDeps & { store: ReturnType<typeof vi.fn>; renderPdf: Retu
 beforeEach(() => {
   vi.resetAllMocks();
   db.reportExport.findUnique.mockResolvedValue(base);
+  db.user.findUnique.mockImplementation(async () => {
+    const { requestedBy } = await db.reportExport.findUnique({});
+    return { ...requestedBy, clinics: [{ clinicId: 'c1' }] };
+  });
+  db.encounter.findMany.mockResolvedValue([]);
   db.reportExport.update.mockImplementation(async ({ data }) => ({ ...base, ...data }));
   db.clinic.findMany.mockResolvedValue([{ id: 'c1', name: 'UERM', timezone: 'Asia/Manila' }]);
   db.appointment.findMany.mockResolvedValue([
@@ -110,8 +117,16 @@ describe('processExport', () => {
     const d = deps();
     d.renderPdf.mockRejectedValue(new Error('chromium crashed'));
     await expect(processExport('x1', d)).rejects.toThrow('chromium crashed');
-    expect(db.reportExport.update.mock.calls.at(-1)?.[0].data).toMatchObject({ status: 'FAILED', error: 'chromium crashed' });
+    expect(db.reportExport.update.mock.calls.at(-1)?.[0].data).toMatchObject({ status: 'FAILED', error: 'Export could not be prepared' });
     expect(audit.writeAudit).not.toHaveBeenCalled();
+  });
+
+  it('keeps a retryable rendering failure non-terminal until attempts are exhausted', async () => {
+    const d = deps();
+    d.store.mockRejectedValueOnce(new Error('temporary outage'));
+    await expect(processExport('x1', d, false)).rejects.toThrow();
+    expect(db.reportExport.update.mock.calls.at(-1)?.[0].data).toMatchObject({ status: 'RETRYING', completedAt: null });
+    expect((await processExport('x1', d, true)).status).toBe('READY');
   });
 
   it('leaves an already finished export alone, so a retried job does not render twice', async () => {

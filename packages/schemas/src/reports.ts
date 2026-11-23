@@ -27,7 +27,7 @@ export const reportQuerySchema = z
   .object({
     from: calendarDateSchema,
     to: calendarDateSchema,
-    /** Doctor only; omit for all clinics. The Secretary is always held to the active clinic. */
+    /** Omit to use the active clinic. Doctors can explicitly request "all". The Secretary is always held to the active clinic. */
     clinicId: idSchema.optional(),
   })
   .refine((q) => q.to >= q.from, { message: 'to must not be before from', path: ['to'] })
@@ -70,7 +70,7 @@ export interface ReportResult {
   note?: string;
 }
 
-export type ExportStatus = 'QUEUED' | 'RUNNING' | 'READY' | 'FAILED' | 'EXPIRED';
+export type ExportStatus = 'QUEUED' | 'RETRYING' | 'RUNNING' | 'READY' | 'FAILED' | 'EXPIRED';
 
 export interface ReportExportView {
   id: string;

@@ -40,6 +40,9 @@ test.describe('reminders: consent, content and delivery', () => {
     await expect(page.getByRole('button', { name: 'Send SMS Reminder' })).toBeDisabled();
     await expect(page.getByRole('note')).toContainText('no active SMS reminder consent');
 
+    await expect(page.getByText('SMS provider is not configured.')).toBeVisible();
+    const fakeTime = await page.request.post('/api/outreach-logs', { data: { followUpId: id, outcome: 'REACHED', attemptedAt: '2000-01-01' } });
+    expect(fakeTime.status()).toBe(400);
     // The API refuses it too, whatever the screen allows.
     const res = await page.request.post(`/api/follow-ups/${id}/remind`, { data: { channel: 'SMS' } });
     expect(res.status()).toBe(409);

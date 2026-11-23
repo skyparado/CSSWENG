@@ -73,17 +73,18 @@ export type AcknowledgedAlert = z.infer<typeof acknowledgedAlertSchema>;
 /**
  * Doctor adds a medication. If the safety check finds an allergy conflict or a
  * duplicate, the request is refused with the alerts unless the doctor
- * resubmits with `acknowledgeAlerts: true` (FR-5.6.7).
+ * resubmits the type and related id of each alert (FR-5.6.7).
  */
 export const medicationCreateSchema = z
   .object({
     patientId: idSchema,
     clinicId: idSchema.optional(),
     ...medicationFields,
-    /** Blanket "I accept every alert the server raises for this save". */
+    reportedItem: z.object({ submissionId: idSchema, itemIndex: z.number().int().nonnegative() }).optional(),
+    /** Legacy input; only individually identified alerts authorize the save. */
     acknowledgeAlerts: z.boolean().default(false),
     /** The specific alerts accepted; when sent, every alert raised must be listed. */
-    acknowledgedAlerts: z.array(acknowledgedAlertSchema).max(50).optional(),
+    acknowledgedAlerts: z.array(acknowledgedAlertSchema).optional(),
     /** Why the Doctor is proceeding despite the alerts (SDD 5.2); optional. */
     acknowledgementReason: z.string().trim().max(255).optional(),
   })
@@ -113,11 +114,11 @@ export const medicationUpdateSchema = z
     prescribingDoctor: medicationFields.prescribingDoctor.optional(),
     source: medicationSourceSchema.optional(),
     acknowledgeAlerts: z.boolean().default(false),
-    acknowledgedAlerts: z.array(acknowledgedAlertSchema).max(50).optional(),
+    acknowledgedAlerts: z.array(acknowledgedAlertSchema).optional(),
     acknowledgementReason: z.string().trim().max(255).optional(),
   })
   .superRefine((m, ctx) => {
-    requireDiscontinuationReason(m, ctx);
+    if (m.discontinuationReason !== undefined) requireDiscontinuationReason(m, ctx);
     requireEndAfterStart(m, ctx);
   });
 export type MedicationUpdate = z.infer<typeof medicationUpdateSchema>;

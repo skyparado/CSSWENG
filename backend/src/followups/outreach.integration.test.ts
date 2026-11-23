@@ -1,3 +1,4 @@
+import { removeTestOutreach } from '../test-utils/outreachFixtures.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { prisma } from '../prisma.js';
 import { logOutreachAttempt } from './outreach.service.js';
@@ -40,7 +41,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await prisma.outreachLog.deleteMany({ where: { followUpId: ids.followUp } });
+  await removeTestOutreach({ followUpId: ids.followUp });
   await prisma.followUp.deleteMany({ where: { id: ids.followUp } });
   await prisma.patient.deleteMany({ where: { id: ids.patient } });
   await prisma.clinic.deleteMany({ where: { id: ids.clinic } });
@@ -104,7 +105,7 @@ describe('simultaneous outreach attempts (real database)', () => {
       });
       expect(audits).toBe(1);
     } finally {
-      await prisma.outreachLog.deleteMany({ where: { followUpId: f.id } });
+      await removeTestOutreach({ followUpId: f.id });
       await prisma.followUp.delete({ where: { id: f.id } });
     }
   });

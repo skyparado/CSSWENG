@@ -53,7 +53,7 @@ export default function Outreach({ followUpId }: { followUpId: string }) {
   const status = statusView(f, today);
   const open = isOpen(f);
   const consent = f.consents[channel === 'EMAIL' ? 'EMAIL' : 'SMS'];
-  const canRemind = f.status === 'OPEN' && channel !== 'CALL' && Boolean(consent?.active);
+  const canRemind = f.status === 'OPEN' && channel !== 'CALL' && Boolean(consent?.active) && f.channelAvailability[channel] && !f.deliveries.some((d) => d.channel === channel);
   const fmt = (iso: string) =>
     new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: tz }).format(new Date(iso));
   const now = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: tz }).format(new Date());
@@ -208,11 +208,13 @@ export default function Outreach({ followUpId }: { followUpId: string }) {
                   Send {channel === 'EMAIL' ? 'Email' : 'SMS'} Reminder
                 </button>
               </div>
-              {channel !== 'CALL' && !canRemind && open && (
+              {channel !== 'CALL' && (!consent?.active || f.status !== 'OPEN') && open && (
                 <p className="muted" role="note">
                   {f.status !== 'OPEN' ? 'Reminders are only sent for open follow-ups.' : `The patient has no active ${channel === 'EMAIL' ? 'email' : 'SMS'} reminder consent.`}
                 </p>
               )}
+              {channel !== 'CALL' && !f.channelAvailability[channel] && <p>{CHANNEL_LABEL[channel]} provider is not configured.</p>}
+              {f.deliveries.map((d, i) => <p key={i}>{d.channel} · Delivery unconfirmed. Check provider records before another send.</p>)}
               <p className="muted">ⓘ Reminders contain no clinical details.</p>
               {msg && (
                 <p className={msg.error ? 'error' : 'notice'} role={msg.error ? 'alert' : 'status'}>
@@ -264,12 +266,12 @@ export default function Outreach({ followUpId }: { followUpId: string }) {
                   <td>{fmt(a.attemptedAt)}</td>
                   <td>{CHANNEL_LABEL[a.channel]}</td>
                   <td>
-                    <span className="badge">{OUTCOME_LABEL[a.outcome]}</span>
+                    <span className="badge">{a.providerMessageId?.startsWith('stub-') ? 'Simulated' : OUTCOME_LABEL[a.outcome]}</span>
                   </td>
                   <td>{a.patientResponse || '—'}</td>
                   <td>{a.contactedBy?.fullName ?? 'Automated'}</td>
                   <td>
-                    {a.deliveryStatus ? (
+                    {a.providerMessageId?.startsWith('stub-') ? 'Simulation only' : a.deliveryStatus ? (
                       <span className={`badge ${DELIVERY[a.deliveryStatus]?.tone}`}>{DELIVERY[a.deliveryStatus]?.label}</span>
                     ) : a.channel === 'CALL' ? (
                       '—'

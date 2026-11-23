@@ -15,7 +15,7 @@ import {
 } from '@clinic/schemas';
 import { prisma } from '../prisma.js';
 import { env } from '../env.js';
-import { asyncHandler, conflict, notFound, validate } from '../http.js';
+import { asyncHandler, conflict, HttpError, badRequest, notFound, validate } from '../http.js';
 import {
   assertClinicAccess,
   clinicForRead,
@@ -26,8 +26,10 @@ import {
 } from '../auth/guards.js';
 import { findActiveReminderConsent, latestReminderConsents } from '../consents/consents.service.js';
 import { FAILED_CONTACT_OUTCOMES } from '@clinic/schemas';
+import { presentAttempt } from './outreach.service.js';
+import { channelAvailability } from '../reminders/gateway.js';
 import { enqueueReminder } from '../reminders/queue.js';
-import { actorFromRequest } from '../audit/record.js';
+import { actorFromRequest, auditPatientChange } from '../audit/record.js';
 import { addDays, daysOverdue, todayInTimezone, toDateOnly } from './dates.js';
 import {
   assertAppointmentMatches,
@@ -49,13 +51,20 @@ followUpsRouter.use(requireAuth);
 
 type ListQuery = FollowUpFilters & { page: number; pageSize: number };
 
+function present<T extends { patient: Parameters<typeof withPlainPatient>[0]['patient']; reason?: string; closureNote?: string | null; recallRule?: string | null; recallIntervalDays?: number | null }>(req: Request, row: T) {
+  const result = withPlainPatient(row);
+  if (currentUser(req).role === 'DOCTOR') return result;
+  const { reason, closureNote, recallRule, recallIntervalDays, ...administrative } = result;
+  return administrative;
+}
+
 /** Plain patient fields plus whether each patient has active SMS / email reminder consent. */
 async function decorate<T extends { patientId: string; patient: Parameters<typeof withPlainPatient>[0]['patient'] }>(
-  items: T[],
+  req: Request, items: T[],
 ) {
   const consent = await reminderConsentFor(items.map((i) => i.patientId));
   return items.map((i) => ({
-    ...withPlainPatient(i),
+    ...present(req, i),
     reminderConsent: consent.get(i.patientId) ?? { SMS: false, EMAIL: false },
   }));
 }
@@ -75,11 +84,12 @@ async function paginate(
   // `reason` is encrypted at rest, so the database cannot search it: when the
   // caller filters by reason, load the other matches (already decrypted by the
   // Prisma extension), filter here, then page the result.
+  if (q.reason && currentUser(req).role !== 'DOCTOR') throw new HttpError(403, 'Only Doctors can search clinical reasons');
   if (q.reason) {
     const all = await prisma.followUp.findMany({ where, include: followUpInclude, orderBy });
     const matching = all.filter((f) => matchesReason(f, q.reason));
     return {
-      items: await decorate(matching.slice((q.page - 1) * q.pageSize, q.page * q.pageSize)),
+      items: await decorate(req, matching.slice((q.page - 1) * q.pageSize, q.page * q.pageSize)),
       total: matching.length,
       page: q.page,
       pageSize: q.pageSize,
@@ -96,7 +106,7 @@ async function paginate(
     }),
     prisma.followUp.count({ where }),
   ]);
-  return { items: await decorate(items), total, page: q.page, pageSize: q.pageSize };
+  return { items: await decorate(req, items), total, page: q.page, pageSize: q.pageSize };
 }
 
 const byDueThenPriority: Prisma.FollowUpOrderByWithRelationInput[] = [
@@ -174,6 +184,11 @@ async function loadFollowUp(req: Request): Promise<FollowUp> {
   return followUp;
 }
 
+async function checkLockedAppointment(tx: import('../audit/audit.service.js').AuditTx, id: string, target: Pick<FollowUp, 'clinicId' | 'patientId'>) {
+  await tx.$queryRaw`SELECT id FROM "Appointment" WHERE id = ${id} FOR UPDATE`;
+  assertAppointmentMatches(await tx.appointment.findUnique({ where: { id } }), target);
+}
+
 function assertOpenOrScheduled(followUp: FollowUp) {
   if (followUp.status !== 'OPEN' && followUp.status !== 'SCHEDULED') {
     throw conflict(`Follow-up is already ${followUp.status.toLowerCase()}`);
@@ -191,8 +206,9 @@ function changeStatus(
   via: string,
 ) {
   return prisma.$transaction(async (tx) => {
+    if (typeof data.appointmentId === 'string') await checkLockedAppointment(tx, data.appointmentId, existing);
     const updated = await tx.followUp.update({
-      where: { id: existing.id },
+      where: { id: existing.id, status: existing.status },
       data,
       include: followUpInclude,
     });
@@ -218,6 +234,7 @@ followUpsRouter.get(
       where: { id: req.params.id },
       include: {
         ...followUpInclude,
+        deliveries: { where: { status: { in: ['DISPATCHING', 'UNCERTAIN'] } }, select: { channel: true, updatedAt: true } },
         outreachLogs: {
           orderBy: { attemptNumber: 'asc' },
           include: { contactedBy: { select: { fullName: true } } },
@@ -229,10 +246,12 @@ followUpsRouter.get(
 
     const consents = await latestReminderConsents(followUp.patientId);
     const failed = followUp.outreachLogs.filter((l) =>
-      (FAILED_CONTACT_OUTCOMES as readonly string[]).includes(l.outcome),
+      l.deliveryStatus === 'FAILED' || (FAILED_CONTACT_OUTCOMES as readonly string[]).includes(l.outcome),
     ).length;
     res.json({
-      ...withPlainPatient(followUp),
+      ...present(req, followUp),
+      outreachLogs: followUp.outreachLogs.map((log) => presentAttempt(log, currentUser(req).role)),
+      channelAvailability: channelAvailability(),
       consents,
       failedAttempts: failed,
       unreachableAfter: env.UNREACHABLE_AFTER_ATTEMPTS,
@@ -256,6 +275,7 @@ followUpsRouter.post(
       dueDate: string;
       priority: FollowUp['priority'];
       recallRule?: string;
+      recallIntervalDays?: number;
     };
     const clinicId = clinicForWrite(req, body.clinicId);
 
@@ -267,32 +287,35 @@ followUpsRouter.post(
     if (!patient) throw notFound('Patient not found');
     if (!clinic) throw notFound('Clinic not found');
 
-    if (body.appointmentId) {
-      const appt = await prisma.appointment.findUnique({ where: { id: body.appointmentId } });
-      assertAppointmentMatches(appt, { patientId: body.patientId, clinicId });
-    }
     if (body.encounterId) {
       const encounter = await prisma.encounter.findUnique({ where: { id: body.encounterId } });
       assertEncounterMatches(encounter, { patientId: body.patientId, clinicId });
     }
 
-    const followUp = await prisma.followUp.create({
-      data: {
-        patientId: body.patientId,
-        clinicId,
-        appointmentId: body.appointmentId,
-        encounterId: body.encounterId,
-        taskType: body.taskType,
-        reason: body.reason,
-        dueDate: toDateOnly(body.dueDate),
-        priority: body.priority,
-        recallRule: body.recallRule,
-        status: body.appointmentId ? 'SCHEDULED' : 'OPEN',
-        createdById: currentUser(req).userId,
-      },
-      include: followUpInclude,
+    if (body.recallIntervalDays && body.taskType !== 'CHECK_UP') throw badRequest('Routine recalls require a check-up');
+    const followUp = await prisma.$transaction(async (tx) => {
+      if (body.appointmentId) await checkLockedAppointment(tx, body.appointmentId, { patientId: body.patientId, clinicId });
+      const task = await tx.followUp.create({
+        data: {
+          patientId: body.patientId,
+          clinicId,
+          appointmentId: body.appointmentId,
+          encounterId: body.encounterId,
+          taskType: body.taskType,
+          reason: body.reason,
+          dueDate: toDateOnly(body.dueDate),
+          priority: body.priority,
+          recallRule: body.recallRule,
+          recallIntervalDays: body.recallIntervalDays,
+          status: body.appointmentId ? 'SCHEDULED' : 'OPEN',
+          createdById: currentUser(req).userId,
+        },
+        include: followUpInclude,
+      });
+      await auditPatientChange(tx, actorFromRequest(req), 'FOLLOW_UP_CREATED', 'FollowUp', task);
+      return task;
     });
-    res.status(201).json(withPlainPatient(followUp));
+    res.status(201).json(present(req, followUp));
   }),
 );
 
@@ -307,21 +330,28 @@ followUpsRouter.patch(
     assertOpenOrScheduled(existing);
     const patch = req.body as {
       taskType?: FollowUp['taskType'];
+      recallIntervalDays?: number | null;
       reason?: string;
       dueDate?: string;
       priority?: FollowUp['priority'];
     };
-    const updated = await prisma.followUp.update({
-      where: { id: existing.id },
-      data: {
-        taskType: patch.taskType,
-        reason: patch.reason,
-        priority: patch.priority,
-        dueDate: patch.dueDate ? toDateOnly(patch.dueDate) : undefined,
-      },
-      include: followUpInclude,
+    if (patch.recallIntervalDays && (patch.taskType ?? existing.taskType) !== 'CHECK_UP') throw badRequest('Routine recalls require a check-up');
+    const updated = await prisma.$transaction(async (tx) => {
+      const task = await tx.followUp.update({
+        where: { id: existing.id, status: existing.status },
+        data: {
+          taskType: patch.taskType,
+          recallIntervalDays: patch.taskType && patch.taskType !== 'CHECK_UP' ? null : patch.recallIntervalDays,
+          reason: patch.reason,
+          priority: patch.priority,
+          dueDate: patch.dueDate ? toDateOnly(patch.dueDate) : undefined,
+        },
+        include: followUpInclude,
+      });
+      await auditPatientChange(tx, actorFromRequest(req), 'FOLLOW_UP_UPDATED', 'FollowUp', task, { fields: Object.keys(patch) });
+      return task;
     });
-    res.json(withPlainPatient(updated));
+    res.json(present(req, updated));
   }),
 );
 
@@ -353,7 +383,7 @@ followUpsRouter.post(
       },
       'COMPLETE',
     );
-    res.json(withPlainPatient(updated));
+    res.json(present(req, updated));
   }),
 );
 
@@ -371,7 +401,7 @@ followUpsRouter.post(
       { status: 'DECLINED', closureNote: (req.body as { closureNote: string }).closureNote },
       'DECLINE',
     );
-    res.json(withPlainPatient(updated));
+    res.json(present(req, updated));
   }),
 );
 
@@ -394,7 +424,7 @@ followUpsRouter.post(
       { status: 'SCHEDULED', appointmentId },
       'SCHEDULE',
     );
-    res.json(withPlainPatient(updated));
+    res.json(present(req, updated));
   }),
 );
 
@@ -416,7 +446,8 @@ followUpsRouter.post(
     if (!consent) {
       throw conflict(`Patient has not consented to ${channel} reminders`);
     }
-    const jobId = await enqueueReminder({ followUpId: existing.id, channel });
+    if (!channelAvailability()[channel]) throw new HttpError(503, `${channel} provider is not configured`);
+    const jobId = await enqueueReminder({ followUpId: existing.id, channel }, actorFromRequest(req));
     res.status(202).json({ queued: true, jobId });
   }),
 );

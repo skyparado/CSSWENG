@@ -30,7 +30,7 @@ function logRefusal(
     statusCode: reason === 'unauthenticated' ? 401 : 403,
     ipAddress: req.ip ?? null,
     userAgent: req.get('user-agent') ?? null,
-    metadata: { reason, requiredRoles },
+    metadata: { reason, requiredRoles, ...(sessionUser?.activeClinicId ? { clinicId: sessionUser.activeClinicId } : {}) },
   }).catch((err) => {
     // eslint-disable-next-line no-console
     console.error('access.refused audit write failed:', err);

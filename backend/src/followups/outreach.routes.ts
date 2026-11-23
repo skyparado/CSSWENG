@@ -10,7 +10,7 @@ import {
   requireAuth,
 } from '../auth/guards.js';
 import { actorFromRequest } from '../audit/record.js';
-import { logOutreachAttempt } from './outreach.service.js';
+import { logOutreachAttempt, presentAttempt } from './outreach.service.js';
 
 export const outreachRouter = Router();
 
@@ -47,7 +47,7 @@ outreachRouter.get(
       }),
       prisma.outreachLog.count({ where }),
     ]);
-    res.json({ items, total, page: q.page, pageSize: q.pageSize });
+    res.json({ items: items.map((log) => presentAttempt(log, currentUser(req).role)), total, page: q.page, pageSize: q.pageSize });
   }),
 );
 
@@ -63,7 +63,6 @@ outreachRouter.post(
       followUpId: string;
       outcome: OutreachOutcome;
       patientResponse?: string;
-      attemptedAt?: Date;
     };
     const followUp = await prisma.followUp.findUnique({ where: { id: body.followUpId } });
     if (!followUp) throw notFound('Follow-up not found');
@@ -77,10 +76,9 @@ outreachRouter.post(
       channel: 'CALL',
       outcome: body.outcome,
       patientResponse: body.patientResponse,
-      attemptedAt: body.attemptedAt,
       contactedById: currentUser(req).userId,
       actor: actorFromRequest(req),
     });
-    res.status(201).json(log);
+    res.status(201).json(presentAttempt(log, currentUser(req).role));
   }),
 );

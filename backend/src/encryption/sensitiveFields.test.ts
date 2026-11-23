@@ -1,3 +1,4 @@
+import { removeTestOutreach } from '../test-utils/outreachFixtures.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { prisma } from '../prisma.js';
 import { testPatientData } from '../test-utils/patientData.js';
@@ -93,7 +94,7 @@ afterAll(async () => {
   // Foreign keys are RESTRICT: children first.
   await prisma.allergy.deleteMany({ where: { id: ids.allergy } });
   await prisma.medication.deleteMany({ where: { id: ids.medication } });
-  await prisma.outreachLog.deleteMany({ where: { id: ids.outreach } });
+  await removeTestOutreach({ id: ids.outreach });
   await prisma.followUp.deleteMany({ where: { id: ids.followUp } });
   await prisma.patient.deleteMany({ where: { id: ids.patient } });
   await prisma.clinic.deleteMany({ where: { id: ids.clinic } });
