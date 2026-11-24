@@ -1,5 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
-import { setOwnPassword, signIn, USERS } from './helpers';
+import { setOwnPassword, signIn, USERS, verifyCode } from './helpers';
+
+// Some role-management cases deliberately log the same staff member out and back in twice.
+test.describe.configure({ timeout: 120_000 });
 
 /**
  * S01 sign-in, lockout, role restrictions and the idle session warning.
@@ -36,6 +39,8 @@ test.describe('S01 sign-in', () => {
 
     await fillLogin(page, USERS.DOCTOR.username, USERS.DOCTOR.password);
     await page.getByRole('button', { name: 'Sign in' }).click();
+    expect((await page.request.get('/api/users')).status()).toBe(401);
+    await verifyCode(page, USERS.DOCTOR.username);
 
     await expect(page.getByRole('heading', { name: 'Select Active Clinic' })).toBeVisible();
   });
@@ -53,6 +58,7 @@ test.describe('S01 sign-in', () => {
     // attempt does not linger on screen.
     await page.getByLabel('Password', { exact: true }).fill(USERS.SECRETARY.password);
     await page.getByRole('button', { name: 'Sign in' }).click();
+    await verifyCode(page, USERS.SECRETARY.username);
     await expect(page.getByRole('heading', { name: 'Select Active Clinic' })).toBeVisible();
   });
 
@@ -128,6 +134,7 @@ test.describe('S01 sign-in', () => {
 
       // The password the doctor handed over is temporary, so this account sets
       // its own before it reaches the clinic picker.
+      await verifyCode(page, username);
       await setOwnPassword(page, password, 'Tambourine-Kelp-42');
       await expect(page.getByRole('heading', { name: 'Select Active Clinic' })).toBeVisible();
     } finally {
@@ -196,6 +203,7 @@ test.describe('an account with no clinic assigned', () => {
       await resetToLogin(page);
       await fillLogin(page, username, password);
       await page.getByRole('button', { name: 'Sign in' }).click();
+      await verifyCode(page, username);
       await setOwnPassword(page, password, 'Marmalade-Quartz-7');
 
       await expect(
@@ -266,6 +274,7 @@ test.describe('S18 clinic authorization', () => {
       await resetToLogin(page);
       await fillLogin(page, username, password);
       await page.getByRole('button', { name: 'Sign in' }).click();
+      await verifyCode(page, username);
       await setOwnPassword(page, password, 'Kingfisher-Loom-83');
       await expect(
         page.getByRole('heading', { name: 'Select Active Clinic' }),

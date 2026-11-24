@@ -4,32 +4,32 @@ import {
   imageUploadMetadataSchema,
   imageUpdateSchema,
   imageListQuerySchema,
-  annotationSaveSchema,
+  annotationSaveSchema, drawingSchema, eyeTemplateSchema, templateCommitSchema, imageContextSchema,
   idParamSchema,
   ALLOWED_IMAGE_MIME_TYPES,
   MAX_IMAGE_SIZE_BYTES,
 } from '@clinic/schemas';
 import { asyncHandler, badRequest, validate } from '../http.js';
 import { requireAuth, requireDoctor } from '../auth/middleware.js';
-import {
-  getImage,
-  getImageSignedUrl,
-  getLatestAnnotation,
-  listAnnotations,
-  listImages,
-  saveAnnotation,
-  softDeleteImage,
-  updateCaption,
-  uploadImage,
-} from './clinicalImages.service.js';
-
+import { changeImage, commitTemplate, createImage, getImage, listAnnotations, listImages, selectTemplate } from './clinicalImages.service.js';
+import { getObject, presignedGetUrl } from './s3Client.js';
+import { prepareUpload } from './prepareUpload.js';
 export const clinicalImagesRouter = Router();
 
 /*
  * All clinical-image endpoints are Doctor-only per the SDD Role Permission
  * Matrix (SDD 7.1): the Doctor owns the clinical record end to end.
  */
-clinicalImagesRouter.use(requireAuth, requireDoctor);
+clinicalImagesRouter.use(requireAuth, requireDoctor, (_req, res, next) => {
+  res.set('Cache-Control', 'private, no-store');
+  next();
+});
+
+function actor(req: Request) {
+  const { userId, activeClinicId } = req.session.user!;
+  if (!activeClinicId) throw badRequest('Select an active clinic first');
+  return { userId, clinicId: activeClinicId };
+}
 
 /* ------------------------------- Upload ---------------------------------- */
 
@@ -73,113 +73,57 @@ clinicalImagesRouter.post(
   asyncHandler(async (req, res) => {
     if (!req.file) throw badRequest('No file uploaded; use multipart field `file`');
     const metadata = imageUploadMetadataSchema.parse(req.body);
-    const user = req.session.user!;
-    const image = await uploadImage({
-      ...metadata,
-      fileName: req.file.originalname,
-      mimeType: req.file.mimetype,
-      bytes: req.file.buffer,
-      uploadedById: user.userId,
-      userEmail: null,
-      userRole: user.role,
-    });
+    const bytes = await prepareUpload(req.file.buffer, req.file.mimetype);
+    const image = await createImage({ ...metadata, bytes, fileName: req.file.originalname, mimeType: req.file.mimetype }, actor(req));
     res.status(201).json(image);
   }),
 );
 
-/* ------------------------------- Read ------------------------------------ */
+clinicalImagesRouter.get('/', validate(imageListQuerySchema, 'query'), asyncHandler(async (req, res) => {
+  res.json(await listImages(imageListQuerySchema.parse(req.query)));
+}));
 
-clinicalImagesRouter.get(
-  '/',
-  validate(imageListQuerySchema, 'query'),
-  asyncHandler(async (req, res) => {
-    const query = req.query as unknown as import('@clinic/schemas').ImageListQuery;
-    const result = await listImages(query);
-    res.json(result);
-  }),
-);
+clinicalImagesRouter.get('/templates/:type', asyncHandler(async (req, res) => {
+  const context = imageContextSchema.required().parse(req.query);
+  const bytes = await selectTemplate(context, eyeTemplateSchema.parse(req.params.type), actor(req));
+  res.type('image/svg+xml').send(bytes);
+}));
 
-clinicalImagesRouter.get(
-  '/:id',
-  validate(idParamSchema, 'params'),
-  asyncHandler(async (req, res) => {
-    const image = await getImage(req.params.id);
-    res.json(image);
-  }),
-);
+clinicalImagesRouter.post('/templates', validate(templateCommitSchema), asyncHandler(async (req, res) => {
+  res.status(201).json(await commitTemplate(req.body, actor(req)));
+}));
 
-/** GET /api/clinical-images/:id/download — short-lived presigned S3 URL. */
-clinicalImagesRouter.get(
-  '/:id/download',
-  validate(idParamSchema, 'params'),
-  asyncHandler(async (req, res) => {
-    const result = await getImageSignedUrl(req.params.id);
-    res.json(result);
-  }),
-);
+clinicalImagesRouter.use('/:id', validate(idParamSchema, 'params'), validate(imageContextSchema, 'query'));
 
-/* ------------------------------- Mutate ---------------------------------- */
+clinicalImagesRouter.get('/:id', asyncHandler(async (req, res) => {
+  res.json(await getImage(req.params.id, imageContextSchema.parse(req.query)));
+}));
 
-clinicalImagesRouter.patch(
-  '/:id',
-  validate(idParamSchema, 'params'),
-  validate(imageUpdateSchema),
-  asyncHandler(async (req, res) => {
-    const user = req.session.user!;
-    const updated = await updateCaption(req.params.id, req.body.caption, {
-      userId: user.userId,
-      userEmail: null,
-      userRole: user.role,
-    });
-    res.json(updated);
-  }),
-);
+clinicalImagesRouter.get('/:id/download', asyncHandler(async (req, res) => {
+  const image = await getImage(req.params.id, imageContextSchema.parse(req.query), true);
+  res.json({ url: await presignedGetUrl(image.storageKey, 300), expiresIn: 300 });
+}));
 
-clinicalImagesRouter.delete(
-  '/:id',
-  validate(idParamSchema, 'params'),
-  asyncHandler(async (req, res) => {
-    const user = req.session.user!;
-    const deleted = await softDeleteImage(req.params.id, {
-      userId: user.userId,
-      userEmail: null,
-      userRole: user.role,
-    });
-    res.json(deleted);
-  }),
-);
+// Same-origin bytes work with Helmet, private buckets and tablets without S3 CORS.
+clinicalImagesRouter.get('/:id/content', asyncHandler(async (req, res) => {
+  const image = await getImage(req.params.id, imageContextSchema.parse(req.query), true);
+  res.type(image.mimeType).send(await getObject(image.storageKey));
+}));
 
-/* ------------------------------- Annotations ------------------------------ */
-
-clinicalImagesRouter.post(
-  '/:id/annotations',
-  validate(idParamSchema, 'params'),
-  validate(annotationSaveSchema),
-  asyncHandler(async (req, res) => {
-    const user = req.session.user!;
-    const row = await saveAnnotation(req.params.id, req.body.konvaData, {
-      userId: user.userId,
-      userEmail: null,
-      userRole: user.role,
-    });
-    res.status(201).json(row);
-  }),
-);
-
-clinicalImagesRouter.get(
-  '/:id/annotations',
-  validate(idParamSchema, 'params'),
-  asyncHandler(async (req, res) => {
-    const rows = await listAnnotations(req.params.id);
-    res.json({ items: rows });
-  }),
-);
-
-clinicalImagesRouter.get(
-  '/:id/annotations/latest',
-  validate(idParamSchema, 'params'),
-  asyncHandler(async (req, res) => {
-    const row = await getLatestAnnotation(req.params.id);
-    res.json(row ?? null);
-  }),
-);
+clinicalImagesRouter.patch('/:id', validate(imageUpdateSchema), asyncHandler(async (req, res) => {
+  res.json(await changeImage(req.params.id, imageContextSchema.parse(req.query), actor(req), { action: 'caption', caption: req.body.caption }));
+}));
+clinicalImagesRouter.delete('/:id', asyncHandler(async (req, res) => {
+  res.json(await changeImage(req.params.id, imageContextSchema.parse(req.query), actor(req), { action: 'remove' }));
+}));
+clinicalImagesRouter.post('/:id/annotations', validate(annotationSaveSchema), asyncHandler(async (req, res) => {
+  const data = drawingSchema.parse(req.body.konvaData);
+  res.status(201).json(await changeImage(req.params.id, imageContextSchema.parse(req.query), actor(req), { action: 'annotate', data }));
+}));
+clinicalImagesRouter.get('/:id/annotations', asyncHandler(async (req, res) => {
+  res.json({ items: await listAnnotations(req.params.id, imageContextSchema.parse(req.query)) });
+}));
+clinicalImagesRouter.get('/:id/annotations/latest', asyncHandler(async (req, res) => {
+  const [latest] = await listAnnotations(req.params.id, imageContextSchema.parse(req.query), true);
+  res.json(latest ?? null);
+}));

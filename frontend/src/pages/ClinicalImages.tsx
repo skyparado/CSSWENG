@@ -1,3 +1,6 @@
+import EyeTemplatePicker from '../EyeTemplatePicker';
+import { clinicalApi } from '../clinicalApi';
+import { imagesPath } from '../imageApi';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import PatientPicker from '../PatientPicker';
 import { go } from '../session';
@@ -23,7 +26,7 @@ import {
 const ACCEPT = 'image/jpeg,image/png,application/pdf';
 const MAX_BYTES = 20 * 1024 * 1024;
 
-export default function ClinicalImages({ patientId }: { patientId: string }) {
+export default function ClinicalImages({ patientId, visitId, appointmentId }: { patientId: string; visitId?: string; appointmentId?: string }) {
   const [images, setImages] = useState<ClinicalImage[] | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -31,16 +34,28 @@ export default function ClinicalImages({ patientId }: { patientId: string }) {
   // than disappearing with no trace.
   const [status, setStatus] = useState<ImageStatus>('ACTIVE');
 
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [walkInKey] = useState(() => crypto.randomUUID());
+  const [visits, setVisits] = useState<Awaited<ReturnType<typeof clinicalApi.encounters>>['items']>([]);
+  useEffect(() => {
+    let active = true;
+    clinicalApi.encounters(patientId).then(r => { if (active) setVisits(r.items); }, e => { if (active) setError(e.message); });
+    return () => { active = false; };
+  }, [patientId]);
+  const selected = visits.find(v => visitId ? v.id === visitId : appointmentId && v.appointmentId === appointmentId);
+  const currentVisit = visitId || selected?.id;
   const load = useCallback(async () => {
     setImages(undefined);
     try {
-      const res = await imageApi.list(patientId, status);
+      const res = await imageApi.list(patientId, status, currentVisit, appointmentId, page);
+      setTotal(res.total);
       setImages(res.items);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load images.');
       setImages([]);
     }
-  }, [patientId, status]);
+  }, [patientId, status, currentVisit, appointmentId, page]);
 
   useEffect(() => {
     void load();
@@ -65,21 +80,31 @@ export default function ClinicalImages({ patientId }: { patientId: string }) {
         </p>
       )}
 
-      <UploadForm
+      <label>Consultation visit
+        <select value={currentVisit || ''} onChange={e => go(imagesPath(patientId, e.target.value || undefined))}>
+          <option value="">{appointmentId ? 'Selected appointment' : 'Patient gallery and pre-visit uploads'}</option>
+          {visits.map(v => <option key={v.id} value={v.id}>{v.visitDate} · {v.type} · {v.status} · {v.id.slice(-6)}</option>)}
+        </select>
+      </label>
+      {currentVisit && <p><a href={`#/patients/${patientId}/visits/${currentVisit}`}>Return to consultation</a></p>}
+      {selected?.status === 'OPEN' && <EyeTemplatePicker patientId={patientId} visitId={selected.id} />}
+      {selected?.status !== 'SIGNED' && <UploadForm
+        visitId={currentVisit} appointmentId={currentVisit ? undefined : appointmentId}
+        walkInKey={currentVisit || appointmentId ? undefined : walkInKey}
         patientId={patientId}
         onUploaded={(image) => {
           setNotice(`Uploaded ${image.fileName}.`);
           void load();
         }}
         onError={setError}
-      />
+      />}
 
       <div className="seg" role="radiogroup" aria-label="Which images to show">
         <button
           type="button"
           role="radio"
           aria-checked={status === 'ACTIVE'}
-          onClick={() => setStatus('ACTIVE')}
+          onClick={() => { setPage(1); setStatus('ACTIVE'); }}
         >
           Current
         </button>
@@ -87,7 +112,7 @@ export default function ClinicalImages({ patientId }: { patientId: string }) {
           type="button"
           role="radio"
           aria-checked={status === 'DELETED'}
-          onClick={() => setStatus('DELETED')}
+          onClick={() => { setPage(1); setStatus('DELETED'); }}
         >
           Removed
         </button>
@@ -118,6 +143,8 @@ export default function ClinicalImages({ patientId }: { patientId: string }) {
           ))}
         </ul>
       )}
+      {total > 100 && <div className="row"><button disabled={page === 1} onClick={() => setPage(page - 1)}>Previous</button>
+        <span>Page {page} of {Math.ceil(total / 100)}</span><button disabled={page * 100 >= total} onClick={() => setPage(page + 1)}>Next</button></div>}
     </>
   );
 }
@@ -125,11 +152,12 @@ export default function ClinicalImages({ patientId }: { patientId: string }) {
 /* ------------------------------- Upload ---------------------------------- */
 
 function UploadForm({
-  patientId,
+  patientId, visitId, appointmentId, walkInKey,
   onUploaded,
   onError,
 }: {
   patientId: string;
+  visitId?: string; appointmentId?: string; walkInKey?: string;
   onUploaded: (image: ClinicalImage) => void;
   onError: (message: string) => void;
 }) {
@@ -154,7 +182,7 @@ function UploadForm({
     setBusy(true);
     try {
       const image = await imageApi.upload({
-        patientId,
+        patientId, visitId, appointmentId, walkInKey,
         file,
         caption: caption.trim() || undefined,
       });
@@ -181,7 +209,7 @@ function UploadForm({
         id="image-caption"
         value={caption}
         onChange={(e) => setCaption(e.target.value)}
-        maxLength={500}
+        maxLength={200}
         placeholder="Fundus OD, baseline"
       />
 
@@ -220,8 +248,7 @@ function ImageRow({
    */
   async function open() {
     try {
-      const { url } = await imageApi.downloadUrl(image.id);
-      window.open(url, '_blank', 'noopener,noreferrer');
+      window.open(imageApi.contentUrl(image.id, { patientId, visitId: image.visitId || undefined }), '_blank', 'noopener,noreferrer');
     } catch (err) {
       onError(err instanceof Error ? err.message : 'Could not open the file.');
     }
@@ -231,7 +258,7 @@ function ImageRow({
     e.preventDefault();
     setBusy(true);
     try {
-      await imageApi.setCaption(image.id, caption.trim() || null);
+      await imageApi.setCaption(image.id, { patientId, visitId: image.visitId || undefined }, caption.trim() || null);
       setEditing(false);
       onChanged('Caption saved.');
     } catch (err) {
@@ -244,7 +271,7 @@ function ImageRow({
   async function remove() {
     setBusy(true);
     try {
-      await imageApi.remove(image.id);
+      await imageApi.remove(image.id, { patientId, visitId: image.visitId || undefined });
       onChanged(`Removed ${image.fileName}. It is still available under Removed.`);
     } catch (err) {
       onError(err instanceof Error ? err.message : 'Could not remove the image.');
@@ -271,7 +298,7 @@ function ImageRow({
             aria-label={`Caption for ${image.fileName}`}
             value={caption}
             onChange={(e) => setCaption(e.target.value)}
-            maxLength={500}
+            maxLength={200}
           />
           <button type="submit" className="primary" disabled={busy}>
             Save
@@ -301,11 +328,19 @@ function ImageRow({
         </div>
       ) : (
         <div className="row image-row-actions">
+          {!image.visitId && image.walkInKey && <button type="button" disabled={busy} onClick={async () => {
+            setBusy(true);
+            try {
+              const visit = await clinicalApi.startVisit({ patientId, type: 'WALK_IN', walkInKey: image.walkInKey! });
+              go(`/patients/${patientId}/visits/${visit.id}`);
+            } catch (e) { onError(e instanceof Error ? e.message : 'Could not open walk-in visit'); }
+            finally { setBusy(false); }
+          }}>Start walk-in for this upload group</button>}
           {drawable ? (
             <button
               type="button"
               className="primary"
-              onClick={() => go(`/patients/${patientId}/images/${image.id}`)}
+              onClick={() => go(imagesPath(patientId, image.visitId ?? undefined, image.id))}
             >
               Draw
             </button>

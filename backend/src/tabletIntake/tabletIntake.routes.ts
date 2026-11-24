@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import {
   intakeSessionCreateSchema,
-  intakeFormSubmitSchema,
+  intakeFormSubmitSchema, intakeIdentitySchema,
   intakeReviewSchema,
   intakeSubmissionListQuerySchema,
   SEE_SECRETARY_MESSAGE,
@@ -14,7 +14,7 @@ import { requireAuth, requireRole } from '../auth/middleware.js';
 import { requireClinicAccess } from '../auth/clinicScope.js';
 import { assertClinicAccess, clinicForRead, clinicForWrite } from '../auth/guards.js';
 import {
-  cancelSession,
+  cancelSession, reviewView, tabletActivity, identifyPatient, resolveMatch,
   getSessionByToken,
   getSessionClinicId,
   getSubmission,
@@ -110,6 +110,13 @@ tabletIntakeRouter.post(
   }),
 );
 
+tabletIntakeRouter.post('/sessions/:id/match', ...staffMiddleware, validate(z.object({ decision: z.enum(['EXISTING', 'SEPARATE']) })),
+  asyncHandler(async (req, res) => {
+    assertClinicAccess(req, await getSessionClinicId(req.params.id));
+    await resolveMatch(req.params.id, req.body.decision, req.session.user!);
+    res.status(204).end();
+  }));
+
 /* ------------------------- Staff review of submissions -------------------- */
 
 /**
@@ -129,7 +136,7 @@ tabletIntakeRouter.get(
     const scoped = clinicForRead(req, query.clinicId);
     if (!scoped) throw new HttpError(400, 'Select an active clinic first');
     const result = await listSubmissionsForClinic({ ...query, clinicId: scoped });
-    res.json(result);
+    res.json({ ...result, items: result.items.map(row => reviewView(row, req.session.user!.role)) });
   }),
 );
 
@@ -141,7 +148,7 @@ tabletIntakeRouter.get(
   asyncHandler(async (req, res) => {
     const submission = await getSubmission(req.params.id);
     assertClinicAccess(req, submission.session.clinicId);
-    res.json(submission);
+    res.json(reviewView(submission, req.session.user!.role));
   }),
 );
 
@@ -175,6 +182,18 @@ tabletIntakeRouter.post(
  * session is still ACTIVE. No authentication: the token itself IS the proof
  * the Secretary handed the tablet over. Deliberately omits all form data.
  */
+tabletIntakeRouter.post('/tablet/:token/identify', validate(intakeIdentitySchema), asyncHandler(async (req, res) => {
+  res.json(await identifyPatient(req.params.token, req.body));
+}));
+tabletIntakeRouter.post('/tablet/:token/activity', asyncHandler(async (req, res) => {
+  await tabletActivity(req.params.token);
+  res.status(204).end();
+}));
+tabletIntakeRouter.post('/tablet/:token/cancel', asyncHandler(async (req, res) => {
+  const session = await getSessionByToken(req.params.token);
+  await cancelSession({ id: session.id, cancelledById: null, userEmail: null, userRole: null });
+  res.status(204).end();
+}));
 tabletIntakeRouter.get(
   '/tablet/:token',
   asyncHandler(async (req, res) => {

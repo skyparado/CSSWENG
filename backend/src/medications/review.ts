@@ -1,3 +1,4 @@
+import { readIntakePayload } from '../tabletIntake/tabletIntake.service.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
@@ -20,13 +21,13 @@ export function lockPatient(tx: AuditTx, id: string) {
 
 // The original tablet instructed patients to separate medicines with commas.
 function medicineItems(raw: Prisma.JsonValue) {
-  const text = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw.medications : null;
+  const text = raw && readIntakePayload(raw)?.medications;
   return typeof text === 'string' ? text.split(/[,;\n]/).map((s) => s.trim()).filter(Boolean) : [];
 }
 
 export async function decideItem(tx: AuditTx, actor: AuditActor, item: { submissionId: string; itemIndex: number },
   patientId: string, medication?: { id: string; clinicId: string }) {
-  const submission = await tx.tabletIntakeSubmission.findUnique({ where: { id: item.submissionId },
+  const submission = await tx.tabletIntakeSubmission.findUnique({ where: { id: item.submissionId, session: { OR: [{ matchDecision: null }, { matchDecision: { not: 'PENDING' } }] } },
     select: { patientId: true, rawPayload: true, session: { select: { clinicId: true } } } });
   if (!submission || submission.patientId !== patientId || !medicineItems(submission.rawPayload)[item.itemIndex]) {
     throw notFound('Reported medicine not found');
@@ -41,7 +42,7 @@ export async function decideItem(tx: AuditTx, actor: AuditActor, item: { submiss
 // Mounted inside the Doctor-only medications router.
 export const reviewRouter = Router();
 reviewRouter.get('/reported', validate(z.object({ patientId: idSchema }), 'query'), asyncHandler(async (req, res) => {
-  const rows = await prisma.tabletIntakeSubmission.findMany({ where: { patientId: String(req.query.patientId) },
+  const rows = await prisma.tabletIntakeSubmission.findMany({ where: { patientId: String(req.query.patientId), session: { OR: [{ matchDecision: null }, { matchDecision: { not: 'PENDING' } }] } },
     orderBy: { createdAt: 'desc' }, select: { id: true, rawPayload: true, createdAt: true,
       medicineDecisions: { select: { itemIndex: true } }, session: { select: { clinicId: true } } } });
   res.json({ items: rows.flatMap((s) => medicineItems(s.rawPayload).flatMap((name, itemIndex) =>

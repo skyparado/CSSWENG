@@ -1,3 +1,4 @@
+import { clearAuditLog } from '../test-utils/clearAuditLog.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import supertest from 'supertest';
 import type request from 'supertest';
@@ -19,18 +20,15 @@ let secretaryAgent: ReturnType<typeof request.agent>;
 let doctorCleanup: () => Promise<void>;
 let secretaryCleanup: () => Promise<void>;
 
-/**
- * TRUNCATE bypasses the BEFORE UPDATE/DELETE row triggers (they only fire per
- * row). We use it for test isolation; production code must never do this.
- */
-async function clearAuditLog(): Promise<void> {
-  await prisma.$executeRawUnsafe('TRUNCATE "AuditLog"');
-}
 
 /** Small helper so middleware's fire-and-forget writes have time to land. */
 function flushAudit(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 200));
 }
+
+it('rejects truncation as well as row changes', async () => {
+  await expect(prisma.$executeRaw`TRUNCATE "AuditLog"`).rejects.toThrow(/append-only/);
+});
 
 function sampleEntry(overrides: Partial<Parameters<typeof writeAudit>[0]> = {}) {
   return {

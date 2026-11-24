@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { SexSchema, pastDate, phMobile } from './patients.js';
+import { SexSchema, isoDate, pastDate, phMobile } from './patients.js';
 
 /* ------------------------------- Enums ----------------------------------- */
 
@@ -44,6 +44,14 @@ export const intakeFormSubmitSchema = z.object({
   mobileNumber: phMobile,
   email: z.string().email().max(254).optional(),
   address: z.string().trim().max(500).optional(),
+  emergencyContactName: z.string().trim().max(150).optional(),
+  emergencyContactPhone: z.string().trim().max(30).optional(),
+  hmoProvider: z.string().trim().max(150).optional(),
+  hmoMemberNumber: z.string().trim().max(80).optional(),
+  hmoValidUntil: isoDate.optional(),
+  philhealthNumber: z.string().trim().max(30).optional(),
+  referralSource: z.string().trim().max(150).optional(),
+  ophthalmicHistory: z.string().trim().max(5000).optional(),
   medicalHistory: z.string().trim().max(5000).optional(),
   allergies: z.string().trim().max(2000).optional(),
   medications: z.string().trim().max(2000).optional(),
@@ -52,8 +60,12 @@ export const intakeFormSubmitSchema = z.object({
     treatment: z.literal(true),
     dataPrivacy: z.literal(true),
     photoConsent: z.boolean().optional(),
+    smsReminders: z.boolean().optional(),
+    emailReminders: z.boolean().optional(),
   }),
 });
+export const intakeIdentitySchema = intakeFormSubmitSchema.pick({ firstName: true, lastName: true, dateOfBirth: true, mobileNumber: true });
+export type IntakeIdentity = z.infer<typeof intakeIdentitySchema>;
 export type IntakeFormSubmit = z.infer<typeof intakeFormSubmitSchema>;
 
 /**
@@ -83,6 +95,7 @@ export type IntakeSubmissionListQuery = z.infer<typeof intakeSubmissionListQuery
  * token itself (the tablet already has it) and any secretary identifiers.
  */
 export const tabletIntakeSessionPublicSchema = z.object({
+  needsStaff: z.boolean().optional(),
   id: z.string(),
   status: tabletIntakeStatusEnum,
   clinic: z.object({

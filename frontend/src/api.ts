@@ -373,7 +373,8 @@ const qs = (params: Record<string, string | number | undefined>) =>
 export const api = {
   me: () => call<{ user: User }>('GET', '/api/auth/me'),
   login: (username: string, password: string) =>
-    call<{ user: User }>('POST', '/api/auth/login', { username, password }),
+    call<{ mfaRequired: true; setupKey?: string }>('POST', '/api/auth/login', { username, password }),
+  verifyMfa: (code: string) => call<{ user: User }>('POST', '/api/auth/mfa', { code }),
 
   /** Set your own password. Clears a pending forced reset. */
   changePassword: (currentPassword: string, newPassword: string) =>

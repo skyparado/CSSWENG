@@ -15,6 +15,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
+    "db:provision-demo": "tsx prisma/provisionDemo.ts",
     "db:seed": "tsx prisma/seed.ts",
     "db:encrypt-existing": "tsx prisma/encryptExisting.ts",
     "db:restore-drill": "node --import tsx prisma/restoreDrill.ts",

@@ -4,6 +4,7 @@
  * UI and are used by filters.
  */
 export const AuditActions = {
+  MFA_CHALLENGE: 'MFA_CHALLENGE',
   // Auth
   LOGIN_SUCCESS: 'LOGIN_SUCCESS',
   LOGIN_FAILED: 'LOGIN_FAILED',

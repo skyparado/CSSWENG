@@ -1,3 +1,4 @@
+import { signInStaff } from '../test-utils/authAgent.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import supertest from 'supertest';
 import { createApp } from '../app.js';
@@ -77,9 +78,7 @@ function expirySecondsFrom(cookie: string): number | null {
 
 describe('session idle timeout (QA 2.5)', () => {
   it('sets the session cookie expiry to SESSION_IDLE_TIMEOUT_MINUTES on login', async () => {
-    const res = await supertest(app)
-      .post('/api/auth/login')
-      .send({ username, password });
+    const res = await signInStaff(supertest.agent(app), username, password);
     expect(res.status).toBe(200);
 
     const cookie = pickSessionCookie(res.headers['set-cookie']);
@@ -95,7 +94,7 @@ describe('session idle timeout (QA 2.5)', () => {
 
   it('refreshes expiry on each subsequent request (rolling idle timeout)', async () => {
     const agent = supertest.agent(app);
-    const login = await agent.post('/api/auth/login').send({ username, password });
+    const login = await signInStaff(agent, username, password);
     expect(login.status).toBe(200);
 
     // Short wait so a rolling cookie's expiry visibly shifts.
@@ -119,9 +118,7 @@ describe('session idle timeout (QA 2.5)', () => {
   });
 
   it('cookie is HttpOnly and SameSite=lax', async () => {
-    const res = await supertest(app)
-      .post('/api/auth/login')
-      .send({ username, password });
+    const res = await signInStaff(supertest.agent(app), username, password);
     expect(res.status).toBe(200);
 
     const cookie = pickSessionCookie(res.headers['set-cookie']);

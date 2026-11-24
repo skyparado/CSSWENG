@@ -26,6 +26,7 @@ export const CreateEncounterSchema = z.object({
   appointmentId: z.string().min(1).optional(),
   /** Responsible doctor. Defaults to the signed-in user when that user is the doctor. */
   attendingDoctorId: z.string().min(1).optional(),
+  walkInKey: z.string().uuid().optional(),
 });
 export type CreateEncounterInput = z.infer<typeof CreateEncounterSchema>;
 

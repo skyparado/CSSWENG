@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import supertest from 'supertest';
 import { createApp } from '../app.js';
 import { prisma } from '../prisma.js';
-import { loginAgent } from '../test-utils/authAgent.js';
+import { loginAgent, signInStaff } from '../test-utils/authAgent.js';
 
 /**
  * The forced password reset path (QA 1): a doctor hands out a temporary
@@ -54,7 +54,7 @@ describe('a doctor-issued password is temporary', () => {
     const agent = supertest.agent(app);
 
     // Signing in works: the person has to get far enough to fix this.
-    await agent.post('/api/auth/login').send({ username, password: 'Handed-Over-78' }).expect(200);
+    await signInStaff(agent, username, 'Handed-Over-78');
 
     // Ordinary work is refused, and the response says why so the UI can route
     // them to the change-password screen.
@@ -70,7 +70,7 @@ describe('a doctor-issued password is temporary', () => {
   it('clears the flag once the account sets its own password, and not before', async () => {
     const { id, username } = await newStaffAccount('Handed-Over-79');
     const agent = supertest.agent(app);
-    await agent.post('/api/auth/login').send({ username, password: 'Handed-Over-79' }).expect(200);
+    await signInStaff(agent, username, 'Handed-Over-79');
 
     const changed = await agent.post('/api/auth/change-password').send({
       currentPassword: 'Handed-Over-79',
@@ -95,7 +95,7 @@ describe('a doctor-issued password is temporary', () => {
     await supertest(app)
       .post('/api/auth/login')
       .send({ username, password: 'Tambourine-Kelp-42' })
-      .expect(200);
+      .expect(202);
   });
 });
 
@@ -103,7 +103,7 @@ describe('POST /api/auth/change-password', () => {
   it('requires the current password, even with a reset pending', async () => {
     const { username } = await newStaffAccount('Handed-Over-80');
     const agent = supertest.agent(app);
-    await agent.post('/api/auth/login').send({ username, password: 'Handed-Over-80' }).expect(200);
+    await signInStaff(agent, username, 'Handed-Over-80');
 
     const res = await agent.post('/api/auth/change-password').send({
       currentPassword: 'not-the-current-one',
@@ -115,7 +115,7 @@ describe('POST /api/auth/change-password', () => {
   it('refuses a new password that repeats one from the history window', async () => {
     const { username } = await newStaffAccount('Handed-Over-81');
     const agent = supertest.agent(app);
-    await agent.post('/api/auth/login').send({ username, password: 'Handed-Over-81' }).expect(200);
+    await signInStaff(agent, username, 'Handed-Over-81');
 
     await agent
       .post('/api/auth/change-password')
@@ -135,7 +135,7 @@ describe('POST /api/auth/change-password', () => {
   it('refuses a new password that fails the shape rules', async () => {
     const { username } = await newStaffAccount('Handed-Over-82');
     const agent = supertest.agent(app);
-    await agent.post('/api/auth/login').send({ username, password: 'Handed-Over-82' }).expect(200);
+    await signInStaff(agent, username, 'Handed-Over-82');
 
     const res = await agent.post('/api/auth/change-password').send({
       currentPassword: 'Handed-Over-82',
@@ -157,7 +157,7 @@ describe('POST /api/users/:id/force-password-reset', () => {
   it('locks an already-working account out of everything but a password change', async () => {
     const { username } = await newStaffAccount('Handed-Over-83');
     const agent = supertest.agent(app);
-    await agent.post('/api/auth/login').send({ username, password: 'Handed-Over-83' }).expect(200);
+    await signInStaff(agent, username, 'Handed-Over-83');
     await agent
       .post('/api/auth/change-password')
       .send({ currentPassword: 'Handed-Over-83', newPassword: 'Tambourine-Kelp-42' })

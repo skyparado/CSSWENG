@@ -25,20 +25,34 @@ export const MAX_IMAGE_SIZE_BYTES = 20 * 1024 * 1024;
 
 /* ------------------------------- Payloads -------------------------------- */
 
-export const imageUploadMetadataSchema = z.object({
+export const eyeTemplateTypes = ['anterior-od', 'anterior-os', 'posterior-od', 'posterior-os'] as const;
+export const eyeTemplateSchema = z.enum(eyeTemplateTypes);
+export type EyeTemplate = z.infer<typeof eyeTemplateSchema>;
+export const eyeTemplateLabels: Record<EyeTemplate, string> = {
+  'anterior-od': 'Anterior segment · Right eye (OD)',
+  'anterior-os': 'Anterior segment · Left eye (OS)',
+  'posterior-od': 'Fundus · Right eye (OD)',
+  'posterior-os': 'Fundus · Left eye (OS)',
+};
+
+export const imageContextSchema = z.object({
   patientId: z.string().min(1),
+  visitId: z.string().min(1).optional(),
+});
+export type ImageContext = z.infer<typeof imageContextSchema>;
+export const imageUploadMetadataSchema = imageContextSchema.extend({
   appointmentId: z.string().min(1).optional(),
-  caption: z.string().trim().max(500).optional(),
+  walkInKey: z.string().uuid().optional(),
+  caption: z.string().trim().max(200).optional(),
 });
 export type ImageUploadMetadata = z.infer<typeof imageUploadMetadataSchema>;
 
 export const imageUpdateSchema = z.object({
-  caption: z.string().trim().max(500).nullable(),
+  caption: z.string().trim().max(200).nullable(),
 });
 export type ImageUpdate = z.infer<typeof imageUpdateSchema>;
 
-export const imageListQuerySchema = z.object({
-  patientId: z.string().min(1).optional(),
+export const imageListQuerySchema = imageContextSchema.extend({
   appointmentId: z.string().min(1).optional(),
   status: imageStatusEnum.default('ACTIVE'),
   page: z.coerce.number().int().min(1).default(1),
@@ -55,12 +69,30 @@ export const annotationSaveSchema = z.object({
 });
 export type AnnotationSave = z.infer<typeof annotationSaveSchema>;
 
+const coordinates = z.array(z.number().finite()).min(4).refine(p => p.length % 2 === 0);
+const style = { color: z.string().regex(/^#[0-9a-f]{3,8}$/i), width: z.number().positive().max(256) };
+export const drawingSchema = z.object({
+  schema: z.literal(1), width: z.number().int().positive(), height: z.number().int().positive(),
+  shapes: z.array(z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('pen'), points: coordinates, ...style }),
+    z.object({ kind: z.literal('arrow'), points: z.array(z.number().finite()).length(4), ...style }),
+    z.object({ kind: z.literal('text'), x: z.number().finite(), y: z.number().finite(), text: z.string().min(1).max(60),
+      color: style.color, fontSize: z.number().positive().max(512) }),
+  ])),
+});
+export const templateCommitSchema = imageContextSchema.extend({
+  visitId: z.string().min(1), templateType: eyeTemplateSchema,
+  commitKey: z.string().uuid(), konvaData: drawingSchema,
+});
+
 /* ------------------------------- Responses -------------------------------- */
 
 export const clinicalImageSchema = z.object({
   id: z.string(),
   patientId: z.string(),
   appointmentId: z.string().nullable(),
+  visitId: z.string().nullable(),
+  templateType: eyeTemplateSchema.nullable(),
   uploadedById: z.string().nullable(),
   storageKey: z.string(),
   fileName: z.string(),

@@ -34,6 +34,8 @@ services:
       # Back both up: losing either makes stored patient data unreadable or unsearchable.
       - key: FIELD_ENCRYPTION_KEY
         sync: false
+      - key: PRISMA_FIELD_ENCRYPTION_KEY
+        sync: false
       - key: BLIND_INDEX_KEY
         sync: false
       # S3-compatible storage for PDFs and signatures (AWS S3, Cloudflare R2, …).

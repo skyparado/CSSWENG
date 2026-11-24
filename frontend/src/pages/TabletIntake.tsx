@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   tabletApi,
   type IntakePayload,
@@ -33,7 +33,14 @@ const BLANK = {
   mobileNumber: '',
   email: '',
   address: '',
-  medicalHistory: '',
+  medicalHistory: '', ophthalmicHistory: '', smsReminders: false, emailReminders: false,
+  emergencyContactName: '',
+  emergencyContactPhone: '',
+  hmoProvider: '',
+  hmoMemberNumber: '',
+  hmoValidUntil: '',
+  philhealthNumber: '',
+  referralSource: '',
   allergies: '',
   medications: '',
   treatment: false,
@@ -50,6 +57,7 @@ export default function TabletIntake({ token }: { token: string }) {
   const [form, setForm] = useState<Form>(BLANK);
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const lastActivity = useRef(0);
   const [submitting, setSubmitting] = useState(false);
 
   // Confirm the session is live before showing the form, and keep checking so
@@ -61,6 +69,7 @@ export default function TabletIntake({ token }: { token: string }) {
         (s) => {
           if (active) {
             setSession(s);
+            if (s.status !== 'ACTIVE') setForm(BLANK);
             setLoadError(null);
           }
         },
@@ -78,6 +87,27 @@ export default function TabletIntake({ token }: { token: string }) {
       window.clearInterval(id);
     };
   }, [token]);
+
+  useEffect(() => {
+    if (session?.status !== 'ACTIVE' || step === 'done') return;
+    const activity = () => {
+      if (Date.now() - lastActivity.current < 10000) return;
+      lastActivity.current = Date.now();
+      tabletApi.activity(token).catch(() => {
+        setForm(BLANK);
+        setLoadError('Return the tablet to staff.');
+      });
+    };
+    window.addEventListener('input', activity);
+    window.addEventListener('pointerdown', activity);
+    return () => { window.removeEventListener('input', activity); window.removeEventListener('pointerdown', activity); };
+  }, [token, session?.status, step]);
+
+  async function cancel() {
+    setForm(BLANK);
+    setLoadError('Intake closed');
+    await tabletApi.cancel(token).catch(() => undefined);
+  }
 
   function set<K extends keyof Form>(key: K, value: Form[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -108,11 +138,20 @@ export default function TabletIntake({ token }: { token: string }) {
     return null;
   }
 
-  function next() {
+  async function next() {
     const problem = validate(step);
     if (problem) {
       setFieldError(problem);
       return;
+    }
+    if (step === 'contact') {
+      setSubmitting(true);
+      try {
+        const { firstName, lastName, mobileNumber, dateOfBirth } = form;
+        const result = await tabletApi.identify(token, { firstName, lastName, mobileNumber, dateOfBirth });
+        if (result.needsStaff) { setSession(s => s && { ...s, needsStaff: true }); return; }
+      } catch (e) { setFieldError(e instanceof Error ? e.message : String(e)); return; }
+      finally { setSubmitting(false); }
     }
     const i = STEP_ORDER.indexOf(step);
     setStep(STEP_ORDER[i + 1] ?? 'consent');
@@ -141,6 +180,14 @@ export default function TabletIntake({ token }: { token: string }) {
       mobileNumber: form.mobileNumber.trim(),
       ...(form.email.trim() ? { email: form.email.trim() } : {}),
       ...(form.address.trim() ? { address: form.address.trim() } : {}),
+      emergencyContactName: form.emergencyContactName.trim() || undefined,
+      emergencyContactPhone: form.emergencyContactPhone.trim() || undefined,
+      hmoProvider: form.hmoProvider.trim() || undefined,
+      hmoMemberNumber: form.hmoMemberNumber.trim() || undefined,
+      hmoValidUntil: form.hmoValidUntil.trim() || undefined,
+      philhealthNumber: form.philhealthNumber.trim() || undefined,
+      referralSource: form.referralSource.trim() || undefined,
+      ophthalmicHistory: form.ophthalmicHistory.trim() || undefined,
       ...(form.medicalHistory.trim() ? { medicalHistory: form.medicalHistory.trim() } : {}),
       ...(form.allergies.trim() ? { allergies: form.allergies.trim() } : {}),
       ...(form.medications.trim() ? { medications: form.medications.trim() } : {}),
@@ -148,6 +195,7 @@ export default function TabletIntake({ token }: { token: string }) {
         treatment: true,
         dataPrivacy: true,
         photoConsent: form.photoConsent,
+        smsReminders: form.smsReminders, emailReminders: form.emailReminders,
       },
     };
 
@@ -220,6 +268,9 @@ export default function TabletIntake({ token }: { token: string }) {
     );
   }
 
+  if (session.needsStaff) return <TabletShell><h1>Please see the secretary.</h1>
+    <button type="button" className="tablet-next" onClick={() => tabletApi.session(token).then(setSession, () => setLoadError('Intake closed'))}>Continue after staff review</button>
+  </TabletShell>;
   const stepNumber = STEP_ORDER.indexOf(step);
 
   return (
@@ -331,6 +382,17 @@ export default function TabletIntake({ token }: { token: string }) {
         </>
       )}
 
+      {step === 'contact' && <details className="tablet-extra"><summary>Insurance, referral and emergency contact (optional)</summary>
+        {([["emergencyContactName","Emergency contact name","text"],
+          ["emergencyContactPhone","Emergency contact phone","tel"],
+          ["hmoProvider","HMO provider","text"],
+          ["hmoMemberNumber","HMO member number","text"],
+          ["hmoValidUntil","HMO valid until","date"],
+          ["philhealthNumber","PhilHealth number","text"],
+          ["referralSource","Referring hospital or physician","text"]] as const).map(([key, label, type]) =>
+          <label key={key}>{label}<input type={type} value={form[key]} onChange={e => set(key, e.target.value)} /></label>)}
+      </details>}
+
       {step === 'medical' && (
         <>
           <h1>Your health</h1>
@@ -357,6 +419,8 @@ export default function TabletIntake({ token }: { token: string }) {
             onChange={(e) => set('medications', e.target.value)}
           />
 
+          <label htmlFor="t-eye-history">Past eye conditions or operations</label>
+          <textarea id="t-eye-history" rows={2} value={form.ophthalmicHistory} onChange={e => set('ophthalmicHistory', e.target.value)} />
           <label htmlFor="t-history">Past illnesses or operations</label>
           <textarea
             id="t-history"
@@ -398,6 +462,10 @@ export default function TabletIntake({ token }: { token: string }) {
             </span>
           </label>
 
+          {(['smsReminders', 'emailReminders'] as const).map(key => <label key={key} className="tablet-consent">
+            <input type="checkbox" checked={form[key]} onChange={e => set(key, e.target.checked)} />
+            I agree to appointment reminders by {key === 'smsReminders' ? 'SMS' : 'email'}.
+          </label>)}
           <label className="tablet-consent" htmlFor="t-photo">
             <input
               id="t-photo"
@@ -426,6 +494,7 @@ export default function TabletIntake({ token }: { token: string }) {
       )}
 
       <div className="tablet-actions">
+        <button type="button" className="tablet-back" onClick={() => void cancel()} disabled={submitting}>Cancel intake</button>
         {stepNumber > 0 && (
           <button type="button" className="tablet-back" onClick={back} disabled={submitting}>
             Back
@@ -441,7 +510,7 @@ export default function TabletIntake({ token }: { token: string }) {
             {submitting ? 'Sending...' : 'Finish'}
           </button>
         ) : (
-          <button type="button" className="tablet-next" onClick={next}>
+          <button type="button" className="tablet-next" disabled={submitting} onClick={() => void next()}>
             {step === 'welcome' ? 'Start' : 'Next'}
           </button>
         )}

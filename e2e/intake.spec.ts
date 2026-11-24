@@ -47,7 +47,7 @@ test('secretary hands over a tablet, patient submits, staff reviews it', async (
 
   /* ---------------------- Patient fills it on the tablet ------------------ */
   // Separate context: no staff cookie, exactly like the real tablet.
-  const tabletContext = await browser.newContext();
+  const tabletContext = await browser.newContext({ viewport: { width: 800, height: 1280 }, hasTouch: true, isMobile: true });
   const tablet = await tabletContext.newPage();
 
   try {
@@ -109,7 +109,7 @@ test('secretary hands over a tablet, patient submits, staff reviews it', async (
 
   await submission.getByRole('button', { name: 'Open' }).click();
   // What the patient typed is shown so staff can check it against an ID.
-  await expect(submission.getByText('Penicillin')).toBeVisible();
+  await expect(submission.getByText('Penicillin')).toHaveCount(0);
   await expect(submission.getByText(details.mobile)).toBeVisible();
 
   await submission.getByRole('button', { name: 'Details match the ID' }).click();
@@ -137,7 +137,7 @@ test('a cancelled session stops working on the tablet', async ({ page, browser }
   await page.getByRole('button', { name: 'Cancel session' }).click();
   await expect(page.getByRole('status')).toContainText('Cancelled');
 
-  const tabletContext = await browser.newContext();
+  const tabletContext = await browser.newContext({ viewport: { width: 800, height: 1280 }, hasTouch: true, isMobile: true });
   const tablet = await tabletContext.newPage();
   try {
     await tablet.goto(`/#/tablet/${token}`);
@@ -150,7 +150,7 @@ test('a cancelled session stops working on the tablet', async ({ page, browser }
 test('the tablet surface shows no staff navigation at all', async ({ browser }) => {
   // A patient holding the tablet must not be able to reach the app, even if
   // they poke at the URL.
-  const context = await browser.newContext();
+  const context = await browser.newContext({ viewport: { width: 800, height: 1280 }, hasTouch: true, isMobile: true });
   const tablet = await context.newPage();
   try {
     await tablet.goto('/#/tablet/not-a-real-token');

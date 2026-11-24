@@ -142,6 +142,30 @@ describe('POST /api/tablet-intake/sessions (start)', () => {
   });
 });
 
+it('holds a probable duplicate for staff and keeps clinical changes off the candidate chart', async () => {
+  const body = fullPayload({ mobileNumber: '+639175559998' });
+  async function startSession() {
+    const res = await secretaryAgent.post('/api/tablet-intake/sessions').send({ clinicId }).expect(201);
+    createdSessionIds.push(res.body.id);
+    return res.body;
+  }
+  const first = await startSession();
+  await supertest(app).post(`/api/tablet-intake/tablet/${first.token}/submit`).send(body).expect(201);
+  const original = await patientIdForSession(first.id);
+  createdPatientIds.push(original);
+  const next = await startSession();
+  const base = '/api/tablet-intake/tablet/' + next.token;
+  const match = await supertest(app).post(base + '/identify').send(body).expect(200);
+  expect(match.body).toEqual({ needsStaff: true });
+  await supertest(app).post(base + '/submit').send(body).expect(201);
+  expect(await prisma.patientConsent.count({ where: { intakeSessionId: next.id } })).toBe(0);
+  await secretaryAgent.post(`/api/tablet-intake/sessions/${next.id}/match`).send({ decision: 'SEPARATE' }).expect(204);
+  const different = await patientIdForSession(next.id);
+  createdPatientIds.push(different);
+  expect(different).not.toBe(original);
+  expect(await prisma.patientConsent.count({ where: { intakeSessionId: next.id, patientId: different } })).toBe(3);
+});
+
 describe('GET /api/tablet-intake/tablet/:token (tablet read)', () => {
   it('is public: no auth required', async () => {
     const start = await secretaryAgent
