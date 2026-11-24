@@ -205,7 +205,7 @@ export const clinicalApi = {
   signNote: (id: string, version: number) => call<Note>('POST', `/api/encounters/${id}/note/sign`, { version }),
   addAddendum: (id: string, body: Partial<NoteContent> & { addendumReason: string }) =>
     call<Addendum>('POST', `/api/encounters/${id}/note/addenda`, body),
-  discardVisit: (id: string) => call<{ discarded: true; id: string }>('DELETE', `/api/encounters/${id}`),
+  discardVisit: (id: string) => call<{ discarded: true; id: string; visitDeleted: boolean }>('DELETE', `/api/encounters/${id}`),
 
   findings: (encounterId: string) => call<{ items: Finding[] }>('GET', `/api/encounters/${encounterId}/findings`),
   addFinding: (encounterId: string, body: FindingInput) =>

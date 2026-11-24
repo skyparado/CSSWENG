@@ -174,4 +174,14 @@ test.describe('S06/S07/S08 chart, consultation note and signing', () => {
     await page.goto(`/#/patients/${PATIENT_ID}/compare`);
     await expect(page.getByText('Only the doctor can compare results.')).toBeVisible();
   });
+
+  test('Cancel → discard removes the draft; S06 shows no unsigned note', async ({ page }) => {
+  // login as doctor + open a seeded patient using your existing helpers
+  await page.getByRole('link', { name: /new note/i }).click();
+  await page.getByLabel('Subjective').fill('Blurred vision OD');
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  await page.getByRole('button', { name: /discard/i }).click(); // matches "Discard note" or "Yes, discard"
+  await expect(page).toHaveURL(/\/patients\/[^/]+$/);
+  await expect(page.getByText(/unsigned/i)).toHaveCount(0);
+  });
 });

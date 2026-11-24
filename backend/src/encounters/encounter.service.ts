@@ -11,6 +11,8 @@ import {
   toNoteDbData,
   toNoteDetail,
 } from "./encounter.mapper.js";
+import { writeAudit } from "../audit/audit.service.js";
+import { AuditActions } from "../audit/actions.js";
 
 export class EncounterError extends Error {
   constructor(
@@ -25,7 +27,7 @@ export class EncounterError extends Error {
 
 type Db = Pick<
   typeof import("../prisma.js").prisma,
-  "patient" | "appointment" | "encounter" | "clinicalNote" | "user" | "examFinding" | "labResult"
+  "patient" | "appointment" | "encounter" | "clinicalNote" | "user" | "examFinding" | "labResult" | "followUp" | "$transaction"
 >;
 
 /** Visit dates are clinic-local. All clinics are in Manila for now (Clinic.timezone defaults to it). */
@@ -257,21 +259,14 @@ export async function addAddendum(db: Db, encounterId: string, input: CreateAdde
   return toAddendum(created);
 }
 
-// ------------------------------- Discard -----------------------------------
-
 /**
- * Discard an unsigned visit (S07 Cancel). Removes the encounter together with
- * its draft primary note and any examination findings entered during it, so a
- * cancelled "+ New Note" leaves no phantom unsigned visit on the chart (S06).
+ * Discard an unsigned visit (S07 Cancel). Deletes the encounter with its draft
+ * primary note and the examination findings entered during it, in one
+ * transaction, so a cancelled "+ New Note" leaves nothing on the chart (S06).
  *
- * Guarded so only an UNSIGNED visit can be deleted:
- *  - a signed encounter, or any SIGNED note / addendum, is refused (409);
- *  - lab results are permanent (insert-only, SDD 1.5), so a visit that has any
- *    is kept and the doctor is asked to leave it or sign it instead.
- *
- * The frontend decides WHEN to call this: silently when it created the visit
- * this session and nothing was entered, or on an explicit "Discard note" after
- * warning that content will be lost. The backend never deletes a signed record.
+ * Refused (409) when the visit is signed, has any signed note or addendum, has
+ * lab results (permanent, SDD 1.5), or has a follow-up linked to it. Nothing is
+ * deleted in those cases. The audit entry is written in the same transaction.
  */
 export async function discardEncounter(db: Db, id: string, actor: Actor) {
   requireDoctor(actor, "discard a visit");
@@ -295,17 +290,56 @@ export async function discardEncounter(db: Db, id: string, actor: Actor) {
     );
   }
 
-  // Children first: findings and the draft note are editable while the visit is
-  // OPEN, so they delete cleanly; then the encounter itself.
-  await db.examFinding.deleteMany({ where: { encounterId: id } });
-  await db.clinicalNote.deleteMany({ where: { encounterId: id } });
-  try {
-    await db.encounter.deleteMany({ where: { id } });
-  } catch {
-    // A follow-up or other record still points at the visit (ON DELETE RESTRICT).
-    throw new EncounterError(409, "ENCOUNTER_HAS_RELATED", "This visit has related records and cannot be discarded.");
+  const followUps = await db.followUp.findMany({ where: { encounterId: id } });
+  if (followUps.length > 0) {
+    throw new EncounterError(
+      409,
+      "HAS_FOLLOW_UPS",
+      "A follow-up is linked to this visit. Keep it as a draft or sign it instead.",
+    );
   }
 
-  // AUDIT (Lance): "encounter.discarded"
-  return { discarded: true as const, id };
+  const user = await db.user.findFirst({ where: { id: actor.id } });
+
+  // "Created only for this note": started by this doctor, not from an appointment.
+  const visitOnlyForNote = enc.createdById === actor.id && !enc.appointmentId;
+
+  try {
+    await db.$transaction(async (tx) => {
+      await tx.examFinding.deleteMany({ where: { encounterId: id } });
+      await tx.clinicalNote.deleteMany({ where: { encounterId: id } });
+      if (visitOnlyForNote) {
+        const { count } = await tx.encounter.deleteMany({ where: { id, status: "OPEN" } });
+        if (count === 0) {
+          throw new EncounterError(409, "ENCOUNTER_SIGNED", "A signed visit cannot be discarded.");
+        }
+      }
+
+      await writeAudit(
+        {
+          userId: actor.id,
+          userEmail: null, 
+          userRole: actor.role,
+          action: AuditActions.ENCOUNTER_DISCARDED,
+          resourceType: "Encounter",
+          resourceId: id,
+          method: null,
+          path: null,
+          statusCode: null,
+          ipAddress: null,
+          userAgent: null,
+          metadata: { patientId: enc.patientId, hadDraftNote: notes.length > 0, visitDeleted: visitOnlyForNote },
+        },
+        tx,
+      );
+    });
+  } catch (err) {
+    if (err instanceof EncounterError) throw err;
+    if ((err as { code?: string }).code === "P2003") {
+      throw new EncounterError(409, "ENCOUNTER_HAS_RELATED", "This visit has related records and cannot be discarded.");
+    }
+    throw err;
+  }
+
+  return { discarded: true as const, id, visitDeleted: visitOnlyForNote };
 }

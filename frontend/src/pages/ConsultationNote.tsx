@@ -51,7 +51,6 @@ function previousValues(cmp: ComparisonResponse | undefined, visitDate: string) 
 export default function ConsultationNote({
   patientId,
   encounterId,
-  isNew = false,
 }: {
   patientId: string;
   encounterId: string;
@@ -202,31 +201,15 @@ export default function ConsultationNote({
     return Boolean(prev && value && prev !== value);
   };
 
-  /** True once the doctor has entered anything the chart would keep. */
-  const hasContent = (): boolean =>
-    Boolean(draft.subjective?.trim() || draft.assessment?.trim() || draft.plan?.trim()) ||
-    draft.diagnosisItems.length > 0 ||
-    findings.size > 0 ||
-    Object.values(cells).some((c) => c.value.trim() !== '');
-
   const leave = () => go(`/patients/${p.id}`);
 
-  /** Keep the work as an unsigned draft: flush any pending autosave, then leave. */
-  const keepAsDraft = async () => {
-    setDiscardPrompt(false);
-    try {
-      if (dirty.current) await saveDraft();
-    } finally {
-      leave();
-    }
-  };
-
-  /** Delete this unsigned visit, then return to the chart. */
+  /** Delete this unsigned draft (and the visit, if it was created only for this note), then return to the chart. */
   const discard = async () => {
     clearTimeout(timer.current);
     dirty.current = false;
     setDiscarding(true);
     try {
+      await saving.current; // let an in-flight autosave finish so it can't recreate the note
       await clinicalApi.discardVisit(encounterId);
       leave();
     } catch (err) {
@@ -242,12 +225,9 @@ export default function ConsultationNote({
    * A visit with content, or one that already existed, is never deleted without
    * the doctor's say-so: ask whether to keep it as an unsigned draft or discard it.
    */
+  /** Cancel (S07): always ask "Discard this draft?" before anything is deleted. */
   const onCancel = () => {
     clearTimeout(timer.current);
-    if (!hasContent()) {
-      if (isNew) return void discard();
-      return leave(); // a pre-existing empty visit is left as it is, never silently deleted
-    }
     setDiscardPrompt(true);
   };
 
@@ -462,18 +442,15 @@ export default function ConsultationNote({
 
       {discardPrompt && (
         <div className="backdrop" role="presentation">
-          <div className="card dialog" role="dialog" aria-modal="true" aria-labelledby="discard-title">
-            <h2 id="discard-title">Discard this note?</h2>
-            <p>
-              This visit has unsaved or unsigned content. Keep it as an unsigned draft you can finish later, or discard the
-              visit and its findings. Discarding cannot be undone.
-            </p>
+          <div className="card dialog" role="alertdialog" aria-modal="true" aria-labelledby="discard-title">
+            <h2 id="discard-title">Discard this draft?</h2>
+            <p>The unsigned note and its findings will be deleted. This cannot be undone.</p>
             <div className="footer-bar">
-              <button type="button" onClick={() => void keepAsDraft()} disabled={discarding}>
-                Keep as unsigned draft
+              <button type="button" onClick={() => setDiscardPrompt(false)} disabled={discarding}>
+                No, keep editing
               </button>
               <button type="button" className="danger" onClick={() => void discard()} disabled={discarding}>
-                {discarding ? 'Discarding…' : 'Discard note'}
+                {discarding ? 'Discarding…' : 'Yes, discard'}
               </button>
             </div>
           </div>

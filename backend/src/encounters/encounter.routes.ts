@@ -41,7 +41,7 @@ const wrap = (fn: Handler) => (req: Request, res: Response, next: NextFunction) 
 export function createEncounterRouter(
   db: Pick<
     typeof import("../prisma.js").prisma,
-    "patient" | "appointment" | "encounter" | "clinicalNote" | "user" | "examFinding" | "labResult"
+    "patient" | "appointment" | "encounter" | "clinicalNote" | "user" | "examFinding" | "labResult" | "followUp" | "$transaction"
   >,
 ): Router {
   const router = Router();

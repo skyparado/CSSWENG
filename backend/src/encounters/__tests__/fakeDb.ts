@@ -95,7 +95,7 @@ function table(
   };
 }
 
-const MODELS = ["patient", "appointment", "user", "encounter", "clinicalNote", "examFinding", "labResult"] as const;
+const MODELS = ["patient", "appointment", "user", "encounter", "clinicalNote", "examFinding", "labResult", "followUp"] as const;
 type Model = (typeof MODELS)[number];
 
 export function createFakeDb() {
@@ -196,8 +196,16 @@ export function createFakeDb() {
     },
   });
 
-  return { patient, appointment, user, encounter, clinicalNote, examFinding, labResult } as unknown as Pick<
-    typeof import("../../prisma.js").prisma,
-    Model
-  > & { [K in Model]: { rows: Row[] } };
+  const followUp = table("fu");
+
+  const models = { patient, appointment, user, encounter, clinicalNote, examFinding, labResult, followUp };
+  // The fake has no real transactions. It just runs the callback against the same tables.
+  const fake = {
+    ...models,
+    $transaction: async (fn: (tx: typeof models) => Promise<unknown>) => fn(models),
+  };
+
+  return fake as unknown as Pick<typeof import("../../prisma.js").prisma, Model | "$transaction"> & {
+    [K in Model]: { rows: Row[] };
+  };
 }
