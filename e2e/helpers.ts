@@ -69,12 +69,13 @@ export async function signIn(page: Page, role: keyof typeof USERS, clinic = 'UER
   await page.getByLabel('Password', { exact: true }).fill(USERS[role].password);
   await page.getByRole('button', { name: 'Sign in' }).click();
   await verifyCode(page, USERS[role].username);
-  sessions.set(role, await page.context().cookies());
   await expect(page.getByRole('heading', { name: 'Select Active Clinic' })).toBeVisible();
   await page.getByRole('radio', { name: new RegExp(clinic) }).click();
   await page.getByRole('button', { name: 'Continue to Dashboard' }).click();
   await expect(page.getByRole('combobox', { name: 'Active clinic' })).toHaveValue(UERM_ID);
   await expect(page.getByRole('heading', { name: "Today's Appointments" })).toBeVisible();
+  // MFA rotates the session cookie. Capture it after the authenticated dashboard loads.
+  sessions.set(role, await page.context().cookies());
 }
 
 /** Answer the sign dialog with the Doctor's password. */
