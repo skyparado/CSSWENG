@@ -60,6 +60,18 @@ export interface Finding {
   superseded: boolean;
 }
 
+export interface ActiveProblem {
+  id: string;
+  diagnosis: string;
+  diagnosisCode: string | null;
+  eye: Eye | null;
+  /** Visit date of the signed note that first recorded it, "YYYY-MM-DD". */
+  dateFirstRecorded: string;
+  encounterId: string;
+  visitDate: string;
+  visitType: EncounterType;
+}
+
 export interface ChartSummary {
   patient: PatientDetail;
   allergies: Allergy[];
@@ -83,6 +95,8 @@ export interface ChartSummary {
     noteStatus: 'DRAFT' | 'SIGNED' | null;
   }>;
   documents: Array<{ id: string; type: DocumentType; version: number; signedAt: string | null; createdAt: string }>;
+  /** Doctor only: unresolved problems from signed notes (null for the secretary). */
+  activeProblems: ActiveProblem[] | null;
   /** Doctor only. */
   latestExam: { encounterId: string; visitDate: string; findings: Finding[]; assessment: string | null } | null;
   iopTrend: ComparisonResponse['chart'] | null;
@@ -196,6 +210,8 @@ export const clinicalApi = {
   recordConsent: (body: { patientId: string; consentType: 'DATA_PROCESSING' | 'REMINDER'; channel?: 'SMS' | 'EMAIL'; isGranted: boolean }) =>
     call<unknown>('POST', '/api/consents', { ...body, captureMethod: 'STAFF_ENTRY' }),
   summary: (patientId: string) => call<ChartSummary>('GET', `/api/patients/${patientId}/summary`),
+  resolveProblem: (patientId: string, problemId: string) =>
+    call<{ resolved: true; id: string; resolvedDate: string }>('POST', `/api/patients/${patientId}/problems/${problemId}/resolve`),
 
   encounters: (patientId: string) => call<{ items: Encounter[] }>('GET', `/api/encounters?${qs({ patientId })}`),
   startVisit: (body: { patientId: string; type: EncounterType }) => call<Encounter>('POST', '/api/encounters', body),

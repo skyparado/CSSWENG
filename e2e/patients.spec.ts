@@ -184,4 +184,48 @@ test.describe('S06/S07/S08 chart, consultation note and signing', () => {
   await expect(page).toHaveURL(/\/patients\/[^/]+$/);
   await expect(page.getByText(/unsigned/i)).toHaveCount(0);
   });
+
+  test('a signed diagnosis shows in Active Problems on S06 until the Doctor marks it Resolved', async ({ page }) => {
+    const diagnosis = `Moderate diabetic retinopathy ${Date.now()}`;
+    await signIn(page, 'DOCTOR');
+    await page.goto(`/#/patients/${PATIENT_ID}`);
+    await expect(page.getByRole('heading', { name: 'Juan Dela Cruz' })).toBeVisible();
+    await page.getByRole('button', { name: '+ New Note' }).click();
+
+    await page.getByLabel('Subjective').fill('Follow-up for diabetic eye changes.');
+    await page.getByLabel('Add diagnosis').fill(diagnosis);
+    await page.getByRole('button', { name: '+ Add diagnosis' }).click();
+    await expect(page.getByText(/saved automatically at/)).toBeVisible({ timeout: 10_000 });
+
+    // Sign the note: only now do its diagnoses join the problem list.
+    await page.getByRole('button', { name: 'Sign and Lock Note' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Sign and lock this note?' });
+    await dialog.getByRole('button', { name: 'Sign and Lock' }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByText('Signed', { exact: true })).toBeVisible();
+
+    // Signed: the diagnosis is in the Active Problems box on S06.
+    await page.goto(`/#/patients/${PATIENT_ID}`);
+    const box = page.locator('section.card').filter({ has: page.getByRole('heading', { name: 'Active Problems' }) });
+    const row = box.getByRole('listitem').filter({ hasText: diagnosis });
+    await expect(row).toBeVisible();
+    await expect(row.getByText(/Since/)).toBeVisible();
+
+    // Resolved: the row disappears from the box.
+    await row.getByRole('button', { name: /resolved/i }).click();
+    await expect(row).toHaveCount(0);
+
+    // It stays gone after a reload (the record is kept as history, not shown as active).
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Juan Dela Cruz' })).toBeVisible();
+    await expect(page.getByText(diagnosis)).toHaveCount(0);
+  });
+
+  test('the secretary does not see Active Problems', async ({ page }) => {
+    await signIn(page, 'SECRETARY');
+    await page.goto(`/#/patients/${PATIENT_ID}`);
+    await expect(page.getByRole('heading', { name: 'Juan Dela Cruz' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Active Problems' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /resolved/i })).toHaveCount(0);
+  });
 });

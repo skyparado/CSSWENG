@@ -17,6 +17,9 @@ let doctorId = "";
 let clinicId = "";
 let patientId = "";
 let encounterId = "";
+// A second patient for the Active Problems tests: signing locks a note for good, so it
+// cannot share the first patient's draft visit.
+let problemPatientId = "";
 
 beforeAll(async () => {
   const doc = await loginAgent(app, "DOCTOR");
@@ -81,9 +84,11 @@ afterAll(async () => {
   await prisma.medication.deleteMany({ where: { patientId } });
   await prisma.allergy.deleteMany({ where: { patientId } });
   await prisma.patient.deleteMany({ where: { id: patientId } });
-  await prisma.userClinic.deleteMany({ where: { clinicId } });
-  await prisma.clinic.deleteMany({ where: { id: clinicId } });
-  for (const c of cleanups) await c();
+  // Signed notes are immutable and keep their patient, clinic and doctor rows. The Active
+  // Problems tests sign one, so these deletes may be refused; the leftovers are harmless.
+  await prisma.userClinic.deleteMany({ where: { clinicId } }).catch(() => undefined);
+  await prisma.clinic.deleteMany({ where: { id: clinicId } }).catch(() => undefined);
+  for (const c of cleanups) await c().catch(() => undefined);
   await prisma.$disconnect();
 });
 
@@ -130,5 +135,108 @@ describe("GET /api/patients/:id/summary", () => {
     expect((await doctor.get("/api/patients/nope/summary")).status).toBe(404);
     const { default: supertest } = await import("supertest");
     expect((await supertest(app).get(`/api/patients/${patientId}/summary`)).status).toBe(401);
+  });
+});
+
+describe("Active Problems (S06)", () => {
+  const RETINOPATHY = "Moderate diabetic retinopathy";
+  const CATARACT = "Mild nuclear cataract";
+  let problemEncounterId = "";
+  const resolveUrl = (id: string) => `/api/patients/${problemPatientId}/problems/${id}/resolve`;
+  const activeProblems = async (agent: ReturnType<typeof request.agent> = doctor) =>
+    (await agent.get(`/api/patients/${problemPatientId}/summary`)).body.activeProblems as
+      | Array<{ id: string; diagnosis: string; eye: string | null; dateFirstRecorded: string; encounterId: string; visitDate: string }>
+      | null;
+
+  beforeAll(async () => {
+    problemPatientId = (
+      await prisma.patient.create({ data: testPatientData(clinicId, doctorId, { firstName: "Elena", lastName: "Problem" }) })
+    ).id;
+    problemEncounterId = (
+      await doctor.post("/api/encounters").send({ patientId: problemPatientId, type: "FOLLOW_UP" }).expect(201)
+    ).body.id;
+  });
+
+  it("ignores diagnoses in a draft note", async () => {
+    await doctor
+      .put(`/api/encounters/${problemEncounterId}/note`)
+      .send({ diagnosisItems: [{ label: RETINOPATHY, eye: "OU" }, { label: CATARACT, eye: "OD" }] })
+      .expect(200);
+
+    expect(await activeProblems()).toEqual([]);
+    expect(await prisma.problem.count({ where: { patientId: problemPatientId } })).toBe(0);
+  });
+
+  it("lists the diagnoses once the note is signed", async () => {
+    const { version } = (await doctor.get(`/api/encounters/${problemEncounterId}`)).body.note;
+    await doctor.post(`/api/encounters/${problemEncounterId}/note/sign`).send({ version }).expect(200);
+
+    const problems = (await activeProblems())!;
+    expect(problems.map((p) => [p.diagnosis, p.eye])).toEqual([
+      [RETINOPATHY, "OU"],
+      [CATARACT, "OD"],
+    ]);
+    expect(problems[0]).toMatchObject({ encounterId: problemEncounterId, dateFirstRecorded: problems[0]!.visitDate });
+  });
+
+  it("stores the diagnosis encrypted", async () => {
+    const row = await prisma.problem.findFirstOrThrow({ where: { patientId: problemPatientId } });
+    expect(row.diagnosis).not.toContain("retinopathy");
+    expect(row.diagnosis).not.toContain(CATARACT);
+  });
+
+  it("blocks the secretary from seeing or resolving problems", async () => {
+    const [target] = (await activeProblems())!;
+
+    expect(await activeProblems(secretary)).toBeNull();
+    const res = await secretary.post(resolveUrl(target!.id));
+    expect(res.status).toBe(403);
+
+    const row = await prisma.problem.findUniqueOrThrow({ where: { id: target!.id } });
+    expect(row.resolvedDate).toBeNull();
+    expect(row.resolvedById).toBeNull();
+    expect((await activeProblems())!).toHaveLength(2);
+  });
+
+  it("requires sign-in to resolve a problem", async () => {
+    const [target] = (await activeProblems())!;
+    const { default: supertest } = await import("supertest");
+    expect((await supertest(app).post(resolveUrl(target!.id))).status).toBe(401);
+  });
+
+  it("removes a resolved problem from the active list but keeps the row as history", async () => {
+    const [target, other] = (await activeProblems())!;
+
+    const res = await doctor.post(resolveUrl(target!.id));
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ resolved: true, id: target!.id, resolvedDate: todayInClinic() });
+
+    expect((await activeProblems())!.map((p) => p.id)).toEqual([other!.id]);
+    const row = await prisma.problem.findUniqueOrThrow({ where: { id: target!.id } });
+    expect(row.resolvedById).toBe(doctorId);
+    expect(row.resolvedDate?.toISOString().slice(0, 10)).toBe(todayInClinic());
+  });
+
+  it("logs each Resolved click without the diagnosis text", async () => {
+    const [resolved] = await prisma.problem.findMany({
+      where: { patientId: problemPatientId, resolvedDate: { not: null } },
+    });
+    const entry = await prisma.auditLog.findFirst({
+      where: { action: "PROBLEM_RESOLVED", resourceId: resolved!.id, userId: doctorId },
+    });
+    expect(entry).not.toBeNull();
+    expect(entry).toMatchObject({ resourceType: "Problem", userRole: "DOCTOR" });
+    expect(JSON.stringify(entry!.metadata)).toContain(problemPatientId);
+    expect(JSON.stringify(entry!.metadata)).not.toContain("retinopathy");
+  });
+
+  it("refuses to resolve a problem twice, and 404s for an unknown problem", async () => {
+    const [resolved] = await prisma.problem.findMany({
+      where: { patientId: problemPatientId, resolvedDate: { not: null } },
+    });
+    const again = await doctor.post(resolveUrl(resolved!.id));
+    expect(again.status).toBe(409);
+    expect(again.body.error).toBe("ALREADY_RESOLVED");
+    expect((await doctor.post(resolveUrl("nope"))).status).toBe(404);
   });
 });

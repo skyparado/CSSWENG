@@ -1,0 +1,1058 @@
+diff --git a/backend/prisma/migrations/20261124000000_problems/migration.sql b/backend/prisma/migrations/20261124000000_problems/migration.sql
+new file mode 100644
+index 0000000..400546b
+--- /dev/null
++++ b/backend/prisma/migrations/20261124000000_problems/migration.sql
+@@ -0,0 +1,43 @@
++-- Problem list for S06 "Active Problems". Rows are created when a note is
++-- signed, from its diagnoses. The Doctor marks them resolved; a resolved row
++-- stays as history.
++
++-- CreateTable
++CREATE TABLE "Problem" (
++    "id" TEXT NOT NULL,
++    "patientId" TEXT NOT NULL,
++    "clinicId" TEXT NOT NULL,
++    "encounterId" TEXT NOT NULL,
++    "diagnosis" TEXT NOT NULL,
++    "diagnosisCode" TEXT,
++    "eye" "Eye",
++    "dateFirstRecorded" DATE NOT NULL,
++    "resolvedDate" DATE,
++    "resolvedById" TEXT,
++    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++    "updatedAt" TIMESTAMP(3) NOT NULL,
++
++    CONSTRAINT "Problem_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateIndex
++CREATE INDEX "Problem_patientId_resolvedDate_idx" ON "Problem"("patientId", "resolvedDate");
++
++-- CreateIndex
++CREATE INDEX "Problem_encounterId_idx" ON "Problem"("encounterId");
++
++-- AddForeignKey
++ALTER TABLE "Problem" ADD CONSTRAINT "Problem_patientId_fkey" FOREIGN KEY ("patientId") REFERENCES "Patient"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
++
++-- AddForeignKey
++ALTER TABLE "Problem" ADD CONSTRAINT "Problem_clinicId_fkey" FOREIGN KEY ("clinicId") REFERENCES "Clinic"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
++
++-- AddForeignKey
++ALTER TABLE "Problem" ADD CONSTRAINT "Problem_encounterId_fkey" FOREIGN KEY ("encounterId") REFERENCES "Encounter"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
++
++-- AddForeignKey
++ALTER TABLE "Problem" ADD CONSTRAINT "Problem_resolvedById_fkey" FOREIGN KEY ("resolvedById") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
++
++-- Who resolved it and when are recorded together, or not at all.
++ALTER TABLE "Problem" ADD CONSTRAINT "Problem_resolved_together"
++  CHECK (("resolvedDate" IS NULL) = ("resolvedById" IS NULL));
+diff --git a/backend/prisma/schema.prisma b/backend/prisma/schema.prisma
+index f786593..6aa19ec 100644
+--- a/backend/prisma/schema.prisma
++++ b/backend/prisma/schema.prisma
+@@ -88,6 +88,7 @@ model Patient {
+   encounters       Encounter[]
+   examFindings     ExamFinding[]
+   labResults       LabResult[]
++  problems         Problem[]
+ 
+   tabletIntakeSubmissions TabletIntakeSubmission[]
+ 
+@@ -160,6 +161,7 @@ model Encounter {
+   examFindings    ExamFinding[]
+   labResults      LabResult[]
+   followUps       FollowUp[]
++  problems        Problem[]
+ 
+   @@index([patientId, visitDate])
+   @@index([clinicId, visitDate])
+@@ -287,6 +289,42 @@ model LabResult {
+   @@index([encounterId])
+ }
+ 
++/// One entry of the patient's problem list (S06 "Active Problems").
++///
++/// Rows are created when a note is SIGNED, from its diagnoses; a draft never
++/// creates one. The Doctor marks a problem resolved (resolvedDate and
++/// resolvedById are set together, enforced by a CHECK constraint). A resolved
++/// row stays as history and only leaves the active list.
++model Problem {
++  id          String @id @default(cuid())
++  patientId   String
++  /// Clinic of the originating visit.
++  clinicId    String
++  /// The visit whose signed note first recorded this problem.
++  encounterId String
++
++  diagnosis     String // app-encrypted
++  diagnosisCode String? // app-encrypted ICD-10 code, if the note had one
++  /// Null when the diagnosis is not tied to one eye.
++  eye           Eye?
++
++  /// Visit date of the signed note that first recorded it.
++  dateFirstRecorded DateTime  @db.Date
++  resolvedDate      DateTime? @db.Date
++  resolvedById      String?
++
++  createdAt DateTime @default(now())
++  updatedAt DateTime @updatedAt
++
++  patient    Patient   @relation(fields: [patientId], references: [id], onDelete: Restrict)
++  clinic     Clinic    @relation(fields: [clinicId], references: [id], onDelete: Restrict)
++  encounter  Encounter @relation(fields: [encounterId], references: [id], onDelete: Restrict)
++  resolvedBy User?     @relation("ProblemResolvedBy", fields: [resolvedById], references: [id], onDelete: Restrict)
++
++  @@index([patientId, resolvedDate])
++  @@index([encounterId])
++}
++
+ /// Staff account. Only the Doctor can approve, change, revoke accounts and the
+ /// clinics each account may work in (see UserClinic).
+ model User {
+@@ -349,6 +387,7 @@ model User {
+   encountersAttended  Encounter[]      @relation("EncounterAttendingDoctor")
+   findingsRecorded    ExamFinding[]    @relation("FindingRecordedBy")
+   labResultsRecorded  LabResult[]      @relation("LabResultRecordedBy")
++  problemsResolved    Problem[]        @relation("ProblemResolvedBy")
+ 
+   startedTabletSessions TabletIntakeSession[] @relation("TabletIntakeSessionStarter")
+   reportExports         ReportExport[]        @relation("ReportExportRequestedBy")
+@@ -398,6 +437,7 @@ model Clinic {
+   encounters         Encounter[]
+   examFindings       ExamFinding[]
+   labResults         LabResult[]
++  problems           Problem[]
+ 
+   tabletSessions TabletIntakeSession[]
+ 
+diff --git a/backend/src/audit/actions.ts b/backend/src/audit/actions.ts
+index e2e4850..e3264bf 100644
+--- a/backend/src/audit/actions.ts
++++ b/backend/src/audit/actions.ts
+@@ -25,6 +25,7 @@ export const AuditActions = {
+   // Patients
+   PATIENT_VOIDED: 'PATIENT_VOIDED',
+   PATIENT_CHART_VIEWED: 'PATIENT_CHART_VIEWED',
++  PROBLEM_RESOLVED: 'PROBLEM_RESOLVED',
+ 
+   // Clinical images
+   CLINICAL_IMAGE_UPLOADED: 'CLINICAL_IMAGE_UPLOADED',
+diff --git a/backend/src/encounters/__tests__/fakeDb.ts b/backend/src/encounters/__tests__/fakeDb.ts
+index 7526ad0..bad1f4b 100644
+--- a/backend/src/encounters/__tests__/fakeDb.ts
++++ b/backend/src/encounters/__tests__/fakeDb.ts
+@@ -57,7 +57,7 @@ function table(
+   const rows: Row[] = [];
+   let n = 0;
+ 
+-  return {
++  const api = {
+     rows,
+     async create({ data }: { data: Data }) {
+       const now = new Date(++tick);
+@@ -69,6 +69,10 @@ function table(
+       rows.push(row);
+       return { ...row };
+     },
++    async createMany({ data }: { data: Data[] }) {
++      for (const d of data) await api.create({ data: d });
++      return { count: data.length };
++    },
+     async findFirst({ where }: { where?: Record<string, unknown> }) {
+       const r = rows.find((row) => matches(row, where));
+       return r ? { ...r } : null;
+@@ -93,9 +97,10 @@ function table(
+       return { count: hit.length };
+     },
+   };
++  return api;
+ }
+ 
+-const MODELS = ["patient", "appointment", "user", "encounter", "clinicalNote", "examFinding", "labResult", "followUp"] as const;
++const MODELS = ["patient", "appointment", "user", "encounter", "clinicalNote", "examFinding", "labResult", "followUp", "problem"] as const;
+ type Model = (typeof MODELS)[number];
+ 
+ export function createFakeDb() {
+@@ -197,8 +202,9 @@ export function createFakeDb() {
+   });
+ 
+   const followUp = table("fu");
++  const problem = table("prob", { defaults: () => ({ diagnosisCode: null, eye: null, resolvedDate: null, resolvedById: null }) });
+ 
+-  const models = { patient, appointment, user, encounter, clinicalNote, examFinding, labResult, followUp };
++  const models = { patient, appointment, user, encounter, clinicalNote, examFinding, labResult, followUp, problem };
+   // The fake has no real transactions. It just runs the callback against the same tables.
+   const fake = {
+     ...models,
+diff --git a/backend/src/encounters/__tests__/problems.test.ts b/backend/src/encounters/__tests__/problems.test.ts
+new file mode 100644
+index 0000000..a0386a7
+--- /dev/null
++++ b/backend/src/encounters/__tests__/problems.test.ts
+@@ -0,0 +1,162 @@
++import { randomBytes } from "node:crypto";
++import express from "express";
++import request from "supertest";
++import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
++import { decrypt, resetKeyCache } from "../../lib/fieldCrypto.js";
++import { createEncounterRouter } from "../encounter.routes.js";
++import { createFakeDb } from "./fakeDb.js";
++
++/**
++ * Signing a note adds its diagnoses to the problem list (S06 Active Problems).
++ * Drafts never do. Runs against the in-memory fake, which mimics the
++ * sign-and-lock triggers.
++ */
++
++vi.mock("../../audit/audit.service.js", () => ({ writeAudit: vi.fn() }));
++
++beforeAll(() => {
++  process.env.FIELD_ENCRYPTION_KEY = randomBytes(32).toString("base64");
++  process.env.BLIND_INDEX_KEY = randomBytes(32).toString("base64");
++  resetKeyCache();
++});
++
++type SessionUser = { userId: string; role: "DOCTOR" | "SECRETARY"; activeClinicId: string };
++const doctor: SessionUser = { userId: "user_doc", role: "DOCTOR", activeClinicId: "clinic_happy" };
++const secretary: SessionUser = { userId: "user_sec", role: "SECRETARY", activeClinicId: "clinic_happy" };
++
++function appFor(db: ReturnType<typeof createFakeDb>, user: SessionUser) {
++  const app = express();
++  app.use(express.json());
++  app.use((req, _res, next) => {
++    (req as unknown as { session: unknown }).session = { user };
++    next();
++  });
++  app.use("/api/encounters", createEncounterRouter(db));
++  return app;
++}
++
++let db: ReturnType<typeof createFakeDb>;
++let doc: express.Express;
++let sec: express.Express;
++
++beforeEach(() => {
++  db = createFakeDb();
++  doc = appFor(db, doctor);
++  sec = appFor(db, secretary);
++  db.user.rows.push({ id: "user_doc", role: "DOCTOR", status: "ACTIVE" });
++  db.user.rows.push({ id: "user_sec", role: "SECRETARY", status: "ACTIVE" });
++  db.patient.rows.push({ id: "pat_maria", voidedAt: null });
++});
++
++const startVisit = async () =>
++  (await request(doc).post("/api/encounters").send({ patientId: "pat_maria", type: "FOLLOW_UP", attendingDoctorId: "user_doc" }))
++    .body.id as string;
++
++const draft = (id: string, body: Record<string, unknown>) => request(doc).put(`/api/encounters/${id}/note`).send(body);
++
++const sign = async (id: string, body: Record<string, unknown>) => {
++  const saved = await draft(id, body);
++  return request(doc).post(`/api/encounters/${id}/note/sign`).send({ version: saved.body.version });
++};
++
++const labels = () => db.problem.rows.map((p) => decrypt(p.diagnosis as string));
++
++describe("problem list from signed notes", () => {
++  it("adds nothing while the note is a draft", async () => {
++    const id = await startVisit();
++    const res = await draft(id, { diagnosisItems: [{ label: "Moderate diabetic retinopathy", eye: "OU" }] });
++    expect(res.status).toBe(200);
++    expect(db.problem.rows).toHaveLength(0);
++  });
++
++  it("adds each diagnosis once the note is signed, with eye, visit and first-recorded date", async () => {
++    const id = await startVisit();
++    const res = await sign(id, {
++      diagnosisItems: [
++        { label: "Moderate diabetic retinopathy", code: "E11.329", eye: "OU" },
++        { label: "Mild cataract", eye: "OD" },
++        { label: "Dry eye" },
++      ],
++    });
++    expect(res.status).toBe(200);
++
++    expect(labels()).toEqual(["Moderate diabetic retinopathy", "Mild cataract", "Dry eye"]);
++    const enc = db.encounter.rows[0]!;
++    expect(db.problem.rows[0]).toMatchObject({
++      patientId: "pat_maria",
++      clinicId: enc.clinicId,
++      encounterId: id,
++      eye: "OU",
++      dateFirstRecorded: enc.visitDate,
++      resolvedDate: null,
++      resolvedById: null,
++    });
++    expect(decrypt(db.problem.rows[0]!.diagnosisCode as string)).toBe("E11.329");
++    expect(db.problem.rows[1]).toMatchObject({ eye: "OD", diagnosisCode: null });
++    expect(db.problem.rows[2]).toMatchObject({ eye: null });
++  });
++
++  it("stores the diagnosis encrypted, never as plain text", async () => {
++    const id = await startVisit();
++    await sign(id, { diagnosisItems: [{ label: "Moderate diabetic retinopathy" }] });
++    expect(JSON.stringify(db.problem.rows)).not.toContain("retinopathy");
++  });
++
++  it("adds nothing for a signed note without diagnoses", async () => {
++    const id = await startVisit();
++    await sign(id, { subjective: "Blurred vision" });
++    expect(db.problem.rows).toHaveLength(0);
++  });
++
++  it("does not add a diagnosis that is already an active problem, so the first date is kept", async () => {
++    const first = await startVisit();
++    await sign(first, { diagnosisItems: [{ label: "Mild cataract", eye: "OD" }] });
++    const second = await startVisit();
++    await sign(second, {
++      diagnosisItems: [
++        { label: "  mild   CATARACT ", eye: "OD" },
++        { label: "Mild cataract", eye: "OS" },
++      ],
++    });
++
++    expect(db.problem.rows).toHaveLength(2);
++    expect(db.problem.rows.map((p) => [p.encounterId, p.eye])).toEqual([
++      [first, "OD"],
++      [second, "OS"],
++    ]);
++  });
++
++  it("starts a new problem when a resolved diagnosis is recorded again", async () => {
++    const first = await startVisit();
++    await sign(first, { diagnosisItems: [{ label: "Mild cataract", eye: "OD" }] });
++    Object.assign(db.problem.rows[0]!, { resolvedDate: new Date(), resolvedById: "user_doc" });
++
++    const second = await startVisit();
++    await sign(second, { diagnosisItems: [{ label: "Mild cataract", eye: "OD" }] });
++
++    expect(db.problem.rows).toHaveLength(2);
++    expect(db.problem.rows[1]).toMatchObject({ encounterId: second, resolvedDate: null });
++  });
++
++  it("adds a diagnosis made by an addendum on a signed note", async () => {
++    const id = await startVisit();
++    await sign(id, { subjective: "Blurred vision" });
++    const res = await request(doc)
++      .post(`/api/encounters/${id}/note/addenda`)
++      .send({ addendumReason: "Late diagnosis", diagnosisItems: [{ label: "Glaucoma suspect", eye: "OS" }] });
++    expect(res.status).toBe(201);
++    expect(labels()).toEqual(["Glaucoma suspect"]);
++  });
++
++  it("adds nothing when signing is refused", async () => {
++    const id = await startVisit();
++    await draft(id, { diagnosisItems: [{ label: "Mild cataract" }] });
++
++    const stale = await request(doc).post(`/api/encounters/${id}/note/sign`).send({ version: 99 });
++    expect(stale.status).toBe(409);
++    const bySecretary = await request(sec).post(`/api/encounters/${id}/note/sign`).send({ version: 1 });
++    expect(bySecretary.status).toBe(403);
++
++    expect(db.problem.rows).toHaveLength(0);
++  });
++});
+diff --git a/backend/src/encounters/encounter.routes.ts b/backend/src/encounters/encounter.routes.ts
+index 3fa7615..fb22b14 100644
+--- a/backend/src/encounters/encounter.routes.ts
++++ b/backend/src/encounters/encounter.routes.ts
+@@ -41,7 +41,7 @@ const wrap = (fn: Handler) => (req: Request, res: Response, next: NextFunction)
+ export function createEncounterRouter(
+   db: Pick<
+     typeof import("../prisma.js").prisma,
+-    "patient" | "appointment" | "encounter" | "clinicalNote" | "user" | "examFinding" | "labResult" | "followUp" | "$transaction"
++    "patient" | "appointment" | "encounter" | "clinicalNote" | "user" | "examFinding" | "labResult" | "followUp" | "problem" | "$transaction"
+   >,
+ ): Router {
+   const router = Router();
+diff --git a/backend/src/encounters/encounter.service.ts b/backend/src/encounters/encounter.service.ts
+index 5c86a3b..26cd5aa 100644
+--- a/backend/src/encounters/encounter.service.ts
++++ b/backend/src/encounters/encounter.service.ts
+@@ -11,6 +11,7 @@ import {
+   toNoteDbData,
+   toNoteDetail,
+ } from "./encounter.mapper.js";
++import { recordProblemsFromNote } from "./problems.js";
+ import { writeAudit } from "../audit/audit.service.js";
+ import { AuditActions } from "../audit/actions.js";
+ 
+@@ -27,7 +28,7 @@ export class EncounterError extends Error {
+ 
+ type Db = Pick<
+   typeof import("../prisma.js").prisma,
+-  "patient" | "appointment" | "encounter" | "clinicalNote" | "user" | "examFinding" | "labResult" | "followUp" | "$transaction"
++  "patient" | "appointment" | "encounter" | "clinicalNote" | "user" | "examFinding" | "labResult" | "followUp" | "problem" | "$transaction"
+ >;
+ 
+ /** Visit dates are clinic-local. All clinics are in Manila for now (Clinic.timezone defaults to it). */
+@@ -204,7 +205,7 @@ export async function saveDraft(db: Db, encounterId: string, input: SaveNoteDraf
+  */
+ export async function signNote(db: Db, encounterId: string, input: SignNoteInput, actor: Actor) {
+   requireDoctor(actor, "sign clinical notes");
+-  await loadEncounter(db, encounterId);
++  const enc = await loadEncounter(db, encounterId);
+   const note = await loadPrimaryNote(db, encounterId);
+ 
+   if (note.status === "SIGNED") throw lockedError();
+@@ -214,17 +215,28 @@ export async function signNote(db: Db, encounterId: string, input: SignNoteInput
+   if (isEmptyNote(content)) throw new EncounterError(422, "NOTE_EMPTY", "Cannot sign an empty note");
+ 
+   const signedAt = new Date();
+-  const { count } = await db.clinicalNote.updateMany({
+-    where: { id: note.id, status: "DRAFT", version: note.version },
+-    data: {
+-      status: "SIGNED",
+-      signedAt,
+-      signedById: actor.id,
+-      contentHash: signatureHash(note, content, actor.id, signedAt),
+-      version: note.version + 1,
+-    },
++  // The diagnoses join the problem list (S06 Active Problems) in the same
++  // transaction as the signature: only a signed note adds problems, and a
++  // signing that fails leaves none behind.
++  let lost = false;
++  await db.$transaction(async (tx) => {
++    const { count } = await tx.clinicalNote.updateMany({
++      where: { id: note.id, status: "DRAFT", version: note.version },
++      data: {
++        status: "SIGNED",
++        signedAt,
++        signedById: actor.id,
++        contentHash: signatureHash(note, content, actor.id, signedAt),
++        version: note.version + 1,
++      },
++    });
++    if (count === 0) {
++      lost = true;
++      return;
++    }
++    await recordProblemsFromNote(tx, enc, content.diagnosisItems);
+   });
+-  if (count === 0) throw await lostRace(db, note.id);
++  if (lost) throw await lostRace(db, note.id);
+   // AUDIT (Lance): "note.signed"
+   return noteDetail(db, (await db.clinicalNote.findFirst({ where: { id: note.id } }))!);
+ }
+@@ -235,7 +247,7 @@ export async function signNote(db: Db, encounterId: string, input: SignNoteInput
+  */
+ export async function addAddendum(db: Db, encounterId: string, input: CreateAddendumInput, actor: Actor) {
+   requireDoctor(actor);
+-  await loadEncounter(db, encounterId);
++  const enc = await loadEncounter(db, encounterId);
+   const note = await loadPrimaryNote(db, encounterId);
+   if (note.status !== "SIGNED") {
+     throw new EncounterError(409, "NOTE_NOT_SIGNED", "This note is still a draft. Edit it directly instead.");
+@@ -244,16 +256,21 @@ export async function addAddendum(db: Db, encounterId: string, input: CreateAdde
+   const { addendumReason, ...content } = input;
+   const header = { encounterId, noteType: "ADDENDUM" as const, parentNoteId: note.id, addendumReason };
+   const signedAt = new Date();
+-  const created = await db.clinicalNote.create({
+-    data: {
+-      ...header,
+-      ...toNoteDbData(content),
+-      status: "SIGNED",
+-      authorId: actor.id,
+-      signedById: actor.id,
+-      signedAt,
+-      contentHash: signatureHash(header, content, actor.id, signedAt),
+-    },
++  // An addendum is signed as it is written, so diagnoses it adds join the problem list too.
++  const created = await db.$transaction(async (tx) => {
++    const row = await tx.clinicalNote.create({
++      data: {
++        ...header,
++        ...toNoteDbData(content),
++        status: "SIGNED",
++        authorId: actor.id,
++        signedById: actor.id,
++        signedAt,
++        contentHash: signatureHash(header, content, actor.id, signedAt),
++      },
++    });
++    await recordProblemsFromNote(tx, enc, content.diagnosisItems ?? []);
++    return row;
+   });
+   // AUDIT (Lance): "note.addendum_added"
+   return toAddendum(created);
+diff --git a/backend/src/encounters/problems.ts b/backend/src/encounters/problems.ts
+new file mode 100644
+index 0000000..3350a14
+--- /dev/null
++++ b/backend/src/encounters/problems.ts
+@@ -0,0 +1,48 @@
++import type { DiagnosisItem } from "@clinic/schemas";
++import type { Encounter } from "@prisma/client";
++import { decryptOpt, encryptOpt } from "../lib/fieldCrypto.js";
++
++type ProblemDb = Pick<typeof import("../prisma.js").prisma, "problem">;
++
++/** Two diagnoses are the same problem when the wording (ignoring case and spacing) and the eye match. */
++export const problemKey = (label: string, eye: string | null | undefined) =>
++  `${label.trim().replace(/\s+/g, " ").toLowerCase()}|${eye ?? ""}`;
++
++/**
++ * Add the diagnoses of a SIGNED note to the patient's problem list (S06 Active
++ * Problems). Call it only once the note is signed, inside the same transaction,
++ * so a draft never creates a problem and a failed signing leaves none behind.
++ *
++ * A diagnosis that is already an active problem for the patient (same wording
++ * and eye) is not added again, so the date first recorded stays that of the
++ * first visit. A resolved problem that comes back in a later signed note
++ * starts a new row. Returns how many rows were added.
++ */
++export async function recordProblemsFromNote(
++  db: ProblemDb,
++  enc: Pick<Encounter, "id" | "patientId" | "clinicId" | "visitDate">,
++  items: DiagnosisItem[],
++): Promise<number> {
++  if (items.length === 0) return 0;
++
++  const active = await db.problem.findMany({ where: { patientId: enc.patientId, resolvedDate: null } });
++  const seen = new Set(active.map((p) => problemKey(decryptOpt(p.diagnosis) ?? "", p.eye)));
++
++  const fresh = [];
++  for (const item of items) {
++    const key = problemKey(item.label, item.eye);
++    if (seen.has(key)) continue;
++    seen.add(key);
++    fresh.push({
++      patientId: enc.patientId,
++      clinicId: enc.clinicId,
++      encounterId: enc.id,
++      diagnosis: encryptOpt(item.label)!,
++      diagnosisCode: encryptOpt(item.code),
++      eye: item.eye ?? null,
++      dateFirstRecorded: enc.visitDate,
++    });
++  }
++  if (fresh.length > 0) await db.problem.createMany({ data: fresh });
++  return fresh.length;
++}
+diff --git a/backend/src/patients/__tests__/chartSummary.test.ts b/backend/src/patients/__tests__/chartSummary.test.ts
+index 27e4aa7..b5f5504 100644
+--- a/backend/src/patients/__tests__/chartSummary.test.ts
++++ b/backend/src/patients/__tests__/chartSummary.test.ts
+@@ -17,6 +17,9 @@ let doctorId = "";
+ let clinicId = "";
+ let patientId = "";
+ let encounterId = "";
++// A second patient for the Active Problems tests: signing locks a note for good, so it
++// cannot share the first patient's draft visit.
++let problemPatientId = "";
+ 
+ beforeAll(async () => {
+   const doc = await loginAgent(app, "DOCTOR");
+@@ -81,9 +84,11 @@ afterAll(async () => {
+   await prisma.medication.deleteMany({ where: { patientId } });
+   await prisma.allergy.deleteMany({ where: { patientId } });
+   await prisma.patient.deleteMany({ where: { id: patientId } });
+-  await prisma.userClinic.deleteMany({ where: { clinicId } });
+-  await prisma.clinic.deleteMany({ where: { id: clinicId } });
+-  for (const c of cleanups) await c();
++  // Signed notes are immutable and keep their patient, clinic and doctor rows. The Active
++  // Problems tests sign one, so these deletes may be refused; the leftovers are harmless.
++  await prisma.userClinic.deleteMany({ where: { clinicId } }).catch(() => undefined);
++  await prisma.clinic.deleteMany({ where: { id: clinicId } }).catch(() => undefined);
++  for (const c of cleanups) await c().catch(() => undefined);
+   await prisma.$disconnect();
+ });
+ 
+@@ -133,3 +138,106 @@ describe("GET /api/patients/:id/summary", () => {
+     expect((await supertest(app).get(`/api/patients/${patientId}/summary`)).status).toBe(401);
+   });
+ });
++
++describe("Active Problems (S06)", () => {
++  const RETINOPATHY = "Moderate diabetic retinopathy";
++  const CATARACT = "Mild nuclear cataract";
++  let problemEncounterId = "";
++  const resolveUrl = (id: string) => `/api/patients/${problemPatientId}/problems/${id}/resolve`;
++  const activeProblems = async (agent: ReturnType<typeof request.agent> = doctor) =>
++    (await agent.get(`/api/patients/${problemPatientId}/summary`)).body.activeProblems as
++      | Array<{ id: string; diagnosis: string; eye: string | null; dateFirstRecorded: string; encounterId: string; visitDate: string }>
++      | null;
++
++  beforeAll(async () => {
++    problemPatientId = (
++      await prisma.patient.create({ data: testPatientData(clinicId, doctorId, { firstName: "Elena", lastName: "Problem" }) })
++    ).id;
++    problemEncounterId = (
++      await doctor.post("/api/encounters").send({ patientId: problemPatientId, type: "FOLLOW_UP" }).expect(201)
++    ).body.id;
++  });
++
++  it("ignores diagnoses in a draft note", async () => {
++    await doctor
++      .put(`/api/encounters/${problemEncounterId}/note`)
++      .send({ diagnosisItems: [{ label: RETINOPATHY, eye: "OU" }, { label: CATARACT, eye: "OD" }] })
++      .expect(200);
++
++    expect(await activeProblems()).toEqual([]);
++    expect(await prisma.problem.count({ where: { patientId: problemPatientId } })).toBe(0);
++  });
++
++  it("lists the diagnoses once the note is signed", async () => {
++    const { version } = (await doctor.get(`/api/encounters/${problemEncounterId}`)).body.note;
++    await doctor.post(`/api/encounters/${problemEncounterId}/note/sign`).send({ version }).expect(200);
++
++    const problems = (await activeProblems())!;
++    expect(problems.map((p) => [p.diagnosis, p.eye])).toEqual([
++      [RETINOPATHY, "OU"],
++      [CATARACT, "OD"],
++    ]);
++    expect(problems[0]).toMatchObject({ encounterId: problemEncounterId, dateFirstRecorded: problems[0]!.visitDate });
++  });
++
++  it("stores the diagnosis encrypted", async () => {
++    const row = await prisma.problem.findFirstOrThrow({ where: { patientId: problemPatientId } });
++    expect(row.diagnosis).not.toContain("retinopathy");
++    expect(row.diagnosis).not.toContain(CATARACT);
++  });
++
++  it("blocks the secretary from seeing or resolving problems", async () => {
++    const [target] = (await activeProblems())!;
++
++    expect(await activeProblems(secretary)).toBeNull();
++    const res = await secretary.post(resolveUrl(target!.id));
++    expect(res.status).toBe(403);
++
++    const row = await prisma.problem.findUniqueOrThrow({ where: { id: target!.id } });
++    expect(row.resolvedDate).toBeNull();
++    expect(row.resolvedById).toBeNull();
++    expect((await activeProblems())!).toHaveLength(2);
++  });
++
++  it("requires sign-in to resolve a problem", async () => {
++    const [target] = (await activeProblems())!;
++    const { default: supertest } = await import("supertest");
++    expect((await supertest(app).post(resolveUrl(target!.id))).status).toBe(401);
++  });
++
++  it("removes a resolved problem from the active list but keeps the row as history", async () => {
++    const [target, other] = (await activeProblems())!;
++
++    const res = await doctor.post(resolveUrl(target!.id));
++    expect(res.status).toBe(200);
++    expect(res.body).toMatchObject({ resolved: true, id: target!.id, resolvedDate: todayInClinic() });
++
++    expect((await activeProblems())!.map((p) => p.id)).toEqual([other!.id]);
++    const row = await prisma.problem.findUniqueOrThrow({ where: { id: target!.id } });
++    expect(row.resolvedById).toBe(doctorId);
++    expect(row.resolvedDate?.toISOString().slice(0, 10)).toBe(todayInClinic());
++  });
++
++  it("logs each Resolved click without the diagnosis text", async () => {
++    const [resolved] = await prisma.problem.findMany({
++      where: { patientId: problemPatientId, resolvedDate: { not: null } },
++    });
++    const entry = await prisma.auditLog.findFirst({
++      where: { action: "PROBLEM_RESOLVED", resourceId: resolved!.id, userId: doctorId },
++    });
++    expect(entry).not.toBeNull();
++    expect(entry).toMatchObject({ resourceType: "Problem", userRole: "DOCTOR" });
++    expect(JSON.stringify(entry!.metadata)).toContain(problemPatientId);
++    expect(JSON.stringify(entry!.metadata)).not.toContain("retinopathy");
++  });
++
++  it("refuses to resolve a problem twice, and 404s for an unknown problem", async () => {
++    const [resolved] = await prisma.problem.findMany({
++      where: { patientId: problemPatientId, resolvedDate: { not: null } },
++    });
++    const again = await doctor.post(resolveUrl(resolved!.id));
++    expect(again.status).toBe(409);
++    expect(again.body.error).toBe("ALREADY_RESOLVED");
++    expect((await doctor.post(resolveUrl("nope"))).status).toBe(404);
++  });
++});
+diff --git a/backend/src/patients/chartSummary.routes.ts b/backend/src/patients/chartSummary.routes.ts
+index a91e60e..66851ab 100644
+--- a/backend/src/patients/chartSummary.routes.ts
++++ b/backend/src/patients/chartSummary.routes.ts
+@@ -3,13 +3,18 @@ import { writeAudit } from "../audit/audit.service.js";
+ import { AuditActions } from "../audit/actions.js";
+ import { PatientError } from "./patient.service.js";
+ import { getActor } from "./patient.routes.js";
+-import { chartSummary } from "./chartSummary.service.js";
++import { markAudited } from "../audit/record.js";
++import { requireDoctor } from "../auth/middleware.js";
++import { chartSummary, resolveProblem } from "./chartSummary.service.js";
+ 
+ /**
+  * Mount in app.ts:  app.use("/api/patients", requireAuth, chartSummaryRouter);
+  *
+- *   GET /api/patients/:id/summary   everything S06 shows (Doctor and Secretary;
+- *                                   clinical content Doctor only)
++ *   GET  /api/patients/:id/summary   everything S06 shows (Doctor and Secretary;
++ *                                    clinical content Doctor only)
++ *   POST /api/patients/:id/problems/:problemId/resolve
++ *                                    mark an Active Problem resolved (Doctor only; 403
++ *                                    for anyone else). The row stays as history.
+  */
+ export const chartSummaryRouter = Router();
+ 
+@@ -41,3 +46,28 @@ chartSummaryRouter.get("/:id/summary", async (req: Request, res: Response, next:
+     next(err);
+   }
+ });
++
++chartSummaryRouter.post(
++  "/:id/problems/:problemId/resolve",
++  requireDoctor,
++  async (req: Request, res: Response, next: NextFunction) => {
++    try {
++      const actor = getActor(req);
++      const result = await resolveProblem(req.params.id!, req.params.problemId!, actor, {
++        method: req.method,
++        path: req.originalUrl.split("?")[0] ?? req.originalUrl,
++        ipAddress: req.ip ?? null,
++        userAgent: req.get("user-agent") ?? null,
++      });
++      // The named PROBLEM_RESOLVED entry is the audit record; skip the generic HTTP_REQUEST row.
++      markAudited(res);
++      res.json(result);
++    } catch (err) {
++      if (err instanceof PatientError) {
++        res.status(err.status).json({ error: err.code, message: err.message });
++        return;
++      }
++      next(err);
++    }
++  },
++);
+diff --git a/backend/src/patients/chartSummary.service.ts b/backend/src/patients/chartSummary.service.ts
+index 6ff215c..1145525 100644
+--- a/backend/src/patients/chartSummary.service.ts
++++ b/backend/src/patients/chartSummary.service.ts
+@@ -1,4 +1,8 @@
++import { todayInClinic } from "@clinic/schemas";
+ import { prisma } from "../prisma.js";
++import { AuditActions } from "../audit/actions.js";
++import { writeAudit } from "../audit/audit.service.js";
++import { decryptOpt } from "../lib/fieldCrypto.js";
+ import { buildComparison } from "../results/comparison.service.js";
+ import { supersededIds, toFinding } from "../results/results.mapper.js";
+ import { readNoteContent } from "../encounters/encounter.mapper.js";
+@@ -36,10 +40,86 @@ async function latestExam(patientId: string) {
+   };
+ }
+ 
++/**
++ * The patient's unresolved problems (S06 Active Problems), oldest first. Rows
++ * exist only for diagnoses of signed notes; resolved ones stay in the table as
++ * history and are left out here.
++ */
++async function activeProblems(patientId: string) {
++  const rows = await prisma.problem.findMany({
++    where: { patientId, resolvedDate: null },
++    orderBy: [{ dateFirstRecorded: "asc" }, { createdAt: "asc" }],
++    include: { encounter: { select: { id: true, visitDate: true, type: true } } },
++  });
++  return rows.map((p) => ({
++    id: p.id,
++    diagnosis: decryptOpt(p.diagnosis) ?? "",
++    diagnosisCode: decryptOpt(p.diagnosisCode),
++    eye: p.eye,
++    dateFirstRecorded: isoDay(p.dateFirstRecorded),
++    encounterId: p.encounter.id,
++    visitDate: isoDay(p.encounter.visitDate),
++    visitType: p.encounter.type,
++  }));
++}
++
++/** Request details copied into the audit entry for a Resolved click. */
++export interface ResolveContext {
++  method: string | null;
++  path: string | null;
++  ipAddress: string | null;
++  userAgent: string | null;
++}
++
++/**
++ * Mark a problem resolved (S06 Resolved button): records today's clinic date and
++ * the Doctor who clicked it, and writes the audit entry in the same transaction.
++ * The row is kept as history; it only leaves the active list. Doctor only.
++ */
++export async function resolveProblem(patientId: string, problemId: string, actor: Actor, request: ResolveContext) {
++  if (actor.role !== "DOCTOR") throw new PatientError(403, "DOCTOR_ONLY", "Only the doctor can resolve a problem");
++
++  const patient = await prisma.patient.findFirst({ where: { id: patientId, voidedAt: null } });
++  if (!patient) throw new PatientError(404, "NOT_FOUND", "Patient not found");
++  const problem = await prisma.problem.findFirst({ where: { id: problemId, patientId } });
++  if (!problem) throw new PatientError(404, "PROBLEM_NOT_FOUND", "Problem not found");
++  if (problem.resolvedDate) throw new PatientError(409, "ALREADY_RESOLVED", "This problem is already resolved");
++
++  const resolvedDate = todayInClinic();
++  await prisma.$transaction(async (tx) => {
++    const { count } = await tx.problem.updateMany({
++      where: { id: problemId, patientId, resolvedDate: null },
++      data: { resolvedDate: new Date(`${resolvedDate}T00:00:00Z`), resolvedById: actor.id },
++    });
++    if (count === 0) throw new PatientError(409, "ALREADY_RESOLVED", "This problem is already resolved");
++    await writeAudit(
++      {
++        userId: actor.id,
++        userEmail: null,
++        userRole: actor.role,
++        action: AuditActions.PROBLEM_RESOLVED,
++        resourceType: "Problem",
++        resourceId: problemId,
++        method: request.method,
++        path: request.path,
++        statusCode: 200,
++        ipAddress: request.ipAddress,
++        userAgent: request.userAgent,
++        // Identifiers only: the diagnosis text is clinical content and stays out of the log.
++        metadata: { patientId, encounterId: problem.encounterId, clinicId: actor.activeClinicId, resolvedDate },
++      },
++      tx,
++    );
++  });
++
++  return { resolved: true as const, id: problemId, resolvedDate };
++}
++
+ /**
+  * Everything S06 (Patient Chart Summary) shows, in one call: demographics,
+  * allergies, active medications, open follow-ups, recent visits and documents.
+- * Clinical content (latest exam, IOP trend, clinical history) is Doctor only.
++ * Clinical content (latest exam, IOP trend, active problems, clinical history)
++ * is Doctor only.
+  */
+ export async function chartSummary(patientId: string, actor: Actor) {
+   const patient = await prisma.patient.findFirst({ where: { id: patientId, voidedAt: null } });
+@@ -94,10 +174,11 @@ export async function chartSummary(patientId: string, actor: Actor) {
+ 
+   const clinical = doctor
+     ? {
++        activeProblems: await activeProblems(patientId),
+         latestExam: await latestExam(patientId),
+         iopTrend: (await buildComparison(prisma, patientId, { show: "exam", fields: ["IOP"] }, actor)).chart,
+       }
+-    : { latestExam: null, iopTrend: null };
++    : { activeProblems: null, latestExam: null, iopTrend: null };
+ 
+   return {
+     patient: toDetail(patient, actor.role),
+diff --git a/e2e/patients.spec.ts b/e2e/patients.spec.ts
+index 59bf770..014e416 100644
+--- a/e2e/patients.spec.ts
++++ b/e2e/patients.spec.ts
+@@ -184,4 +184,48 @@ test.describe('S06/S07/S08 chart, consultation note and signing', () => {
+   await expect(page).toHaveURL(/\/patients\/[^/]+$/);
+   await expect(page.getByText(/unsigned/i)).toHaveCount(0);
+   });
++
++  test('a signed diagnosis shows in Active Problems on S06 until the Doctor marks it Resolved', async ({ page }) => {
++    const diagnosis = `Moderate diabetic retinopathy ${Date.now()}`;
++    await signIn(page, 'DOCTOR');
++    await page.goto(`/#/patients/${PATIENT_ID}`);
++    await expect(page.getByRole('heading', { name: 'Juan Dela Cruz' })).toBeVisible();
++    await page.getByRole('button', { name: '+ New Note' }).click();
++
++    await page.getByLabel('Subjective').fill('Follow-up for diabetic eye changes.');
++    await page.getByLabel('Add diagnosis').fill(diagnosis);
++    await page.getByRole('button', { name: '+ Add diagnosis' }).click();
++    await expect(page.getByText(/saved automatically at/)).toBeVisible({ timeout: 10_000 });
++
++    // Sign the note: only now do its diagnoses join the problem list.
++    await page.getByRole('button', { name: 'Sign and Lock Note' }).click();
++    const dialog = page.getByRole('dialog', { name: 'Sign and lock this note?' });
++    await dialog.getByRole('button', { name: 'Sign and Lock' }).click();
++    await expect(dialog).toBeHidden();
++    await expect(page.getByText('Signed', { exact: true })).toBeVisible();
++
++    // Signed: the diagnosis is in the Active Problems box on S06.
++    await page.goto(`/#/patients/${PATIENT_ID}`);
++    const box = page.locator('section.card').filter({ has: page.getByRole('heading', { name: 'Active Problems' }) });
++    const row = box.getByRole('listitem').filter({ hasText: diagnosis });
++    await expect(row).toBeVisible();
++    await expect(row.getByText(/Since/)).toBeVisible();
++
++    // Resolved: the row disappears from the box.
++    await row.getByRole('button', { name: /resolved/i }).click();
++    await expect(row).toHaveCount(0);
++
++    // It stays gone after a reload (the record is kept as history, not shown as active).
++    await page.reload();
++    await expect(page.getByRole('heading', { name: 'Juan Dela Cruz' })).toBeVisible();
++    await expect(page.getByText(diagnosis)).toHaveCount(0);
++  });
++
++  test('the secretary does not see Active Problems', async ({ page }) => {
++    await signIn(page, 'SECRETARY');
++    await page.goto(`/#/patients/${PATIENT_ID}`);
++    await expect(page.getByRole('heading', { name: 'Juan Dela Cruz' })).toBeVisible();
++    await expect(page.getByRole('heading', { name: 'Active Problems' })).toHaveCount(0);
++    await expect(page.getByRole('button', { name: /resolved/i })).toHaveCount(0);
++  });
+ });
+diff --git a/frontend/src/clinicalApi.ts b/frontend/src/clinicalApi.ts
+index 8306caf..c5c3a91 100644
+--- a/frontend/src/clinicalApi.ts
++++ b/frontend/src/clinicalApi.ts
+@@ -60,6 +60,18 @@ export interface Finding {
+   superseded: boolean;
+ }
+ 
++export interface ActiveProblem {
++  id: string;
++  diagnosis: string;
++  diagnosisCode: string | null;
++  eye: Eye | null;
++  /** Visit date of the signed note that first recorded it, "YYYY-MM-DD". */
++  dateFirstRecorded: string;
++  encounterId: string;
++  visitDate: string;
++  visitType: EncounterType;
++}
++
+ export interface ChartSummary {
+   patient: PatientDetail;
+   allergies: Allergy[];
+@@ -83,6 +95,8 @@ export interface ChartSummary {
+     noteStatus: 'DRAFT' | 'SIGNED' | null;
+   }>;
+   documents: Array<{ id: string; type: DocumentType; version: number; signedAt: string | null; createdAt: string }>;
++  /** Doctor only: unresolved problems from signed notes (null for the secretary). */
++  activeProblems: ActiveProblem[] | null;
+   /** Doctor only. */
+   latestExam: { encounterId: string; visitDate: string; findings: Finding[]; assessment: string | null } | null;
+   iopTrend: ComparisonResponse['chart'] | null;
+@@ -196,6 +210,8 @@ export const clinicalApi = {
+   recordConsent: (body: { patientId: string; consentType: 'DATA_PROCESSING' | 'REMINDER'; channel?: 'SMS' | 'EMAIL'; isGranted: boolean }) =>
+     call<unknown>('POST', '/api/consents', { ...body, captureMethod: 'STAFF_ENTRY' }),
+   summary: (patientId: string) => call<ChartSummary>('GET', `/api/patients/${patientId}/summary`),
++  resolveProblem: (patientId: string, problemId: string) =>
++    call<{ resolved: true; id: string; resolvedDate: string }>('POST', `/api/patients/${patientId}/problems/${problemId}/resolve`),
+ 
+   encounters: (patientId: string) => call<{ items: Encounter[] }>('GET', `/api/encounters?${qs({ patientId })}`),
+   startVisit: (body: { patientId: string; type: EncounterType }) => call<Encounter>('POST', '/api/encounters', body),
+diff --git a/frontend/src/pages/PatientChart.tsx b/frontend/src/pages/PatientChart.tsx
+index d7ff2a2..941d34e 100644
+--- a/frontend/src/pages/PatientChart.tsx
++++ b/frontend/src/pages/PatientChart.tsx
+@@ -5,6 +5,7 @@ import {
+   ENCOUNTER_LABEL,
+   formatDate,
+   fullName,
++  type ActiveProblem,
+   type ChartSummary,
+   type Finding,
+ } from '../clinicalApi';
+@@ -22,6 +23,8 @@ const TASK_LABEL: Record<string, string> = {
+   PROCEDURE: 'Procedure',
+ };
+ 
++const EYE_LABEL = { OD: 'Right eye', OS: 'Left eye', OU: 'Both eyes' } as const;
++
+ const DOC_LABEL = { PRESCRIPTION: 'Prescription', MEDICAL_CERTIFICATE: 'Medical certificate' } as const;
+ 
+ function noteBadge(v: ChartSummary['recentVisits'][number]) {
+@@ -49,7 +52,7 @@ export default function PatientChart({ patientId }: { patientId: string }) {
+   const [tab, setTab] = useState<Tab>('summary');
+   const [starting, setStarting] = useState(false);
+   const [failure, setFailure] = useState<string>();
+-  const { data, error } = useLoad(() => clinicalApi.summary(patientId), [patientId]);
++  const { data, error, reload } = useLoad(() => clinicalApi.summary(patientId), [patientId]);
+ 
+   if (error) return <p className="error">{error}</p>;
+   if (!data) return <p>Loading…</p>;
+@@ -113,7 +116,7 @@ export default function PatientChart({ patientId }: { patientId: string }) {
+         )}
+       </div>
+ 
+-      {tab === 'summary' && <Summary data={data} doctor={doctor} onTab={setTab} />}
++      {tab === 'summary' && <Summary data={data} doctor={doctor} onTab={setTab} onResolved={reload} />}
+       {tab === 'visits' && <Visits data={data} />}
+       {tab === 'medications' && <Medications data={data} />}
+       {tab === 'documents' && <Documents data={data} />}
+@@ -125,13 +128,72 @@ export default function PatientChart({ patientId }: { patientId: string }) {
+   );
+ }
+ 
+-function Summary({ data, doctor, onTab }: { data: ChartSummary; doctor: boolean; onTab: (t: Tab) => void }) {
++/** S06 Active Problems (wireframe item 5). Doctor only; Resolved keeps the row as history. */
++function ActiveProblems({ patientId, problems, onResolved }: { patientId: string; problems: ActiveProblem[]; onResolved: () => void }) {
++  const [busy, setBusy] = useState<string>();
++  const [failure, setFailure] = useState<string>();
++
++  const resolve = async (problem: ActiveProblem) => {
++    setBusy(problem.id);
++    setFailure(undefined);
++    try {
++      await clinicalApi.resolveProblem(patientId, problem.id);
++      onResolved();
++    } catch (err) {
++      setFailure(err instanceof Error ? err.message : String(err));
++    } finally {
++      setBusy(undefined);
++    }
++  };
++
++  return (
++    <section className="card">
++      <h2>Active Problems</h2>
++      {problems.length === 0 && <p className="muted">No active problems. Diagnoses join this list when a note is signed.</p>}
++      {failure && <p className="error">{failure}</p>}
++      <ul className="plain problem-list">
++        {problems.map((p) => (
++          <li key={p.id} className="row between">
++            <div>
++              <strong>{p.diagnosis}</strong>
++              {p.eye && <span className="muted">, {EYE_LABEL[p.eye].toLowerCase()}</span>}
++              <div className="muted small">
++                Since {formatDate(p.dateFirstRecorded)} ·{' '}
++                <a href={`#/patients/${patientId}/visits/${p.encounterId}`}>
++                  {ENCOUNTER_LABEL[p.visitType]} visit, {formatDate(p.visitDate, false)}
++                </a>
++              </div>
++            </div>
++            <button onClick={() => void resolve(p)} disabled={busy === p.id} aria-label={`Mark ${p.diagnosis} as resolved`}>
++              Resolved
++            </button>
++          </li>
++        ))}
++      </ul>
++    </section>
++  );
++}
++
++function Summary({
++  data,
++  doctor,
++  onTab,
++  onResolved,
++}: {
++  data: ChartSummary;
++  doctor: boolean;
++  onTab: (t: Tab) => void;
++  onResolved: () => void;
++}) {
+   const p = data.patient;
+   const exam = data.latestExam;
+   const iopSeries = data.iopTrend?.series ?? [];
+   return (
+     <div className="chart-grid">
+       <div className="stack">
++        {doctor && data.activeProblems && (
++          <ActiveProblems patientId={p.id} problems={data.activeProblems} onResolved={onResolved} />
++        )}
+         <section className="card">
+           <h2>Medical History</h2>
+           {doctor ? (
+diff --git a/frontend/src/styles.css b/frontend/src/styles.css
+index 99aa555..367d570 100644
+--- a/frontend/src/styles.css
++++ b/frontend/src/styles.css
+@@ -156,6 +156,9 @@ button.link { border: 0; background: none; padding: 4px 0; color: var(--navy); }
+ ul.plain { list-style: none; padding: 0; margin: 8px 0 0; }
+ ul.plain li { padding: 8px 0; border-top: 1px solid var(--line); }
+ ul.plain li:first-child { border-top: 0; }
++/* S06 Active Problems: the diagnosis keeps a readable width and the Resolved button wraps below it. */
++.problem-list li { align-items: flex-start; }
++.problem-list li > div { flex: 1 1 180px; min-width: 0; }
+ .note-grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 20px; align-items: start; }
+ table.findings th[scope='row'] { color: var(--text); font-size: 15px; }
+ table.findings input { max-width: 160px; }

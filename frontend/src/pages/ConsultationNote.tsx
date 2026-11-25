@@ -17,6 +17,8 @@ import {
 import { go, useSession } from '../session';
 import { AllergyBanner, Crumbs, patientLine } from './PatientParts';
 
+const SIGNED_NOTE_HELP = 'Once signed, the note is locked. Later corrections are added as dated addenda.';
+
 type FieldKey = keyof typeof EXAM_FIELDS;
 const FIELDS = Object.keys(EXAM_FIELDS) as FieldKey[];
 const EYES: Array<Exclude<Eye, 'OU'>> = ['OD', 'OS'];
@@ -395,7 +397,9 @@ export default function ConsultationNote({
               Draft · {saveState.saving ? 'saving…' : saveState.at ? `saved automatically at ${saveState.at.toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' })}` : 'not saved yet'}
             </span>
           )}
-          <div className="muted small">Once signed, the note is locked. Later corrections are added as dated addenda.</div>
+          <div className="muted small footer-note" title={SIGNED_NOTE_HELP}>
+            {SIGNED_NOTE_HELP}
+          </div>
         </div>
         {!signed && (
           <>

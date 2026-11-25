@@ -11,6 +11,7 @@ import {
   toNoteDbData,
   toNoteDetail,
 } from "./encounter.mapper.js";
+import { recordProblemsFromNote } from "./problems.js";
 import { writeAudit } from "../audit/audit.service.js";
 import { AuditActions } from "../audit/actions.js";
 
@@ -27,7 +28,7 @@ export class EncounterError extends Error {
 
 type Db = Pick<
   typeof import("../prisma.js").prisma,
-  "patient" | "appointment" | "encounter" | "clinicalNote" | "user" | "examFinding" | "labResult" | "followUp" | "$transaction"
+  "patient" | "appointment" | "encounter" | "clinicalNote" | "user" | "examFinding" | "labResult" | "followUp" | "problem" | "$transaction"
 >;
 
 /** Visit dates are clinic-local. All clinics are in Manila for now (Clinic.timezone defaults to it). */
@@ -204,7 +205,7 @@ export async function saveDraft(db: Db, encounterId: string, input: SaveNoteDraf
  */
 export async function signNote(db: Db, encounterId: string, input: SignNoteInput, actor: Actor) {
   requireDoctor(actor, "sign clinical notes");
-  await loadEncounter(db, encounterId);
+  const enc = await loadEncounter(db, encounterId);
   const note = await loadPrimaryNote(db, encounterId);
 
   if (note.status === "SIGNED") throw lockedError();
@@ -214,17 +215,28 @@ export async function signNote(db: Db, encounterId: string, input: SignNoteInput
   if (isEmptyNote(content)) throw new EncounterError(422, "NOTE_EMPTY", "Cannot sign an empty note");
 
   const signedAt = new Date();
-  const { count } = await db.clinicalNote.updateMany({
-    where: { id: note.id, status: "DRAFT", version: note.version },
-    data: {
-      status: "SIGNED",
-      signedAt,
-      signedById: actor.id,
-      contentHash: signatureHash(note, content, actor.id, signedAt),
-      version: note.version + 1,
-    },
+  // The diagnoses join the problem list (S06 Active Problems) in the same
+  // transaction as the signature: only a signed note adds problems, and a
+  // signing that fails leaves none behind.
+  let lost = false;
+  await db.$transaction(async (tx) => {
+    const { count } = await tx.clinicalNote.updateMany({
+      where: { id: note.id, status: "DRAFT", version: note.version },
+      data: {
+        status: "SIGNED",
+        signedAt,
+        signedById: actor.id,
+        contentHash: signatureHash(note, content, actor.id, signedAt),
+        version: note.version + 1,
+      },
+    });
+    if (count === 0) {
+      lost = true;
+      return;
+    }
+    await recordProblemsFromNote(tx, enc, content.diagnosisItems);
   });
-  if (count === 0) throw await lostRace(db, note.id);
+  if (lost) throw await lostRace(db, note.id);
   // AUDIT (Lance): "note.signed"
   return noteDetail(db, (await db.clinicalNote.findFirst({ where: { id: note.id } }))!);
 }
@@ -235,7 +247,7 @@ export async function signNote(db: Db, encounterId: string, input: SignNoteInput
  */
 export async function addAddendum(db: Db, encounterId: string, input: CreateAddendumInput, actor: Actor) {
   requireDoctor(actor);
-  await loadEncounter(db, encounterId);
+  const enc = await loadEncounter(db, encounterId);
   const note = await loadPrimaryNote(db, encounterId);
   if (note.status !== "SIGNED") {
     throw new EncounterError(409, "NOTE_NOT_SIGNED", "This note is still a draft. Edit it directly instead.");
@@ -244,16 +256,21 @@ export async function addAddendum(db: Db, encounterId: string, input: CreateAdde
   const { addendumReason, ...content } = input;
   const header = { encounterId, noteType: "ADDENDUM" as const, parentNoteId: note.id, addendumReason };
   const signedAt = new Date();
-  const created = await db.clinicalNote.create({
-    data: {
-      ...header,
-      ...toNoteDbData(content),
-      status: "SIGNED",
-      authorId: actor.id,
-      signedById: actor.id,
-      signedAt,
-      contentHash: signatureHash(header, content, actor.id, signedAt),
-    },
+  // An addendum is signed as it is written, so diagnoses it adds join the problem list too.
+  const created = await db.$transaction(async (tx) => {
+    const row = await tx.clinicalNote.create({
+      data: {
+        ...header,
+        ...toNoteDbData(content),
+        status: "SIGNED",
+        authorId: actor.id,
+        signedById: actor.id,
+        signedAt,
+        contentHash: signatureHash(header, content, actor.id, signedAt),
+      },
+    });
+    await recordProblemsFromNote(tx, enc, content.diagnosisItems ?? []);
+    return row;
   });
   // AUDIT (Lance): "note.addendum_added"
   return toAddendum(created);

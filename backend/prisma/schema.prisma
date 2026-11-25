@@ -88,6 +88,7 @@ model Patient {
   encounters       Encounter[]
   examFindings     ExamFinding[]
   labResults       LabResult[]
+  problems         Problem[]
 
   tabletIntakeSubmissions TabletIntakeSubmission[]
 
@@ -160,6 +161,7 @@ model Encounter {
   examFindings    ExamFinding[]
   labResults      LabResult[]
   followUps       FollowUp[]
+  problems        Problem[]
 
   @@index([patientId, visitDate])
   @@index([clinicId, visitDate])
@@ -287,6 +289,42 @@ model LabResult {
   @@index([encounterId])
 }
 
+/// One entry of the patient's problem list (S06 "Active Problems").
+///
+/// Rows are created when a note is SIGNED, from its diagnoses; a draft never
+/// creates one. The Doctor marks a problem resolved (resolvedDate and
+/// resolvedById are set together, enforced by a CHECK constraint). A resolved
+/// row stays as history and only leaves the active list.
+model Problem {
+  id          String @id @default(cuid())
+  patientId   String
+  /// Clinic of the originating visit.
+  clinicId    String
+  /// The visit whose signed note first recorded this problem.
+  encounterId String
+
+  diagnosis     String // app-encrypted
+  diagnosisCode String? // app-encrypted ICD-10 code, if the note had one
+  /// Null when the diagnosis is not tied to one eye.
+  eye           Eye?
+
+  /// Visit date of the signed note that first recorded it.
+  dateFirstRecorded DateTime  @db.Date
+  resolvedDate      DateTime? @db.Date
+  resolvedById      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  patient    Patient   @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  clinic     Clinic    @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  encounter  Encounter @relation(fields: [encounterId], references: [id], onDelete: Restrict)
+  resolvedBy User?     @relation("ProblemResolvedBy", fields: [resolvedById], references: [id], onDelete: Restrict)
+
+  @@index([patientId, resolvedDate])
+  @@index([encounterId])
+}
+
 /// Staff account. Only the Doctor can approve, change, revoke accounts and the
 /// clinics each account may work in (see UserClinic).
 model User {
@@ -347,6 +385,7 @@ model User {
   encountersAttended  Encounter[]      @relation("EncounterAttendingDoctor")
   findingsRecorded    ExamFinding[]    @relation("FindingRecordedBy")
   labResultsRecorded  LabResult[]      @relation("LabResultRecordedBy")
+  problemsResolved    Problem[]        @relation("ProblemResolvedBy")
 
   startedTabletSessions TabletIntakeSession[] @relation("TabletIntakeSessionStarter")
   reportExports         ReportExport[]        @relation("ReportExportRequestedBy")
@@ -396,6 +435,7 @@ model Clinic {
   encounters         Encounter[]
   examFindings       ExamFinding[]
   labResults         LabResult[]
+  problems           Problem[]
 
   tabletSessions TabletIntakeSession[]
 

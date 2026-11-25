@@ -57,7 +57,7 @@ function table(
   const rows: Row[] = [];
   let n = 0;
 
-  return {
+  const api = {
     rows,
     async create({ data }: { data: Data }) {
       const now = new Date(++tick);
@@ -68,6 +68,10 @@ function table(
       }
       rows.push(row);
       return { ...row };
+    },
+    async createMany({ data }: { data: Data[] }) {
+      for (const d of data) await api.create({ data: d });
+      return { count: data.length };
     },
     async findFirst({ where }: { where?: Record<string, unknown> }) {
       const r = rows.find((row) => matches(row, where));
@@ -93,9 +97,10 @@ function table(
       return { count: hit.length };
     },
   };
+  return api;
 }
 
-const MODELS = ["patient", "appointment", "user", "encounter", "clinicalNote", "examFinding", "labResult", "followUp"] as const;
+const MODELS = ["patient", "appointment", "user", "encounter", "clinicalNote", "examFinding", "labResult", "followUp", "problem"] as const;
 type Model = (typeof MODELS)[number];
 
 export function createFakeDb() {
@@ -197,8 +202,9 @@ export function createFakeDb() {
   });
 
   const followUp = table("fu");
+  const problem = table("prob", { defaults: () => ({ diagnosisCode: null, eye: null, resolvedDate: null, resolvedById: null }) });
 
-  const models = { patient, appointment, user, encounter, clinicalNote, examFinding, labResult, followUp };
+  const models = { patient, appointment, user, encounter, clinicalNote, examFinding, labResult, followUp, problem };
   // The fake has no real transactions. It just runs the callback against the same tables.
   const fake = {
     ...models,
