@@ -29,6 +29,7 @@ const TARGETS = [
   { model: 'outreachLog', table: 'OutreachLog', column: 'patientResponse' },
   { model: 'medication', table: 'Medication', column: 'instructions' },
   { model: 'medication', table: 'Medication', column: 'indication' },
+  { model: 'allergy', table: 'Allergy', column: 'allergenName' },
   { model: 'allergy', table: 'Allergy', column: 'reaction' },
 ] as const;
 

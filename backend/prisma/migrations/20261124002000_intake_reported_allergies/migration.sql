@@ -1,0 +1,2 @@
+ALTER TABLE "Allergy" ADD COLUMN "intakeSessionId" TEXT
+    REFERENCES "TabletIntakeSession"("id") ON DELETE SET NULL ON UPDATE CASCADE;

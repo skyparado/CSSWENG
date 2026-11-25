@@ -4,7 +4,8 @@ import { prisma } from '../prisma.js';
 // Only the database owner can suspend a trigger. Reset synthetic audit fixtures
 // atomically so concurrent writes never see an unprotected log.
 export async function clearAuditLog() {
-  if (process.env.NODE_ENV !== 'test') throw new Error('Test database required');
+  const database = new URL(process.env.DATABASE_URL ?? 'postgresql://localhost/').pathname;
+  if (process.env.NODE_ENV !== 'test' || !database.endsWith('_test')) throw new Error('A dedicated test database is required');
   await prisma.$transaction(async tx => {
     await lockAuditChain(tx);
     await tx.$executeRaw`ALTER TABLE "AuditLog" DISABLE TRIGGER reject_audit_truncate`;

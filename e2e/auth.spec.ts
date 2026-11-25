@@ -185,6 +185,7 @@ test.describe('role restrictions', () => {
 
 test.describe('an account with no clinic assigned', () => {
   test('explains itself instead of spinning forever', async ({ page }) => {
+    test.slow(); // The doctor signs in twice using distinct authenticator time steps.
     // A Secretary only sees clinics she has a UserClinic row for, and a newly
     // created account has none. Before this was handled she sat on
     // "Loading clinics..." with no way forward and no explanation.
@@ -224,6 +225,7 @@ test.describe('S18 clinic authorization', () => {
   test('the doctor approves an account into chosen clinics, and that is what gates it', async ({
     page,
   }) => {
+    test.slow(); // Includes two doctor sign-ins and a secretary authenticator enrollment.
     // US-04 and US-06: each account is approved for specific clinics, and a
     // Secretary can select only those. Covered through the UI because the
     // approval dialog is where the Doctor actually makes the decision.
@@ -297,10 +299,10 @@ test.describe('idle session warning', () => {
     await page.clock.install();
     await signIn(page, 'DOCTOR');
 
-    // Let the dashboard's requests finish first. The idle clock resets on
-    // every successful API call, so a response landing after the clock jump
-    // would clear the warning mid-assertion.
-    await page.waitForLoadState('networkidle');
+    // Use a fresh document with no dashboard requests still completing. The
+    // clinic radios render only after this session's final clinic response.
+    await page.goto('/?idle-check#/select-clinic', { waitUntil: 'networkidle' });
+    await expect(page.getByRole('radio', { name: /UERM/ })).toBeVisible();
 
     await expect(page.getByRole('alertdialog')).toBeHidden();
 
@@ -315,14 +317,14 @@ test.describe('idle session warning', () => {
     await warning.getByRole('button', { name: 'Stay signed in' }).click();
     await expect(warning).toBeHidden();
 
-    // Still on the dashboard, not bounced to the login screen.
-    await expect(page.getByRole('navigation', { name: 'Main' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Select Active Clinic' })).toBeVisible();
   });
 
   test('signs out when the countdown runs out', async ({ page }) => {
     await page.clock.install();
     await signIn(page, 'DOCTOR');
-    await page.waitForLoadState('networkidle');
+    await page.goto('/?idle-check#/select-clinic', { waitUntil: 'networkidle' });
+    await expect(page.getByRole('radio', { name: /UERM/ })).toBeVisible();
 
     await page.clock.fastForward('30:10');
 

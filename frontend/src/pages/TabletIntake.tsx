@@ -53,6 +53,7 @@ type Form = typeof BLANK;
 export default function TabletIntake({ token }: { token: string }) {
   const [session, setSession] = useState<IntakeSessionPublic | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [cancelledHere, setCancelledHere] = useState(false);
   const [step, setStep] = useState<Step>('welcome');
   const [form, setForm] = useState<Form>(BLANK);
   const [fieldError, setFieldError] = useState<string | null>(null);
@@ -105,7 +106,7 @@ export default function TabletIntake({ token }: { token: string }) {
 
   async function cancel() {
     setForm(BLANK);
-    setLoadError('Intake closed');
+    setCancelledHere(true);
     await tabletApi.cancel(token).catch(() => undefined);
   }
 
@@ -189,7 +190,10 @@ export default function TabletIntake({ token }: { token: string }) {
       referralSource: form.referralSource.trim() || undefined,
       ophthalmicHistory: form.ophthalmicHistory.trim() || undefined,
       ...(form.medicalHistory.trim() ? { medicalHistory: form.medicalHistory.trim() } : {}),
-      ...(form.allergies.trim() ? { allergies: form.allergies.trim() } : {}),
+      ...(form.allergies.trim() ? {
+        allergies: form.allergies.trim(),
+        reportedAllergens: form.allergies.split(/[,;\n]/).map(name => name.trim()).filter(Boolean),
+      } : {}),
       ...(form.medications.trim() ? { medications: form.medications.trim() } : {}),
       consents: {
         treatment: true,
@@ -219,10 +223,10 @@ export default function TabletIntake({ token }: { token: string }) {
 
   /* --------------------------- Blocking states --------------------------- */
 
-  if (loadError) {
+  if (loadError || cancelledHere) {
     return (
       <TabletShell>
-        <h1>This form is not ready</h1>
+        <h1>{cancelledHere ? 'This form has closed' : 'This form is not ready'}</h1>
         <p className="tablet-lead">
           Please hand the tablet back to the clinic staff.
         </p>
@@ -402,10 +406,13 @@ export default function TabletIntake({ token }: { token: string }) {
           </p>
 
           <label htmlFor="t-allergies">Allergies</label>
+          <p id="allergy-help">List each substance you are allergic to, separated by commas. Leave blank if you have none or are unsure.</p>
           <textarea
             id="t-allergies"
+            aria-describedby="allergy-help"
+            maxLength={2000}
             rows={2}
-            placeholder="For example: penicillin, shellfish"
+            placeholder="Penicillin, shellfish"
             value={form.allergies}
             onChange={(e) => set('allergies', e.target.value)}
           />

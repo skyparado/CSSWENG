@@ -63,6 +63,8 @@ export default function ImageAnnotator({
 
   const drawing = useRef(false);
   const saving = useRef(false);
+  const saveTouch = useRef<{ id: number; x: number; y: number } | null>(null);
+  const savedOnTouch = useRef(false);
   const [commitKey] = useState(() => crypto.randomUUID());
   const container = useRef<HTMLDivElement>(null);
   const [availableWidth, setAvailableWidth] = useState(0);
@@ -134,7 +136,7 @@ export default function ImageAnnotator({
 
   /* ----------------------------- Drawing ---------------------------------- */
 
-  function start(e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) {
+  function start(e: Konva.KonvaEventObject<PointerEvent>) {
     const at = pointIn(e.target.getStage());
     if (!at) return;
 
@@ -162,7 +164,7 @@ export default function ImageAnnotator({
     ]);
   }
 
-  function move(e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) {
+  function move(e: Konva.KonvaEventObject<PointerEvent>) {
     if (!drawing.current) return;
     const at = pointIn(e.target.getStage());
     if (!at) return;
@@ -335,7 +337,23 @@ export default function ImageAnnotator({
           <button type="button" onClick={clear} disabled={shapes.length === 0}>
             Clear
           </button>
-          <button type="button" className="primary" onClick={() => void save()} disabled={busy || !bitmap}>
+          <button type="button" className="primary" disabled={busy || !bitmap}
+            onPointerDown={e => {
+              savedOnTouch.current = false;
+              saveTouch.current = e.pointerType === 'touch' ? { id: e.pointerId, x: e.clientX, y: e.clientY } : null;
+            }}
+            onPointerCancel={() => { saveTouch.current = null; }}
+            onPointerUp={e => {
+              const start = saveTouch.current;
+              saveTouch.current = null;
+              if (!start || start.id !== e.pointerId || Math.hypot(e.clientX - start.x, e.clientY - start.y) > 10) return;
+              // Mobile Chrome can suppress the compatibility click immediately
+              // after a canvas drag. Commit a stationary touch release once.
+              savedOnTouch.current = true;
+              void save();
+            }}
+            onClick={e => { if (e.detail === 0 || !savedOnTouch.current) void save(); }}
+          >
             {busy ? 'Saving...' : 'Save as new layer'}
           </button>
         </div>
@@ -352,14 +370,11 @@ export default function ImageAnnotator({
             height={displayHeight}
             scaleX={scale}
             scaleY={scale}
-            onMouseDown={start}
-            onMouseMove={move}
-            onMouseUp={end}
-            onMouseLeave={end}
-            onTouchStart={start}
-            onTouchMove={move}
-            onTouchEnd={end}
-            onTouchCancel={end}
+            onPointerDown={start}
+            onPointerMove={move}
+            onPointerUp={end}
+            onPointerLeave={end}
+            onPointerCancel={end}
           >
             <Layer listening={false}>
               <KonvaImage image={bitmap} />

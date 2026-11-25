@@ -874,7 +874,10 @@ model Allergy {
   id           String @id @default(cuid())
   patientId    String
   clinicId     String
+  /// @encrypted
   allergenName String
+  intakeSessionId String?
+  intakeSession TabletIntakeSession? @relation(fields: [intakeSessionId], references: [id], onDelete: SetNull)
 
   /// @encrypted
   reaction      String?
@@ -1045,6 +1048,7 @@ model TabletIntakeSession {
   startedBySecretary User?                   @relation("TabletIntakeSessionStarter", fields: [startedBySecretaryId], references: [id], onDelete: SetNull)
   submission         TabletIntakeSubmission?
   consents           PatientConsent[]
+  reportedAllergies   Allergy[]
 
   @@index([status])
   @@index([clinicId, createdAt])

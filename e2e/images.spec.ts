@@ -204,7 +204,9 @@ test.describe('S07 tablet drawings', () => {
       ] });
     }
     expect((await (await page.request.get(gallery)).json()).total).toBe(0);
-    await page.getByRole('button', { name: 'Save as new layer' }).tap();
+    const save = page.getByRole('button', { name: 'Save as new layer' });
+    await save.scrollIntoViewIfNeeded();
+    await save.tap();
     await expect(page.getByRole('button', { name: /Version 1/ })).toBeVisible();
     const { items, total } = await (await page.request.get(gallery)).json();
     expect(total).toBe(1);

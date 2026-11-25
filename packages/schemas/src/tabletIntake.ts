@@ -54,6 +54,7 @@ export const intakeFormSubmitSchema = z.object({
   ophthalmicHistory: z.string().trim().max(5000).optional(),
   medicalHistory: z.string().trim().max(5000).optional(),
   allergies: z.string().trim().max(2000).optional(),
+  reportedAllergens: z.array(z.string().trim().min(1).max(200)).max(50).optional(),
   medications: z.string().trim().max(2000).optional(),
   // Consent flags the patient ticks on the tablet. Required to be true to submit.
   consents: z.object({

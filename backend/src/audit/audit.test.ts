@@ -5,7 +5,7 @@ import type request from 'supertest';
 import { createApp } from '../app.js';
 import { prisma } from '../prisma.js';
 import { loginAgent } from '../test-utils/authAgent.js';
-import { writeAudit, verifyChain } from './audit.service.js';
+import { writeAudit, verifyChain, verifyEntries } from './audit.service.js';
 import { AuditActions } from './actions.js';
 
 /**
@@ -95,23 +95,9 @@ describe('hash chain integrity', () => {
     await writeAudit(sampleEntry({ metadata: { n: 2 } }));
     await writeAudit(sampleEntry({ metadata: { n: 3 } }));
 
-    // Simulate out-of-band tampering: temporarily disable the trigger so we
-    // can UPDATE a row the way an attacker with raw DB access might.
-    await prisma.$executeRawUnsafe(
-      'ALTER TABLE "AuditLog" DISABLE TRIGGER audit_log_block_update',
-    );
-    const rows = await prisma.auditLog.findMany({
-      orderBy: { createdAt: 'asc' },
-    });
-    await prisma.auditLog.update({
-      where: { id: rows[1].id },
-      data: { action: 'HACKED' },
-    });
-    await prisma.$executeRawUnsafe(
-      'ALTER TABLE "AuditLog" ENABLE TRIGGER audit_log_block_update',
-    );
-
-    const result = await verifyChain();
+    // Check the verifier against an altered copy while the stored log stays protected.
+    const rows = await prisma.auditLog.findMany({ orderBy: { createdAt: 'asc' } });
+    const result = verifyEntries(rows.map((row, i) => i === 1 ? { ...row, action: 'CHANGED' } : row));
     expect(result.ok).toBe(false);
     expect(result.breakages.length).toBeGreaterThan(0);
     expect(result.breakages[0].id).toBe(rows[1].id);

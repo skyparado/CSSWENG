@@ -667,6 +667,7 @@ fieldset.plain { border: 0; padding: 0; margin: 0; min-width: 0; }
 .image-row-actions { flex-wrap: wrap; }
 
 .annotate-toolbar { display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 16px; }
+.annotate-toolbar button, .layer-strip button { touch-action: manipulation; }
 .annotate-toolbar .pills, .annotate-toolbar .seg { flex-wrap: wrap; }
 .annotate-toolbar > fieldset { flex: 0 1 auto; max-width: 100%; }
 .annotate-toolbar > .row { flex: 1 0 100%; }

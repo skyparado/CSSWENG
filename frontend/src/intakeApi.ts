@@ -57,6 +57,7 @@ export interface IntakePayload {
   philhealthNumber?: string;
   referralSource?: string;
   allergies?: string;
+  reportedAllergens?: string[];
   medications?: string;
   consents: {
     treatment: boolean;

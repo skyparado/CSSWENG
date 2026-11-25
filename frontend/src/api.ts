@@ -202,6 +202,7 @@ export interface SafetyAlert {
 export interface Allergy {
   id: string;
   allergenName: string;
+  intakeSessionId?: string | null;
   reaction?: string | null;
   severity?: 'MILD' | 'MODERATE' | 'SEVERE' | null;
   recordedAt?: string;
