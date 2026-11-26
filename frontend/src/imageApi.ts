@@ -3,6 +3,7 @@
 //
 // Every endpoint here is Doctor-only on the server (SDD 7.1), so the screens
 // gate themselves too rather than letting the user click into a 403.
+import type { DiagramTemplate } from '@clinic/schemas';
 import { notifyApiActivity } from './api';
 
 export type ImageStatus = 'ACTIVE' | 'DELETED';
@@ -11,6 +12,10 @@ export interface ClinicalImage {
   id: string;
   patientId: string;
   appointmentId: string | null;
+  /** The visit (S07) the image or drawing belongs to. */
+  encounterId: string | null;
+  /** Set when the image is a clone of a blank eye diagram. */
+  diagramTemplate: DiagramTemplate | null;
   uploadedById: string | null;
   storageKey: string;
   fileName: string;
@@ -92,10 +97,11 @@ async function request<T>(
 }
 
 export const imageApi = {
-  list: (patientId: string, status: ImageStatus = 'ACTIVE') =>
+  list: (patientId: string, status: ImageStatus = 'ACTIVE', encounterId?: string) =>
     request<Paged<ClinicalImage>>(
       'GET',
-      `/api/clinical-images?patientId=${encodeURIComponent(patientId)}&status=${status}&pageSize=100`,
+      `/api/clinical-images?patientId=${encodeURIComponent(patientId)}&status=${status}&pageSize=100` +
+        (encounterId ? `&encounterId=${encodeURIComponent(encounterId)}` : ''),
     ),
 
   get: (id: string) => request<ClinicalImage>('GET', `/api/clinical-images/${id}`),
@@ -107,12 +113,21 @@ export const imageApi = {
   downloadUrl: (id: string) =>
     request<{ url: string; expiresIn: number }>('GET', `/api/clinical-images/${id}/download`),
 
-  upload: (input: { patientId: string; file: File; caption?: string; appointmentId?: string }) => {
+  upload: (input: {
+    patientId: string;
+    file: File;
+    caption?: string;
+    appointmentId?: string;
+    encounterId?: string;
+    diagramTemplate?: DiagramTemplate;
+  }) => {
     const form = new FormData();
     form.append('file', input.file);
     form.append('patientId', input.patientId);
     if (input.caption) form.append('caption', input.caption);
     if (input.appointmentId) form.append('appointmentId', input.appointmentId);
+    if (input.encounterId) form.append('encounterId', input.encounterId);
+    if (input.diagramTemplate) form.append('diagramTemplate', input.diagramTemplate);
     return request<ClinicalImage>('POST', '/api/clinical-images', form);
   },
 
@@ -149,15 +164,49 @@ export function patientIdFromImagesRoute(route: string): string | undefined {
   return parts[1];
 }
 
-/** `#/patients/:patientId/images/:imageId` -> both ids, or undefined. */
+/**
+ * `#/patients/:patientId/images/:imageId[?visit=:encounterId]` -> the ids, or
+ * undefined. `visit` is set when S07 opened the drawing, so S09 can offer the
+ * way back to that consultation note.
+ */
 export function annotateFromRoute(
   route: string,
-): { patientId: string; imageId: string } | undefined {
+): { patientId: string; imageId: string; encounterId?: string } | undefined {
   const path = route.split('?')[0] ?? route;
   const parts = path.split('/').filter(Boolean);
   if (parts[0] !== 'patients' || parts[2] !== 'images' || parts.length !== 4) return undefined;
-  return { patientId: parts[1]!, imageId: parts[3]! };
+  const visit = new URLSearchParams(route.split('?')[1] ?? '').get('visit');
+  return { patientId: parts[1]!, imageId: parts[3]!, ...(visit ? { encounterId: visit } : {}) };
 }
+
+/**
+ * `#/patients/:patientId/images?visit=:encounterId&template=ANTERIOR_OD` -> a
+ * new drawing on a blank eye diagram for that visit, or undefined. Nothing is
+ * saved until the first save (see ImageAnnotator).
+ */
+export function drawFromRoute(
+  route: string,
+): { patientId: string; encounterId: string; template: DiagramTemplate } | undefined {
+  const [path = '', query = ''] = route.split('?');
+  const parts = path.split('/').filter(Boolean);
+  if (parts[0] !== 'patients' || parts[2] !== 'images' || parts.length !== 3) return undefined;
+  const params = new URLSearchParams(query);
+  const visit = params.get('visit');
+  const template = params.get('template');
+  if (!visit || !template || !(template in EYE_TEMPLATE_LABEL)) return undefined;
+  return { patientId: parts[1]!, encounterId: visit, template: template as DiagramTemplate };
+}
+
+/** Names of the four blank eye diagrams. */
+export const EYE_TEMPLATE_LABEL: Record<DiagramTemplate, string> = {
+  ANTERIOR_OD: 'Anterior segment · Right eye (OD)',
+  ANTERIOR_OS: 'Anterior segment · Left eye (OS)',
+  POSTERIOR_OD: 'Posterior segment · Right eye (OD)',
+  POSTERIOR_OS: 'Posterior segment · Left eye (OS)',
+};
+
+/** The blank diagram itself (backend/assets/eye-templates, Doctor only). */
+export const eyeTemplateUrl = (template: DiagramTemplate) => `/api/eye-templates/${template}`;
 
 /** Human-readable size for the list, e.g. "3.4 MB". */
 export function formatBytes(bytes: number): string {

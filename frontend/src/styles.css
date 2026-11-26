@@ -671,7 +671,8 @@ fieldset.plain { border: 0; padding: 0; margin: 0; min-width: 0; }
 .label { font-weight: 600; padding: 0; margin: 12px 0 6px; }
 .seg { display: inline-flex; border: 2px solid var(--navy); border-radius: 8px; overflow: hidden; }
 .seg button { border: 0; border-radius: 0; }
-.seg button[aria-checked='true'] { background: var(--navy); color: #fff; }
+.seg button[aria-checked='true'],
+.seg button[aria-pressed='true'] { background: var(--navy); color: #fff; }
 
 /* S17 reports */
 .report-controls { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; }
@@ -714,3 +715,9 @@ fieldset.plain { border: 0; padding: 0; margin: 0; min-width: 0; }
   .footer-bar.sticky > button { flex: 1 1 auto; }
   .footer-note { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 }
+
+/* S07 eye drawing area: OD and OS pictures side by side, stacking in a narrow window. */
+.eye-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-top: 12px; }
+.eye-figure { margin: 0; display: flex; flex-direction: column; gap: 6px; text-align: center; }
+.eye-figure svg { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.eye-drawing .seg { margin-top: 4px; }

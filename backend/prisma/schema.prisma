@@ -132,6 +132,14 @@ enum Eye {
   OU
 }
 
+/// The four blank eye diagrams the Doctor can draw on from S07 (files in backend/assets/eye-templates).
+enum DiagramTemplate {
+  ANTERIOR_OD
+  ANTERIOR_OS
+  POSTERIOR_OD
+  POSTERIOR_OS
+}
+
 /// One patient visit at one clinic (S06 visit list, S07 header).
 /// Holds at most one PRIMARY note, plus dated addenda once that note is signed.
 model Encounter {
@@ -162,6 +170,7 @@ model Encounter {
   labResults      LabResult[]
   followUps       FollowUp[]
   problems        Problem[]
+  clinicalImages  ClinicalImage[]
 
   @@index([patientId, visitDate])
   @@index([clinicId, visitDate])
@@ -972,6 +981,11 @@ model ClinicalImage {
   id            String  @id @default(cuid())
   patientId     String
   appointmentId String?
+  /// The visit (S07) this image or drawing belongs to. Null for images uploaded
+  /// from the patient's image list. A signed visit takes no new drawings.
+  encounterId   String?
+  /// Set when the image is a clone of a blank eye diagram, drawn on from S07.
+  diagramTemplate DiagramTemplate?
   uploadedById  String?
   // S3 object key, unique across the bucket.
   storageKey    String  @unique
@@ -988,11 +1002,13 @@ model ClinicalImage {
 
   patient     Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
   appointment Appointment?      @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  encounter   Encounter?        @relation(fields: [encounterId], references: [id], onDelete: SetNull)
   uploadedBy  User?             @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
   annotations ImageAnnotation[]
 
   @@index([patientId, createdAt])
   @@index([appointmentId])
+  @@index([encounterId])
   @@index([status])
 }
 

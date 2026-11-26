@@ -16,6 +16,7 @@ import {
 } from '../clinicalApi';
 import { go, useSession } from '../session';
 import { AllergyBanner, Crumbs, patientLine } from './PatientParts';
+import EyeDrawing from './EyeDrawing';
 
 const SIGNED_NOTE_HELP = 'Once signed, the note is locked. Later corrections are added as dated addenda.';
 
@@ -75,6 +76,7 @@ export default function ConsultationNote({
   const [loadError, setLoadError] = useState<string>();
 
   const dirty = useRef(false);
+  const saveFailed = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout>>();
   const saving = useRef<Promise<Note | null>>(Promise.resolve(null));
   const latest = useRef({ draft, note });
@@ -122,6 +124,7 @@ export default function ConsultationNote({
         const saved = await clinicalApi.saveDraft(encounterId, { ...d, version: n?.version });
         latest.current.note = saved;
         setNote(saved);
+        saveFailed.current = false;
         setSaveState({ at: new Date() });
         return saved;
       } catch (err) {
@@ -131,12 +134,26 @@ export default function ConsultationNote({
             : err instanceof Error
               ? err.message
               : String(err);
+        saveFailed.current = true;
         setSaveState({ error: msg });
         return null;
       }
     });
     return saving.current;
   }, [encounterId]);
+
+  /**
+   * Before leaving S07 for the drawing tool: write out anything typed but not yet
+   * autosaved, and wait for a save already under way. False if the draft could
+   * not be saved, so the doctor stays here (the footer shows the error) rather
+   * than losing what they typed.
+   */
+  const flushBeforeLeaving = useCallback(async (): Promise<boolean> => {
+    clearTimeout(timer.current);
+    await saving.current;
+    if (dirty.current) await saveDraft();
+    return !saveFailed.current;
+  }, [saveDraft]);
 
   const edit = (patch: Partial<Draft>) => {
     setDraft((d) => ({ ...d, ...patch }));
@@ -371,7 +388,7 @@ export default function ConsultationNote({
             )}
           </section>
 
-          <EyeDrawing patientId={p.id} encounterId={encounterId} locked={locked} />
+          <EyeDrawing patientId={p.id} encounterId={encounterId} locked={locked} beforeOpen={flushBeforeLeaving} />
 
           {signed && note && <Addenda note={note} encounterId={encounterId} onAdded={(a) => setNote({ ...note, addenda: [...note.addenda, a] })} />}
         </div>
@@ -647,86 +664,5 @@ function FollowUpCard({ patientId, clinicId, existing }: { patientId: string; cl
       )}
       <p className="muted small">The secretary will see this in the follow-up list for reminders.</p>
     </section>
-  );
-}
-
-/** The four blank eye-diagram templates the doctor can draw on (SDD 5.7, S09). */
-const EYE_TEMPLATES: Array<{ key: string; segment: 'ANTERIOR' | 'POSTERIOR'; eye: 'OD' | 'OS' }> = [
-  { key: 'ANTERIOR_OD', segment: 'ANTERIOR', eye: 'OD' },
-  { key: 'ANTERIOR_OS', segment: 'ANTERIOR', eye: 'OS' },
-  { key: 'POSTERIOR_OD', segment: 'POSTERIOR', eye: 'OD' },
-  { key: 'POSTERIOR_OS', segment: 'POSTERIOR', eye: 'OS' },
-];
-
-/**
- * S07 item 7 — Eye drawing and images.
- *
- * Outline diagrams of each eye, plus the way into S09 for THIS visit. "Open
- * Drawing" and "Upload image" carry the patient, the visit (encounter) and the
- * chosen blank template to S09 as query params:
- *   #/patients/:patientId/images?visit=:encounterId&template=ANTERIOR_OD
- * Per the agreed contract, selecting a template creates no database record —
- * S09 clones the template and saves the image only on the first stroke/save, so
- * opening a diagram by mistake never clutters the chart. The template rendering
- * and the lazy save live in S09 (Developer 4); this screen only links in.
- */
-function EyeDrawing({ patientId, encounterId, locked }: { patientId: string; encounterId: string; locked: boolean }) {
-  const drawHref = (template: string) => `#/patients/${patientId}/images?visit=${encounterId}&template=${template}`;
-  const uploadHref = `#/patients/${patientId}/images?visit=${encounterId}`;
-
-  return (
-    <section className="card">
-      <div className="row between">
-        <h2>Eye drawing and images</h2>
-        <a href={uploadHref}>Upload image</a>
-      </div>
-      <p className="muted small">
-        {locked
-          ? 'Open a diagram to view this visit’s drawings in the image tool.'
-          : 'Choose an eye diagram to draw on the tablet, or upload a clinical photo. Drawings are saved as a layer over the template — nothing is saved until you draw.'}
-      </p>
-      <div className="eye-templates" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
-        {EYE_TEMPLATES.map((t) => (
-          <a
-            key={t.key}
-            className="btn"
-            href={drawHref(t.key)}
-            style={{ display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left', padding: 12 }}
-          >
-            <EyeOutline segment={t.segment} />
-            <span>
-              <strong>{t.segment === 'ANTERIOR' ? 'Anterior segment' : 'Posterior segment'}</strong>
-              <br />
-              <span className="muted small">{t.eye === 'OD' ? 'Right eye (OD)' : 'Left eye (OS)'} · Open Drawing</span>
-            </span>
-          </a>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-/** A simple outline of the eye for the S07 template tiles; the real drawing templates live in S09. */
-function EyeOutline({ segment }: { segment: 'ANTERIOR' | 'POSTERIOR' }) {
-  return (
-    <svg width="44" height="44" viewBox="0 0 48 48" aria-hidden focusable="false" style={{ flex: 'none', color: 'var(--navy)' }}>
-      <circle cx="24" cy="24" r="20" fill="none" stroke="currentColor" strokeWidth="1.5" />
-      {segment === 'ANTERIOR' ? (
-        <>
-          <circle cx="24" cy="24" r="10" fill="none" stroke="currentColor" strokeWidth="1.5" />
-          <circle cx="24" cy="24" r="4" fill="currentColor" />
-        </>
-      ) : (
-        <>
-          <circle cx="30" cy="24" r="5" fill="none" stroke="currentColor" strokeWidth="1.5" />
-          <path
-            d="M30 24 C 22 20, 16 22, 10 18 M30 24 C 22 28, 16 26, 10 30"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1"
-          />
-        </>
-      )}
-    </svg>
   );
 }

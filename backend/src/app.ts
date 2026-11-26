@@ -27,6 +27,7 @@ import { prisma } from './prisma.js';
 import { auditRouter } from './audit/audit.routes.js';
 import { auditMiddleware } from './audit/audit.middleware.js';
 import { clinicalImagesRouter } from './clinicalImages/clinicalImages.routes.js';
+import { eyeTemplatesRouter } from './eyeTemplates/eyeTemplates.routes.js';
 import { tabletIntakeRouter } from './tabletIntake/tabletIntake.routes.js';
 import { reportsRouter } from './reports/reports.routes.js';
 import { smsWebhooksRouter } from './reminders/webhooks.routes.js';
@@ -97,6 +98,7 @@ export function createApp(): Express {
   app.use('/api/users', usersRouter);
   app.use('/api/audit', auditRouter);
   app.use('/api/clinical-images', clinicalImagesRouter);
+  app.use('/api/eye-templates', eyeTemplatesRouter);
   app.use('/api/tablet-intake', tabletIntakeRouter);
   app.use('/health', healthRouter);
   app.use('/api/clinics', clinicsRouter);

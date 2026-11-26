@@ -25,9 +25,18 @@ export const MAX_IMAGE_SIZE_BYTES = 20 * 1024 * 1024;
 
 /* ------------------------------- Payloads -------------------------------- */
 
+/** The blank eye diagrams drawn on from S07 (backend/assets/eye-templates). */
+export const DIAGRAM_TEMPLATES = ['ANTERIOR_OD', 'ANTERIOR_OS', 'POSTERIOR_OD', 'POSTERIOR_OS'] as const;
+export const diagramTemplateEnum = z.enum(DIAGRAM_TEMPLATES);
+export type DiagramTemplate = z.infer<typeof diagramTemplateEnum>;
+
 export const imageUploadMetadataSchema = z.object({
   patientId: z.string().min(1),
   appointmentId: z.string().min(1).optional(),
+  /** The visit (S07) the image belongs to. */
+  encounterId: z.string().min(1).optional(),
+  /** Set when the upload is a clone of a blank eye diagram; needs encounterId. */
+  diagramTemplate: diagramTemplateEnum.optional(),
   caption: z.string().trim().max(500).optional(),
 });
 export type ImageUploadMetadata = z.infer<typeof imageUploadMetadataSchema>;
@@ -40,6 +49,7 @@ export type ImageUpdate = z.infer<typeof imageUpdateSchema>;
 export const imageListQuerySchema = z.object({
   patientId: z.string().min(1).optional(),
   appointmentId: z.string().min(1).optional(),
+  encounterId: z.string().min(1).optional(),
   status: imageStatusEnum.default('ACTIVE'),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
@@ -61,6 +71,8 @@ export const clinicalImageSchema = z.object({
   id: z.string(),
   patientId: z.string(),
   appointmentId: z.string().nullable(),
+  encounterId: z.string().nullable(),
+  diagramTemplate: diagramTemplateEnum.nullable(),
   uploadedById: z.string().nullable(),
   storageKey: z.string(),
   fileName: z.string(),

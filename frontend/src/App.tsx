@@ -22,7 +22,7 @@ import Intake from './pages/Intake';
 import TabletIntake, { tabletTokenFromRoute } from './pages/TabletIntake';
 import SessionTimeout from './SessionTimeout';
 import ClinicalImages, { ClinicalImagesLanding } from './pages/ClinicalImages';
-import { annotateFromRoute, patientIdFromImagesRoute } from './imageApi';
+import { annotateFromRoute, drawFromRoute, patientIdFromImagesRoute } from './imageApi';
 
 // Recharts is large; load it only when the Reports page is opened.
 const Reports = lazy(() => import('./pages/Reports'));
@@ -196,7 +196,15 @@ function Routes() {
     );
   else if (route.startsWith('/medications'))
     page = doctor ? <MedicationsLanding /> : <p>Only the Doctor can view medications and allergies.</p>;
-    else if (annotateFromRoute(route))
+  else if (drawFromRoute(route))
+    page = doctor ? (
+      <Suspense fallback={<p>Loading…</p>}>
+        <ImageAnnotator key={route} {...drawFromRoute(route)!} />
+      </Suspense>
+    ) : (
+      <p>Only the Doctor can view clinical images.</p>
+    );
+  else if (annotateFromRoute(route))
     page = doctor ? (
       <Suspense fallback={<p>Loading…</p>}>
         <ImageAnnotator key={route} {...annotateFromRoute(route)!} />

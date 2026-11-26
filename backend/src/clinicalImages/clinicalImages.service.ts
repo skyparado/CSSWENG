@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { prisma } from '../prisma.js';
-import { badRequest, notFound } from '../http.js';
+import { badRequest, conflict, notFound } from '../http.js';
 import {
   deleteObject,
   presignedGetUrl,
@@ -39,6 +39,21 @@ function buildStorageKey(patientId: string, imageId: string, fileName: string): 
   return `patients/${patientId}/${imageId}-${slug(fileName) || 'image'}`;
 }
 
+/**
+ * An image or drawing made for a visit (S07) is part of that visit's record: once
+ * the visit is signed it takes no new drawings and the existing ones are locked.
+ * Pass `patientId` to also check the visit belongs to that patient.
+ */
+async function assertVisitOpen(encounterId: string, patientId?: string) {
+  const enc = await prisma.encounter.findUnique({
+    where: { id: encounterId },
+    select: { id: true, patientId: true, status: true },
+  });
+  if (!enc) throw notFound('Visit not found');
+  if (patientId && enc.patientId !== patientId) throw badRequest('Visit does not belong to the given patient');
+  if (enc.status === 'SIGNED') throw conflict('This visit is signed, so its drawings are locked');
+}
+
 export async function uploadImage(input: UploadInput) {
   if (!(ALLOWED_IMAGE_MIME_TYPES as readonly string[]).includes(input.mimeType)) {
     throw badRequest(`Unsupported image type: ${input.mimeType}`);
@@ -64,6 +79,11 @@ export async function uploadImage(input: UploadInput) {
     }
   }
 
+  if (input.diagramTemplate && !input.encounterId) {
+    throw badRequest('A drawing on an eye diagram must belong to a visit (encounterId)');
+  }
+  if (input.encounterId) await assertVisitOpen(input.encounterId, input.patientId);
+
   const imageId = `clim_${randomBytes(12).toString('base64url')}`;
   const storageKey = buildStorageKey(input.patientId, imageId, input.fileName);
 
@@ -78,6 +98,8 @@ export async function uploadImage(input: UploadInput) {
       id: imageId,
       patientId: input.patientId,
       appointmentId: input.appointmentId ?? null,
+      encounterId: input.encounterId ?? null,
+      diagramTemplate: input.diagramTemplate ?? null,
       uploadedById: input.uploadedById,
       storageKey,
       fileName: input.fileName,
@@ -103,6 +125,8 @@ export async function uploadImage(input: UploadInput) {
     metadata: {
       patientId: input.patientId,
       appointmentId: input.appointmentId ?? null,
+      encounterId: input.encounterId ?? null,
+      diagramTemplate: input.diagramTemplate ?? null,
       sizeBytes: input.bytes.byteLength,
       mimeType: input.mimeType,
     },
@@ -112,10 +136,11 @@ export async function uploadImage(input: UploadInput) {
 }
 
 export async function listImages(query: ImageListQuery) {
-  const { patientId, appointmentId, status, page, pageSize } = query;
+  const { patientId, appointmentId, encounterId, status, page, pageSize } = query;
   const where = {
     ...(patientId ? { patientId } : {}),
     ...(appointmentId ? { appointmentId } : {}),
+    ...(encounterId ? { encounterId } : {}),
     status,
   };
   const [items, total] = await Promise.all([
@@ -148,6 +173,7 @@ export async function updateCaption(id: string, caption: string | null, actor: {
   userRole: string | null;
 }) {
   const image = await getImage(id);
+  if (image.encounterId) await assertVisitOpen(image.encounterId);
   const updated = await prisma.clinicalImage.update({
     where: { id: image.id },
     data: { caption },
@@ -175,6 +201,7 @@ export async function softDeleteImage(id: string, actor: {
   userRole: string | null;
 }) {
   const image = await getImage(id);
+  if (image.encounterId) await assertVisitOpen(image.encounterId);
   await deleteObject(image.storageKey).catch(() => {
     // eslint-disable-next-line no-console
     console.warn(`S3 delete failed for ${image.storageKey}; continuing with soft-delete`);
@@ -208,6 +235,7 @@ export async function saveAnnotation(
   actor: { userId: string | null; userEmail: string | null; userRole: string | null },
 ) {
   const image = await getImage(imageId);
+  if (image.encounterId) await assertVisitOpen(image.encounterId);
   const latest = await prisma.imageAnnotation.findFirst({
     where: { clinicalImageId: image.id },
     orderBy: { version: 'desc' },

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600" role="img" aria-label="Fundus · Left eye (OS)">
+  <title>Fundus · Left eye (OS)</title>
+  <rect width="800" height="600" fill="white"/>
+  <g fill="none" stroke="#59636e" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" transform="translate(800 0) scale(-1 1)">
+    <circle cx="400" cy="288" r="224"/>
+    <ellipse cx="306" cy="283" rx="27" ry="34"/><ellipse cx="306" cy="283" rx="13" ry="21" stroke-width="2"/>
+    <circle cx="461" cy="291" r="10" stroke-dasharray="3 5" stroke-width="2"/>
+    <g stroke-width="3"><path d="M306 275 Q352 166 462 171 Q515 172 558 198M308 290 Q365 407 465 398 Q513 398 553 370M302 278 Q268 209 222 193M301 289 Q266 351 222 373"/><path d="M375 196 Q391 150 422 126M397 376 Q410 419 452 448" stroke-width="2"/></g>
+  </g>
+  <g fill="#38434d" font-family="sans-serif" text-anchor="middle">
+    <text x="400" y="565" font-size="24">Fundus · Left eye (OS)</text>
+    <text x="78" y="300" font-size="18">Temporal</text>
+    <text x="722" y="300" font-size="18">Nasal</text>
+  </g>
+</svg>

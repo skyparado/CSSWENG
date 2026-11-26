@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Arrow, Image as KonvaImage, Layer, Line, Stage, Text } from 'react-konva';
 import type Konva from 'konva';
+import type { DiagramTemplate } from '@clinic/schemas';
 import {
+  EYE_TEMPLATE_LABEL,
+  eyeTemplateUrl,
   imageApi,
   type AnnotationData,
   type ClinicalImage,
@@ -33,13 +36,41 @@ const COLORS = [
 
 type Tool = 'pen' | 'arrow' | 'text';
 
+/** Flatten the loaded diagram to a PNG so it can be stored as the image the layers sit on. */
+function rasterize(el: HTMLImageElement): Promise<Blob> {
+  const canvas = document.createElement('canvas');
+  canvas.width = el.naturalWidth;
+  canvas.height = el.naturalHeight;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return Promise.reject(new Error('Could not prepare the diagram.'));
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(el, 0, 0);
+  return new Promise((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not prepare the diagram.'))), 'image/png'),
+  );
+}
+
+/**
+ * Open with an `imageId` to draw on an existing image. Open with `template` and
+ * `encounterId` (and no imageId) to start a drawing on a blank eye diagram from
+ * S07: nothing is stored until the first save, which clones the diagram into a
+ * clinical image linked to that visit and saves the first layer on it. If the
+ * visit already has a drawing on that diagram, that one opens instead, so the
+ * doctor never ends up with two copies.
+ */
 export default function ImageAnnotator({
   patientId,
   imageId,
+  encounterId,
+  template,
 }: {
   patientId: string;
-  imageId: string;
+  imageId?: string;
+  encounterId?: string;
+  template?: DiagramTemplate;
 }) {
+  const [currentId, setCurrentId] = useState<string | undefined>(imageId);
   const [image, setImage] = useState<ClinicalImage | undefined>();
   const [bitmap, setBitmap] = useState<HTMLImageElement | null>(null);
   const [layers, setLayers] = useState<ImageAnnotation[]>([]);
@@ -64,28 +95,55 @@ export default function ImageAnnotator({
   useEffect(() => {
     let cancelled = false;
 
+    /** Decode into a bitmap now and keep the bitmap rather than the (short-lived) URL. */
+    function decode(src: string) {
+      const el = new window.Image();
+      el.crossOrigin = 'anonymous';
+      el.onload = () => {
+        if (!cancelled) setBitmap(el);
+      };
+      el.onerror = () => {
+        if (!cancelled) setError('The image could not be loaded.');
+      };
+      el.src = src;
+    }
+
     async function load() {
       try {
+        let id = imageId;
+        if (!id) {
+          // A new drawing from S07. Reuse this visit's drawing on the same diagram if there is one.
+          const existing =
+            encounterId && template
+              ? (await imageApi.list(patientId, 'ACTIVE', encounterId)).items.find((i) => i.diagramTemplate === template)
+              : undefined;
+          if (!existing) {
+            if (!template) throw new Error('Choose an image to draw on.');
+            if (!cancelled) decode(eyeTemplateUrl(template));
+            return;
+          }
+          id = existing.id;
+          setCurrentId(id);
+          window.history.replaceState(null, '', `#/patients/${patientId}/images/${id}?visit=${encodeURIComponent(encounterId!)}`);
+        }
+
         const [meta, link, saved] = await Promise.all([
-          imageApi.get(imageId),
-          imageApi.downloadUrl(imageId),
-          imageApi.listAnnotations(imageId),
+          imageApi.get(id),
+          imageApi.downloadUrl(id),
+          imageApi.listAnnotations(id),
         ]);
         if (cancelled) return;
         setImage(meta);
         setLayers(saved.items);
+        // A diagram drawn from S07 reopens with its latest drawing on it, ready to add to.
+        const latest = saved.items[0];
+        if (meta.diagramTemplate && latest && Array.isArray(latest.konvaData?.shapes)) {
+          setShapes(latest.konvaData.shapes);
+          setBasedOn(latest.version);
+        }
 
-        // The presigned link is short-lived, so decode it into a bitmap now
-        // and keep the bitmap rather than the URL.
-        const el = new window.Image();
-        el.crossOrigin = 'anonymous';
-        el.onload = () => {
-          if (!cancelled) setBitmap(el);
-        };
-        el.onerror = () => {
-          if (!cancelled) setError('The image could not be loaded from storage.');
-        };
-        el.src = link.url;
+        // The presigned link is short-lived, so decode it into a bitmap now.
+        decode(link.url);
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Could not open this image.');
@@ -97,7 +155,7 @@ export default function ImageAnnotator({
     return () => {
       cancelled = true;
     };
-  }, [imageId]);
+  }, [imageId, patientId, encounterId, template]);
 
   const scale = bitmap ? Math.min(1, MAX_DISPLAY_WIDTH / bitmap.naturalWidth) : 1;
   const displayWidth = bitmap ? bitmap.naturalWidth * scale : 0;
@@ -202,8 +260,26 @@ export default function ImageAnnotator({
         height: bitmap.naturalHeight,
         shapes,
       };
-      const saved = await imageApi.saveAnnotation(imageId, data);
-      const refreshed = await imageApi.listAnnotations(imageId);
+      let id = currentId;
+      if (!id) {
+        // First save of a new diagram drawing: clone the blank diagram into a visit-linked image.
+        if (!template || !encounterId) throw new Error('Choose an image to draw on.');
+        const png = await rasterize(bitmap);
+        const created = await imageApi.upload({
+          patientId,
+          file: new File([png], `${template.toLowerCase().replace('_', '-')}.png`, { type: 'image/png' }),
+          caption: EYE_TEMPLATE_LABEL[template],
+          encounterId,
+          diagramTemplate: template,
+        });
+        id = created.id;
+        setCurrentId(id);
+        setImage(created);
+        // Reopening this page now opens the saved drawing rather than starting another.
+        window.history.replaceState(null, '', `#/patients/${patientId}/images/${id}?visit=${encodeURIComponent(encounterId)}`);
+      }
+      const saved = await imageApi.saveAnnotation(id, data);
+      const refreshed = await imageApi.listAnnotations(id);
       setLayers(refreshed.items);
       setBasedOn(saved.version);
       setNotice(`Saved as version ${saved.version}. The image itself is unchanged.`);
@@ -219,10 +295,22 @@ export default function ImageAnnotator({
   return (
     <>
       <p className="crumbs">
-        <a href={`#/patients/${patientId}/images`}>Clinical Images</a> / Draw
+        {encounterId ? (
+          <a href={`#/patients/${patientId}/visits/${encounterId}`}>Consultation note</a>
+        ) : (
+          <a href={`#/patients/${patientId}/images`}>Clinical Images</a>
+        )}{' '}
+        / Draw
       </p>
 
-      <h1>{image?.caption || image?.fileName || 'Image'}</h1>
+      <h1>{image?.caption || image?.fileName || (template ? EYE_TEMPLATE_LABEL[template] : 'Image')}</h1>
+      {encounterId && (
+        <p>
+          <a className="btn" href={`#/patients/${patientId}/visits/${encounterId}`}>
+            ← Back to consultation note
+          </a>
+        </p>
+      )}
       <p className="muted">
         Drawings save as a new layer. The uploaded image is never overwritten,
         so every earlier version stays available.
