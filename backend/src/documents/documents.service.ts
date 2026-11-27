@@ -31,9 +31,26 @@ export function htmlFor(input: DocumentRequestCreate, signatureDataUri?: string)
  * Fill the letterhead, patient name and prescriber from stored records, never
  * from what the client sent. The prescriber is always the signed-in Doctor.
  */
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const to12h = (hhmm: string) => {
+  const [h, m] = hhmm.split(':').map(Number);
+  return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+};
+
+/** "Mon 1:00 PM to 4:00 PM; Thu 10:00 AM to 12:00 PM", or undefined when the clinic has no hours set. */
+export function formatClinicSchedule(
+  rows: Array<{ dayOfWeek: number; openTime: string; closeTime: string }> | undefined,
+): string | undefined {
+  if (!rows?.length) return undefined;
+  return [...rows]
+    .sort((a, b) => a.dayOfWeek - b.dayOfWeek || a.openTime.localeCompare(b.openTime))
+    .map((r) => `${DAY_NAMES[r.dayOfWeek]} ${to12h(r.openTime)} to ${to12h(r.closeTime)}`)
+    .join('; ');
+}
+
 export async function withClinicLetterhead(input: DocumentRequestCreate, userId: string): Promise<DocumentRequestCreate> {
   const [clinic, patient, doctor] = await Promise.all([
-    prisma.clinic.findUnique({ where: { id: input.clinicId } }),
+    prisma.clinic.findUnique({ where: { id: input.clinicId }, include: { schedules: true } }),
     prisma.patient.findUnique({ where: { id: input.patientId }, select: { firstName: true, lastName: true } }),
     prisma.user.findUnique({ where: { id: userId }, select: { fullName: true } }),
   ]);
@@ -45,6 +62,8 @@ export async function withClinicLetterhead(input: DocumentRequestCreate, userId:
   input.payload.prescriberName = doctor.fullName;
   input.payload.clinicName = clinic.name;
   input.payload.clinicAddress = clinic.address ?? undefined;
+  input.payload.clinicPhone = clinic.phone ?? undefined;
+  input.payload.clinicSchedule = formatClinicSchedule(clinic.schedules);
   return input;
 }
 

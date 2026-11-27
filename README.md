@@ -194,3 +194,7 @@ server-side encryption (`backend/src/storage/s3.ts`).
   in `backend/prisma/schema.prisma` so this branch migrates in isolation. Keep
   their `id` fields stable when you replace them.
 - **Data dictionary:** send Prisma model blocks to the Analyst / QA 1 as you add them.
+
+## Deployment and handover
+
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Render and local setup, secrets, email, the demo dataset and rebuilding the free database (`scripts/rebuild-demo-db.sh`).

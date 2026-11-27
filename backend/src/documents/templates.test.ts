@@ -52,4 +52,37 @@ describe('document templates', () => {
     expect(html).toContain('Diplomate, Philippine Board of Ophthalmology');
     expect(html).toContain('advised to rest');
   });
+
+  it('prints PTR and S2 numbers, contact number and clinic hours when given', () => {
+    const html = renderPrescriptionHtml({
+      patientName: 'Maria Santos',
+      clinicName: 'UERM',
+      clinicPhone: '(02) 8555-0100',
+      clinicSchedule: 'Mon 1:00 PM to 4:00 PM',
+      prescriberName: 'Angeline Pacio, MD',
+      prescriberLicense: '0123456',
+      prescriberPtr: 'PTR-778899',
+      prescriberS2: 'S2-445566',
+      issuedOn: new Date('2026-01-10T00:00:00Z'),
+      items: [{ drug: 'Timolol', dosage: '1 drop', frequency: 'BID', duration: '30 days' }],
+    });
+    expect(html).toContain('Tel. (02) 8555-0100');
+    expect(html).toContain('Clinic hours: Mon 1:00 PM to 4:00 PM');
+    expect(html).toContain('PTR No. PTR-778899');
+    expect(html).toContain('S2 No. S2-445566');
+  });
+
+  it('leaves the new lines out when the values are missing', () => {
+    const html = renderMedicalCertificateHtml({
+      patientName: 'Maria Santos',
+      clinicName: 'UERM',
+      prescriberName: 'Angeline Pacio, MD',
+      issuedOn: new Date('2026-01-10T00:00:00Z'),
+      diagnosis: 'Conjunctivitis',
+    });
+    expect(html).not.toContain('PTR No.');
+    expect(html).not.toContain('S2 No.');
+    expect(html).not.toContain('Tel.');
+    expect(html).not.toContain('Clinic hours');
+  });
 });

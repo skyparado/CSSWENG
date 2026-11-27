@@ -35,4 +35,4 @@ RUN npm run prisma:generate --workspace backend \
 ENV NODE_ENV=production PORT=4000
 EXPOSE 4000
 USER node
-CMD ["sh", "-c", "npm run prisma:migrate:deploy --workspace backend && node backend/dist/index.js"]
+CMD ["npm", "run", "start:render", "--workspace", "backend"]
