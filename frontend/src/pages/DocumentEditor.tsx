@@ -13,9 +13,11 @@ type Fields = {
   restFrom: string;
   restTo: string;
   license: string;
+  ptr: string;
+  s2: string;
 };
 const blankItem: Item = { drug: '', dosage: '', frequency: '', duration: '', notes: '' };
-const blank: Fields = { items: [{ ...blankItem }], diagnosis: '', recommendation: '', restFrom: '', restTo: '', license: '' };
+const blank: Fields = { items: [{ ...blankItem }], diagnosis: '', recommendation: '', restFrom: '', restTo: '', license: '', ptr: '', s2: '' };
 
 /** Common ophthalmic medicines offered in the medicine field (free text is still allowed). */
 const COMMON_DRUGS = [
@@ -93,6 +95,8 @@ export default function DocumentEditor() {
           restFrom: ymd(p.restFromDate as string | undefined),
           restTo: ymd(p.restToDate as string | undefined),
           license: String(p.prescriberLicense ?? ''),
+          ptr: String(p.prescriberPtr ?? ''),
+          s2: String(p.prescriberS2 ?? ''),
         });
       }
     }, (e: Error) => setError(e.message));
@@ -163,7 +167,7 @@ export default function DocumentEditor() {
       list.map((a) => ({ drug, message: a.message, reason: acks[drug]?.reason || undefined })),
     ),
     ...(type === 'PRESCRIPTION'
-      ? { type, payload: { ...common, items: items.map((it) => ({ ...it, notes: it.notes || undefined })) } }
+      ? { type, payload: { ...common, prescriberPtr: fields.ptr || undefined, prescriberS2: fields.s2 || undefined, items: items.map((it) => ({ ...it, notes: it.notes || undefined })) } }
       : {
           type,
           payload: {
@@ -348,6 +352,18 @@ export default function DocumentEditor() {
               <label htmlFor="license">License No.</label>
               <input id="license" value={fields.license} onChange={(e) => set({ license: e.target.value })} />
             </div>
+            {type === 'PRESCRIPTION' && (
+              <>
+                <div>
+                  <label htmlFor="s2">S2 No.</label>
+                  <input id="s2" value={fields.s2} onChange={(e) => set({ s2: e.target.value })} />
+                </div>
+                <div>
+                  <label htmlFor="ptr">PTR No.</label>
+                  <input id="ptr" value={fields.ptr} onChange={(e) => set({ ptr: e.target.value })} />
+                </div>
+              </>
+            )}
           </div>
           <label htmlFor="signature-file">Signature image (PNG or JPEG)</label>
           {signatureUrl ? (
