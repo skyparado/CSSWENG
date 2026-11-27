@@ -39,7 +39,7 @@ export function auditMiddleware(
   const sessionUser = req.session?.user;
   const snapshot = {
     method: req.method,
-    path: originalUrl,
+    path: originalUrl.replace(/(\/tablet-intake\/tablet\/)\w[\w-]*/g, '$1[token]'),
     ipAddress: req.ip ?? null,
     userAgent: req.get('user-agent') ?? null,
     userId: sessionUser?.userId ?? null,

@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { prisma } from '../prisma.js';
+import { isDevelopmentAccount } from './auth.service.js';
 import { HttpError } from '../http.js';
 
 /**
@@ -45,10 +46,10 @@ export async function refreshSessionUser(
   try {
     const user = await prisma.user.findUnique({
       where: { id: sessionUser.userId },
-      select: { id: true, status: true, role: true, mustResetPassword: true },
+      select: { id: true, email: true, status: true, role: true, mustResetPassword: true },
     });
 
-    if (!user || user.status !== 'ACTIVE' || user.role !== sessionUser.role) {
+    if (!sessionUser.mfaVerified || !user || isDevelopmentAccount(user.email) || user.status !== 'ACTIVE' || user.role !== sessionUser.role) {
       // Account is gone, no longer active, or the role was changed. Kill
       // the session before responding so the stale cookie is useless.
       req.session.destroy(() => undefined);

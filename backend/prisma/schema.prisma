@@ -161,6 +161,10 @@ model Encounter {
   labResults      LabResult[]
   followUps       FollowUp[]
 
+  images          ClinicalImage[]
+  walkInKey       String?        @unique
+
+  @@unique([id, patientId])
   @@index([patientId, visitDate])
   @@index([clinicId, visitDate])
 }
@@ -298,6 +302,9 @@ model User {
   email               String     @unique
   fullName            String
   passwordHash        String
+  /// Base32 authenticator secret, encrypted with the application's field key.
+  mfaSecretEnc        String?
+  mfaLastStep         Int?
   role                UserRole   @default(SECRETARY)
   status              UserStatus @default(PENDING)
   // Role the account asked for at sign-up. The doctor may grant a different
@@ -867,7 +874,10 @@ model Allergy {
   id           String @id @default(cuid())
   patientId    String
   clinicId     String
+  /// @encrypted
   allergenName String
+  intakeSessionId String?
+  intakeSession TabletIntakeSession? @relation(fields: [intakeSessionId], references: [id], onDelete: SetNull)
 
   /// @encrypted
   reaction      String?
@@ -942,9 +952,15 @@ model ClinicalImage {
   id            String  @id @default(cuid())
   patientId     String
   appointmentId String?
+  visitId       String?
+  walkInKey     String?
+  clinicId      String?
+  templateType  String?
+  commitKey     String? @unique
   uploadedById  String?
   // S3 object key, unique across the bucket.
   storageKey    String  @unique
+  /// @encrypted
   fileName      String
   mimeType      String
   sizeBytes     Int
@@ -960,7 +976,10 @@ model ClinicalImage {
   appointment Appointment?      @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
   uploadedBy  User?             @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
   annotations ImageAnnotation[]
+  visit       Encounter? @relation(fields: [visitId, patientId], references: [id, patientId], onDelete: Restrict, onUpdate: NoAction)
 
+  @@index([visitId])
+  @@index([walkInKey, patientId])
   @@index([patientId, createdAt])
   @@index([appointmentId])
   @@index([status])
@@ -1016,6 +1035,8 @@ model TabletIntakeSession {
   startedBySecretaryId String?
   // High-entropy opaque token (base64url of 32 random bytes). Kept unique so
   // leaked tokens cannot collide with newly minted ones.
+  matchPatientId       String?
+  matchDecision        String?
   token                String             @unique
   status               TabletIntakeStatus @default(ACTIVE)
   expiresAt            DateTime
@@ -1027,6 +1048,7 @@ model TabletIntakeSession {
   startedBySecretary User?                   @relation("TabletIntakeSessionStarter", fields: [startedBySecretaryId], references: [id], onDelete: SetNull)
   submission         TabletIntakeSubmission?
   consents           PatientConsent[]
+  reportedAllergies   Allergy[]
 
   @@index([status])
   @@index([clinicId, createdAt])
@@ -1051,6 +1073,7 @@ model TabletIntakeSubmission {
   reviewStatus IntakeReviewStatus @default(PENDING_REVIEW)
   reviewedById String?
   reviewedAt   DateTime?
+  /// @encrypted
   reviewNotes  String?
 
   session    TabletIntakeSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)

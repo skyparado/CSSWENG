@@ -32,7 +32,7 @@ function nextMobile(): string {
 function payload(overrides: Record<string, unknown> = {}) {
   return {
     firstName: 'Review',
-    lastName: `Case${counter}`,
+    lastName: `Case${counter}-${clinicId}`,
     dateOfBirth: '1975-02-03',
     sex: 'FEMALE' as const,
     mobileNumber: nextMobile(),
@@ -81,6 +81,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await drainAuditWrites();
+  await prisma.patientConsent.deleteMany({ where: { intakeSessionId: { in: createdSessionIds } } });
   await prisma.tabletIntakeSubmission
     .deleteMany({ where: { sessionId: { in: createdSessionIds } } })
     .catch(() => undefined);
@@ -119,7 +120,11 @@ describe('review queue', () => {
       .expect(200);
 
     expect(res.body.rawPayload.firstName).toBe('Review');
-    expect(res.body.rawPayload.allergies).toBe('Penicillin');
+    expect(res.body.rawPayload.allergies).toBeUndefined();
+    const clinical = await doctor.agent.get(`/api/tablet-intake/submissions/${submissionId}`).expect(200);
+    expect(clinical.body.rawPayload.allergies).toBe('Penicillin');
+    const stored = await prisma.tabletIntakeSubmission.findUniqueOrThrow({ where: { id: submissionId } });
+    expect(stored.rawPayload).toMatch(/^v1:/);
     expect(res.body.reviewStatus).toBe('PENDING_REVIEW');
   });
 

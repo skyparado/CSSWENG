@@ -1,3 +1,4 @@
+import rateLimit from 'express-rate-limit';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express, { type Express } from 'express';
@@ -57,6 +58,13 @@ export function createApp(): Express {
     }),
   );
 
+  app.use('/api', (req, res, next) => {
+    if (env.NODE_ENV === 'production' && !req.secure) return res.status(403).json({ error: 'HTTPS is required' });
+    next();
+  });
+  app.use('/api', rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: 'draft-7', legacyHeaders: false,
+    skip: () => env.NODE_ENV === 'test' }));
+  app.use('/api', (_req, res, next) => { res.set('Cache-Control', 'private, no-store'); next(); });
   app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
 
   /*

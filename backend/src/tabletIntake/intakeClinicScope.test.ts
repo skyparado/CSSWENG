@@ -1,3 +1,4 @@
+import { signInStaff } from '../test-utils/authAgent.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import supertest from 'supertest';
 import { createApp } from '../app.js';
@@ -34,7 +35,7 @@ function payload() {
   counter += 1;
   return {
     firstName: 'Scope',
-    lastName: `Case${counter}`,
+    lastName: `Case${counter}-${mine}`,
     dateOfBirth: '1969-04-02',
     sex: 'MALE' as const,
     mobileNumber: `+6391766${String(10_000 + counter).slice(0, 5)}`,
@@ -101,15 +102,13 @@ beforeAll(async () => {
   secretaryId = user.id;
 
   secretary = supertest.agent(app);
-  await secretary
-    .post('/api/auth/login')
-    .send({ username: secretaryUsername, password: SECRETARY_PASSWORD })
-    .expect(200);
+  await signInStaff(secretary, secretaryUsername, SECRETARY_PASSWORD);
   await secretary.post('/api/auth/select-clinic').send({ clinicId: mine }).expect(200);
 });
 
 afterAll(async () => {
   await drainAuditWrites();
+  await prisma.patientConsent.deleteMany({ where: { intakeSessionId: { in: createdSessionIds } } });
   await prisma.tabletIntakeSubmission
     .deleteMany({ where: { sessionId: { in: createdSessionIds } } })
     .catch(() => undefined);
@@ -258,10 +257,7 @@ describe('the doctor is not restricted', () => {
 describe('with no active clinic selected', () => {
   it('refuses the staff routes outright', async () => {
     const fresh = supertest.agent(app);
-    await fresh
-      .post('/api/auth/login')
-      .send({ username: secretaryUsername, password: SECRETARY_PASSWORD })
-      .expect(200);
+    await signInStaff(fresh, secretaryUsername, SECRETARY_PASSWORD);
     // Signed in, but no select-clinic call yet.
     await fresh.get('/api/tablet-intake/submissions').query({ clinicId: mine }).expect(400);
     await fresh.post('/api/tablet-intake/sessions').send({ clinicId: mine }).expect(400);

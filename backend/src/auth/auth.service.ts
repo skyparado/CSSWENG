@@ -20,7 +20,8 @@ const FAILED_WINDOW_MS = 15 * 60 * 1000;
 export type AuthFailureReason =
   | 'unknown_username'
   | 'account_not_active'
-  | 'wrong_password';
+  | 'wrong_password'
+  | 'wrong_code';
 
 /**
  * 401 with "Invalid credentials" — same message for unknown email, wrong
@@ -56,6 +57,11 @@ export class InvalidCredentialsError extends HttpError {
     this.accountStatus = opts.accountStatus ?? null;
     this.lockedNow = opts.lockedNow ?? false;
   }
+}
+
+export function isDevelopmentAccount(email: string) {
+  return (process.env.NODE_ENV === 'production' || process.env.RENDER === 'true') &&
+    ['doctor@pacio.clinic.local', 'secretary@pacio.clinic.local', 'applicant@pacio.clinic.local'].includes(email.toLowerCase());
 }
 
 /** Hash a plaintext password with argon2id (explicit, not relying on defaults). */
@@ -109,7 +115,7 @@ export async function authenticate(
 
   // Non-ACTIVE: PENDING, LOCKED, REVOKED, REJECTED all return the same error.
   // Still run the real verify so timing matches the ACTIVE+wrong-password path.
-  if (user.status !== 'ACTIVE') {
+  if (user.status !== 'ACTIVE' || isDevelopmentAccount(user.email)) {
     await argon2.verify(user.passwordHash, password).catch(() => undefined);
     throw new InvalidCredentialsError({
       attemptsRemaining: null,
@@ -132,17 +138,7 @@ export async function authenticate(
     });
   }
 
-  // Success: clear counter, note last login. LOCKED is never auto-cleared
-  // here — only POST /api/users/:id/unlock (doctor) clears it.
-  await prisma.user.update({
-    where: { id: user.id },
-    data: {
-      failedLoginAttempts: 0,
-      firstFailedLoginAt: null,
-      lastLoginAt: new Date(),
-    },
-  });
-
+  // The MFA verification transaction records a successful sign-in.
   return user;
 }
 
@@ -153,7 +149,7 @@ export async function authenticate(
  * attempt is the one that locked the account, so the caller can write the
  * lockout audit entry exactly once.
  */
-async function recordFailedAttempt(
+export async function recordFailedAttempt(
   userId: string,
 ): Promise<{ attempts: number; lockedNow: boolean }> {
   return prisma.$transaction(async (tx) => {
@@ -173,6 +169,7 @@ async function recordFailedAttempt(
       throw new Error(`User ${userId} vanished mid-update`);
     }
     const row = rows[0];
+    if (row.status !== 'ACTIVE') return { attempts: row.failedLoginAttempts, lockedNow: false };
 
     const now = new Date();
     const withinWindow =
@@ -181,8 +178,7 @@ async function recordFailedAttempt(
 
     const nextAttempts = withinWindow ? row.failedLoginAttempts + 1 : 1;
     const nextFirstFailed = withinWindow ? row.firstFailedLoginAt : now;
-    const shouldLock =
-      nextAttempts >= MAX_FAILED_ATTEMPTS && row.status !== 'LOCKED';
+    const shouldLock = nextAttempts >= MAX_FAILED_ATTEMPTS;
 
     await tx.user.update({
       where: { id: userId },

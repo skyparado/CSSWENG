@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { PATIENT_ID, SIGNATURE_PNG, UERM_ID, USERS } from './helpers';
+import { PATIENT_ID, SIGNATURE_PNG, UERM_ID, USERS, fixtureCode } from './helpers';
 
 // SRS §3.5: every prescription / medical certificate PDF renders within 5 seconds.
 const LIMIT_MS = 5_000;
@@ -25,7 +25,10 @@ const payloads = {
 
 test.describe('PDF generation time', () => {
   test.beforeEach(async ({ request }) => {
-    await request.post('/api/auth/login', { data: USERS.DOCTOR });
+    const challenge = await request.post('/api/auth/login', { data: USERS.DOCTOR });
+    expect(challenge.status()).toBe(202);
+    const code = await fixtureCode(USERS.DOCTOR.username, (await challenge.json()).setupKey);
+    expect((await request.post('/api/auth/mfa', { data: { code } })).status()).toBe(200);
     await request.put('/api/documents/signature', { headers: { 'Content-Type': 'image/png' }, data: SIGNATURE_PNG });
   });
 

@@ -220,6 +220,7 @@ export default function Medications({ patientId }: { patientId: string }) {
             {allergies.data.items.map((a) => (
               <div key={a.id} className="allergy" data-testid="allergy-row">
                 <strong>{a.allergenName}</strong>
+                {a.intakeSessionId && <span className="muted"> · Patient-reported at intake</span>}
                 <br />
                 <span className="muted">
                   Reaction: {a.reaction || 'not recorded'}

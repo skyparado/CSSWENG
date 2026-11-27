@@ -1,3 +1,4 @@
+import type { AuditLog } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { computeEntryHash, type HashableEntry } from './hashChain.js';
 import { AuditActions } from './actions.js';
@@ -79,6 +80,10 @@ export async function verifyChain(): Promise<{
     orderBy: { createdAt: 'asc' },
   });
 
+  return verifyEntries(entries);
+}
+
+export function verifyEntries(entries: AuditLog[]) {
   // After a retention purge (maintenance/purge.ts) the oldest surviving entry
   // points at a deleted one. The purge records the last deleted entry's hash in
   // its own audit entry, so the chain is accepted from that anchor, and only

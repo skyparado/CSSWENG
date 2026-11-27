@@ -38,12 +38,14 @@ test.describe('S10 medications and allergies', () => {
 
   test('a Doctor reviews individual tablet medicines and acknowledges conflicts before adding one', async ({ page }) => {
     const session = await page.request.post('/api/tablet-intake/sessions', { data: { clinicId: UERM_ID } });
-    const { token } = await session.json();
+    const { token, id } = await session.json();
     const submission = await page.request.post(`/api/tablet-intake/tablet/${token}/submit`, { data: {
       firstName: patient.firstName, lastName: patient.lastName, dateOfBirth: '1980-05-05', sex: 'FEMALE',
       mobileNumber: '0917 555 1234', medications: 'Amoxicillin, Eye drops', consents: { treatment: true, dataPrivacy: true },
     } });
     expect(submission.status()).toBe(201);
+    // The patient already exists, so staff must confirm the match before the tablet medicines show (#34).
+    await page.request.post(`/api/tablet-intake/sessions/${id}/match`, { data: { decision: 'EXISTING' } });
     await page.reload();
     const panel = page.getByRole('region', { name: 'Tablet-reported medicines' });
     await expect(panel.getByRole('button', { name: 'Dismiss' })).toHaveCount(2);

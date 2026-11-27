@@ -1,3 +1,4 @@
+import { clearAuditLog } from '../test-utils/clearAuditLog.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { prisma } from '../prisma.js';
 import { verifyChain, writeAudit } from '../audit/audit.service.js';
@@ -6,8 +7,7 @@ import { purgeAuditLog } from './purge.js';
 
 /**
  * Integration test (real Postgres) for the audit retention purge (SDD 7.3).
- * It empties the AuditLog table first (TRUNCATE is not blocked by the
- * append-only row triggers), so it is meant for the test database only.
+ * It empties the AuditLog table first via the test database owner, so it is meant for the test database only.
  */
 const YEARS = 365.25 * 86_400_000;
 
@@ -26,7 +26,7 @@ async function insertAged(ageYears: number, previousHash: string, tag: string) {
 let oldestHash = '';
 
 beforeAll(async () => {
-  await prisma.$executeRaw`TRUNCATE TABLE "AuditLog"`;
+  await clearAuditLog();
   // Three entries well past five years, then two recent ones through the normal writer.
   let h = '';
   h = await insertAged(6.5, h, 'old-1');
@@ -93,7 +93,7 @@ describe('audit retention (real database)', () => {
 
   it('still detects tampering after a purge: an entry pointing at an unrecorded hash is a break', async () => {
     // Drop the purge record's protection by pointing the chain somewhere nobody recorded.
-    await prisma.$executeRaw`TRUNCATE TABLE "AuditLog"`;
+    await clearAuditLog();
     await insertAged(0.01, 'f'.repeat(64), 'orphan');
     const result = await verifyChain();
     expect(result.ok).toBe(false);
@@ -101,7 +101,7 @@ describe('audit retention (real database)', () => {
   });
 
   it('does nothing when there is nothing past retention', async () => {
-    await prisma.$executeRaw`TRUNCATE TABLE "AuditLog"`;
+    await clearAuditLog();
     await writeAudit({
       userId: null, userEmail: null, userRole: 'SYSTEM', action: 'LOGIN_SUCCESS', resourceType: null,
       resourceId: 'fresh', method: null, path: null, statusCode: null, ipAddress: null, userAgent: null, metadata: null,

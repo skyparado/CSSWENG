@@ -38,8 +38,7 @@ npm run dev:frontend    # http://localhost:5173
 ```
 
 Then open http://localhost:5173 and sign in with a seeded account
-(`doctor@pacio.clinic.local` / `DoctorPass123!` or
-`secretary@pacio.clinic.local` / `SecretaryPass123!`).
+using the usernames printed by the local seed. Complete authenticator enrollment on first sign-in.
 
 Email the app sends (documents, reminders) goes to **Mailpit**, a local inbox at
 http://localhost:8025 (`EMAIL_PROVIDER=smtp`, `SMTP_URL=smtp://localhost:1025`).
@@ -168,9 +167,8 @@ managed PostgreSQL and Key Value (Redis). To deploy: Render dashboard →
 New → Blueprint → this repository, then fill in the values it asks for
 (`CORS_ORIGIN` = the site URL; the `S3_*` settings of an S3-compatible bucket
 such as AWS S3 or Cloudflare R2; `SMTP_URL` and `EMAIL_FROM` of an email
-provider's SMTP relay). After the first deploy, run the seed once from the
-Render shell (`npm run db:seed --workspace @clinic/backend`) or create the
-real accounts and clinics. Render uses `/health/ready` as its health check.
+provider's SMTP relay). Provision demonstration accounts using the private environment inputs in the
+[Developer 4 demo and device guide](DEV4-DEMO.md). The development seed is restricted to local use. Render uses `/health/ready` as its health check.
 
 ### Uptime monitor
 

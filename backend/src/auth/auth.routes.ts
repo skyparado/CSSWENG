@@ -1,4 +1,7 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
+import { z } from 'zod';
+import { encrypt, decrypt } from '../lib/fieldCrypto.js';
+import { bindPassword, newAuthenticatorKey, matchingStep } from './totp.js';
 import rateLimit from 'express-rate-limit';
 import {
   changePasswordSchema,
@@ -12,7 +15,7 @@ import { asyncHandler, validate, HttpError } from '../http.js';
 import { requireAuth } from './middleware.js';
 import { authorizedClinics } from '../clinics/clinics.routes.js';
 import { prisma } from '../prisma.js';
-import { authenticate, InvalidCredentialsError } from './auth.service.js';
+import { authenticate, InvalidCredentialsError, isDevelopmentAccount, recordFailedAttempt } from './auth.service.js';
 import { changeOwnPassword } from '../users/users.service.js';
 import { recordEvent } from '../audit/record.js';
 import { AuditActions } from '../audit/actions.js';
@@ -97,47 +100,61 @@ authRouter.post(
       throw err;
     }
 
-    // Rotate the session id after a successful login to prevent session
-    // fixation (a pre-login session id must not become a logged-in id).
-    req.session.regenerate((regenErr) => {
-      if (regenErr) return res.status(500).json({ error: 'Session error' });
-
-      req.session.user = {
-        userId: user.id,
-        role: user.role,
-      };
-      req.session.save((saveErr) => {
-        if (saveErr) return res.status(500).json({ error: 'Session error' });
-        const payload: AuthUser = {
-          id: user.id,
-          username: user.username,
-          email: user.email,
-          fullName: user.fullName,
-          role: user.role,
-          mustResetPassword: user.mustResetPassword,
-        };
-        recordEvent(req, res, {
-          action: AuditActions.LOGIN_SUCCESS,
-          resourceType: 'User',
-          resourceId: user.id,
-          statusCode: 200,
-          actor: {
-            userId: user.id,
-            userEmail: user.email,
-            userRole: user.role,
-          },
-        });
-        res.json({ user: payload });
-      });
-    });
+    await regenerate(req);
+    const secret = user.mfaSecretEnc ? undefined : newAuthenticatorKey();
+    req.session.pendingMfa = { userId: user.id, role: user.role, passwordBinding: bindPassword(user.passwordHash),
+      expiresAt: Date.now() + 5 * 60_000, enrollmentSecret: secret ? encrypt(secret) : undefined };
+    await persist(req);
+    recordEvent(req, res, { action: AuditActions.MFA_CHALLENGE, resourceType: 'User', resourceId: user.id, statusCode: 202 });
+    res.set('Cache-Control', 'no-store').status(202).json({ mfaRequired: true, ...(secret ? { setupKey: secret } : {}) });
   }),
 );
+
+const regenerate = (req: Request) => new Promise<void>((ok, fail) => req.session.regenerate(e => e ? fail(e) : ok()));
+const persist = (req: Request) => new Promise<void>((ok, fail) => req.session.save(e => e ? fail(e) : ok()));
+
+authRouter.post('/mfa', loginRateLimiter, validate(z.object({ code: z.string().regex(/^\d{6}$/) })), asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const pending = req.session.pendingMfa;
+  const expired = () => new HttpError(401, 'Sign in again to request a new verification code');
+  if (!pending || pending.expiresAt <= Date.now()) throw expired();
+  const user = await prisma.user.findUnique({ where: { id: pending.userId } });
+  if (!user || user.status !== 'ACTIVE' || user.role !== pending.role || isDevelopmentAccount(user.email) ||
+      bindPassword(user.passwordHash) !== pending.passwordBinding) throw expired();
+  // A second first-time login must never replace an authenticator already enrolled.
+  if (pending.enrollmentSecret && user.mfaSecretEnc) throw expired();
+  const encrypted = user.mfaSecretEnc ?? pending.enrollmentSecret;
+  if (!encrypted) throw expired();
+  const step = matchingStep(decrypt(encrypted), req.body.code);
+  if (step === null || (user.mfaLastStep !== null && step <= user.mfaLastStep)) {
+    const { attempts, lockedNow } = await recordFailedAttempt(user.id);
+    const event = { resourceType: 'User', resourceId: user.id, actor: { userId: user.id }, statusCode: 401 };
+    recordEvent(req, res, { ...event, action: AuditActions.LOGIN_FAILED, metadata: { reason: 'wrong_code' } });
+    if (lockedNow) recordEvent(req, res, { ...event, action: AuditActions.ACCOUNT_LOCKED, metadata: { trigger: 'failed_login_threshold' } });
+    return res.status(401).json({ error: 'Invalid or already used verification code', attemptsRemaining: Math.max(0, 5 - attempts) });
+  }
+  const verified = await prisma.user.updateMany({
+    where: { id: user.id, status: 'ACTIVE', role: user.role, passwordHash: user.passwordHash,
+      mfaSecretEnc: user.mfaSecretEnc, OR: [{ mfaLastStep: null }, { mfaLastStep: { lt: step } }] },
+    data: { mfaSecretEnc: encrypted, mfaLastStep: step, lastLoginAt: new Date(), failedLoginAttempts: 0, firstFailedLoginAt: null },
+  });
+  if (!verified.count) throw expired();
+  await regenerate(req);
+  req.session.user = { userId: user.id, role: user.role, mfaVerified: true };
+  await persist(req);
+  recordEvent(req, res, { action: AuditActions.LOGIN_SUCCESS, resourceType: 'User', resourceId: user.id,
+    actor: { userId: user.id, userEmail: user.email, userRole: user.role }, metadata: { mfa: true } });
+  const { id, username, email, fullName, role, mustResetPassword } = user;
+  res.json({ user: { id, username, email, fullName, role, mustResetPassword } });
+}));
 
 /** POST /api/auth/logout — destroy the session and clear the cookie. */
 authRouter.post(
   '/logout',
   asyncHandler(async (req, res) => {
     if (!req.session.user) {
+      await new Promise<void>((ok, fail) => req.session.destroy(e => e ? fail(e) : ok()));
+      res.clearCookie(env.SESSION_COOKIE_NAME, sessionCookieOptions());
       return res.status(204).end();
     }
     // Snapshot before destroy, otherwise there is no session left to read.
