@@ -30,7 +30,7 @@ function logRefusal(
     statusCode: reason === 'unauthenticated' ? 401 : 403,
     ipAddress: req.ip ?? null,
     userAgent: req.get('user-agent') ?? null,
-    metadata: { reason, requiredRoles },
+    metadata: { reason, requiredRoles, ...(sessionUser?.activeClinicId ? { clinicId: sessionUser.activeClinicId } : {}) },
   }).catch((err) => {
     // eslint-disable-next-line no-console
     console.error('access.refused audit write failed:', err);
@@ -54,7 +54,7 @@ function logRefusal(
  *                        the supervised clinic tablet, which holds a one-shot
  *                        session token in the URL and no credentials
  */
-const PUBLIC_EXACT = new Set(['/health', '/api/auth/login', '/api/auth/logout']);
+const PUBLIC_EXACT = new Set(['/health', '/api/auth/login', '/api/auth/mfa', '/api/auth/logout']);
 const PUBLIC_PREFIXES = ['/api/webhooks/', '/api/tablet-intake/tablet/'];
 
 /** True when the path is one of the few that may be reached anonymously. */

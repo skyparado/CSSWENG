@@ -39,10 +39,7 @@ const wrap = (fn: Handler) => (req: Request, res: Response, next: NextFunction) 
  * (see results/results.routes.ts).
  */
 export function createEncounterRouter(
-  db: Pick<
-    typeof import("../prisma.js").prisma,
-    "patient" | "appointment" | "encounter" | "clinicalNote" | "user" | "examFinding" | "labResult" | "followUp" | "problem" | "$transaction"
-  >,
+  db: Pick<typeof import("../prisma.js").prisma, "patient" | "appointment" | "encounter" | "clinicalNote" | "user" | "examFinding" | "labResult" | "followUp" | "problem" | "$transaction"> & Partial<Pick<typeof import("../prisma.js").prisma, "clinicalImage">>,
 ): Router {
   const router = Router();
 

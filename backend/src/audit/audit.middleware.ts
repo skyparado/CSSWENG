@@ -39,7 +39,7 @@ export function auditMiddleware(
   const sessionUser = req.session?.user;
   const snapshot = {
     method: req.method,
-    path: originalUrl,
+    path: originalUrl.replace(/(\/tablet-intake\/tablet\/)\w[\w-]*/g, '$1[token]'),
     ipAddress: req.ip ?? null,
     userAgent: req.get('user-agent') ?? null,
     userId: sessionUser?.userId ?? null,
@@ -64,7 +64,7 @@ export function auditMiddleware(
       statusCode: res.statusCode,
       ipAddress: snapshot.ipAddress,
       userAgent: snapshot.userAgent,
-      metadata: null,
+      metadata: sessionUser?.activeClinicId ? { clinicId: sessionUser.activeClinicId } : null,
     }).catch((err) => {
       // Avoid taking down the request path if the audit DB is unreachable.
       // eslint-disable-next-line no-console

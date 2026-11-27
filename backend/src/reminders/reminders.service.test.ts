@@ -9,7 +9,7 @@ const db = vi.hoisted(() => ({
   followUp: { findUnique: vi.fn(), updateMany: vi.fn(), findMany: vi.fn() },
   patientConsent: { findFirst: vi.fn() },
   outreachLog: { findFirst: vi.fn(), create: vi.fn(), aggregate: vi.fn(), count: vi.fn() },
-  reminderDelivery: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
+  reminderDelivery: { findUnique: vi.fn(), findFirst: vi.fn(), create: vi.fn(), updateMany: vi.fn(), update: vi.fn() },
   $queryRaw: vi.fn(),
   $transaction: vi.fn(),
 }));
@@ -21,6 +21,7 @@ import {
   findFollowUpsNeedingReminder,
   processReminder,
 } from './reminders.service.js';
+import { ProviderError } from './providers.js';
 import { StubSmsGateway } from './gateway.js';
 import type { Gateways } from './gateway.js';
 import { encrypt } from '../lib/fieldCrypto.js';
@@ -84,6 +85,12 @@ beforeEach(() => {
     const row = { id: `d${++store.seq}`, status: 'PENDING', providerMessageId: null, ...data };
     store.rows.set(data.idempotencyKey, row);
     return row;
+  });
+  db.reminderDelivery.updateMany.mockImplementation(async ({ where, data }) => {
+    const row = [...store.rows.values()].find((r) => r.id === where.id);
+    if (!row) return { count: 0 };
+    Object.assign(row, data);
+    return { count: 1 };
   });
   db.reminderDelivery.update.mockImplementation(async ({ where, data }) => {
     const row = [...store.rows.values()].find((r) => r.id === where.id);
@@ -256,33 +263,21 @@ describe('processReminder: successful delivery followed by a database failure', 
     expect(gw.sms.send).toHaveBeenCalledTimes(1);
   });
 
-  it('relies on the provider idempotency key when the database fails before the SENT row is saved', async () => {
-    const sms = new StubSmsGateway();
-    const sendSpy = vi.spyOn(sms, 'send');
-    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-    const gw = { sms, email: gateways().email } as unknown as Gateways;
+  it('awaits reconciliation when the provider accepts but saving SENT fails', async () => {
+    const gw = gateways();
     const job = { followUpId: 'f1', channel: 'SMS' as const };
     const opts = { isFinalAttempt: false, jobKey: 'job-9' };
-
-    // The provider accepts, but saving the SENT row fails: the row stays PENDING.
     db.reminderDelivery.update.mockRejectedValueOnce(new Error('connection lost'));
     await expect(processReminder(job, gw, opts)).rejects.toThrow('connection lost');
-    await processReminder(job, gw, opts);
-
-    // It is called again (we could not know), but with the SAME key, so a
-    // provider that honours idempotency delivers once and returns the same id.
-    expect(sendSpy).toHaveBeenCalledTimes(2);
-    const [first, second] = await Promise.all(sendSpy.mock.results.map((r) => r.value));
-    expect(sendSpy.mock.calls[0][0].idempotencyKey).toBe('job-9');
-    expect(sendSpy.mock.calls[1][0].idempotencyKey).toBe('job-9');
-    expect(first.providerMessageId).toBe(second.providerMessageId);
-    log.mockRestore();
+    expect(store.rows.get('job-9')).toMatchObject({ status: 'DISPATCHING' });
+    expect(await processReminder(job, gw, opts)).toEqual({ status: 'skipped', reason: 'AWAITING_CONFIRMATION' });
+    expect(gw.sms.send).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('processReminder: retries', () => {
   it('rethrows a gateway error so BullMQ retries, without logging yet', async () => {
-    const gw = gateways({ sms: { send: vi.fn().mockRejectedValue(new Error('gateway down')) } });
+    const gw = gateways({ sms: { send: vi.fn().mockRejectedValue(new ProviderError('test', 'gateway down')) } });
     await expect(
       processReminder({ followUpId: 'f1', channel: 'SMS' }, gw, { isFinalAttempt: false }),
     ).rejects.toThrow('gateway down');
@@ -292,7 +287,7 @@ describe('processReminder: retries', () => {
   it('reuses the same delivery row and key on every retry', async () => {
     const send = vi
       .fn()
-      .mockRejectedValueOnce(new Error('gateway down'))
+      .mockRejectedValueOnce(new ProviderError('test', 'gateway down'))
       .mockResolvedValueOnce({ providerMessageId: 'sms-1' });
     const gw = gateways({ sms: { send } });
     const job = { followUpId: 'f1', channel: 'SMS' as const };
@@ -307,7 +302,7 @@ describe('processReminder: retries', () => {
   });
 
   it('logs a FAILED attempt, then rethrows, on the final attempt', async () => {
-    const gw = gateways({ sms: { send: vi.fn().mockRejectedValue(new Error('gateway down')) } });
+    const gw = gateways({ sms: { send: vi.fn().mockRejectedValue(new ProviderError('test', 'gateway down')) } });
     await expect(
       processReminder({ followUpId: 'f1', channel: 'SMS' }, gw, {
         isFinalAttempt: true,
@@ -325,7 +320,7 @@ describe('processReminder: retries', () => {
   it('marks the task unreachable when failed attempts reach the limit', async () => {
     db.outreachLog.count.mockResolvedValue(3);
     db.followUp.updateMany.mockResolvedValue({ count: 1 });
-    const gw = gateways({ sms: { send: vi.fn().mockRejectedValue(new Error('down')) } });
+    const gw = gateways({ sms: { send: vi.fn().mockRejectedValue(new ProviderError('test', 'down')) } });
 
     await expect(
       processReminder({ followUpId: 'f1', channel: 'SMS' }, gw, { isFinalAttempt: true }),
@@ -375,7 +370,7 @@ describe('processReminder: consent and eligibility', () => {
   });
 
   it('stops retrying once consent is withdrawn between attempts, and cancels the pending delivery', async () => {
-    const send = vi.fn().mockRejectedValue(new Error('gateway down'));
+    const send = vi.fn().mockRejectedValue(new ProviderError('test', 'gateway down'));
     const gw = gateways({ sms: { send } });
     const job = { followUpId: 'f1', channel: 'SMS' as const };
     const opts = { isFinalAttempt: false, jobKey: 'job-4' };
@@ -452,7 +447,7 @@ describe('processReminder: consent and eligibility', () => {
 
 describe('findFollowUpsNeedingReminder', () => {
   it('asks only for open tasks of consenting patients with no reminder sent on the channel', async () => {
-    db.followUp.findMany.mockResolvedValue([{ id: 'f1' }, { id: 'f2' }]);
+    db.followUp.findMany.mockResolvedValue(['f1','f2'].map(id => ({ id, patientId: 'p1', reminderCycle: 0, deliveries: [], outreachLogs: [] })));
     const ids = await findFollowUpsNeedingReminder('SMS', new Date('2026-11-05T00:00:00Z'));
 
     expect(ids).toEqual(['f1', 'f2']);
@@ -465,9 +460,7 @@ describe('findFollowUpsNeedingReminder', () => {
       isGranted: true,
       withdrawnAt: null,
     });
-    expect(where.outreachLogs.none).toMatchObject({ channel: 'SMS', outcome: 'SENT' });
-    // Also excludes a reminder that went out but whose outreach log was never written.
-    expect(where.deliveries.none).toMatchObject({ channel: 'SMS', status: 'SENT' });
+    expect(db.patientConsent.findFirst).toHaveBeenCalledTimes(2);
     // 2026-11-05 in Manila + the default 2-day lead window.
     expect(where.dueDate.lte).toEqual(new Date('2026-11-07T00:00:00Z'));
   });

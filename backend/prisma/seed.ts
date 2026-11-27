@@ -43,7 +43,7 @@ const CLINICS = [
 async function main() {
   // Safety rail: this seed creates accounts with publicly-known passwords
   // and intentionally resets dev state. It must never touch a production DB.
-  if (process.env.NODE_ENV === 'production') {
+  if (process.env.NODE_ENV === 'production' || process.env.RENDER === 'true') {
     // eslint-disable-next-line no-console
     console.error(
       'Refusing to run seed: NODE_ENV is production. ' +

@@ -168,6 +168,6 @@ describe('logOutreachAttempt: attempt and status change are atomic', () => {
     sim.state.followUps.set('f1', { id: 'f1', status: 'COMPLETED' });
     await call('DECLINED');
     expect(sim.state.followUps.get('f1')?.status).toBe('COMPLETED');
-    expect(sim.state.audit).toHaveLength(0);
+    expect(sim.state.audit.map((e) => e.action)).toEqual(['OUTREACH_RECORDED']);
   });
 });

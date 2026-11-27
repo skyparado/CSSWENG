@@ -135,6 +135,7 @@ export interface Note extends NoteContent {
 }
 
 export interface Encounter {
+  appointmentId: string | null;
   id: string;
   patientId: string;
   clinicId: string;
@@ -214,7 +215,7 @@ export const clinicalApi = {
     call<{ resolved: true; id: string; resolvedDate: string }>('POST', `/api/patients/${patientId}/problems/${problemId}/resolve`),
 
   encounters: (patientId: string) => call<{ items: Encounter[] }>('GET', `/api/encounters?${qs({ patientId })}`),
-  startVisit: (body: { patientId: string; type: EncounterType }) => call<Encounter>('POST', '/api/encounters', body),
+  startVisit: (body: { patientId: string; type: EncounterType; appointmentId?: string; walkInKey?: string }) => call<Encounter>('POST', '/api/encounters', body),
   encounter: (id: string) => call<Encounter>('GET', `/api/encounters/${id}`),
   saveDraft: (id: string, body: Partial<NoteContent> & { version?: number }) =>
     call<Note>('PUT', `/api/encounters/${id}/note`, body),

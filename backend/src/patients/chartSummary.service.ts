@@ -147,10 +147,10 @@ export async function chartSummary(patientId: string, actor: Actor) {
       },
     }),
     prisma.followUp.findMany({
-      where: { patientId, status: { in: ["OPEN", "SCHEDULED"] } },
+      where: { patientId, clinicId: doctor ? undefined : actor.activeClinicId, status: { in: ["OPEN", "SCHEDULED"] } },
       orderBy: { dueDate: "asc" },
       take: RECENT,
-      select: { id: true, clinicId: true, taskType: true, reason: true, dueDate: true, status: true },
+      select: { id: true, clinicId: true, taskType: true, reason: doctor, dueDate: true, status: true },
     }),
     prisma.encounter.findMany({
       where: { patientId },

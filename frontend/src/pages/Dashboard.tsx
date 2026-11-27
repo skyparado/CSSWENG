@@ -86,7 +86,8 @@ export default function Dashboard() {
                 {data.appts.map((a) => (
                   <tr key={a.id}>
                     <td>{formatTime(zonedParts(new Date(a.startsAt), tz).time)}</td>
-                    <td>{patientName(a.patient)}</td>
+                    <td>{doctor && a.status !== 'CANCELLED' && a.status !== 'NO_SHOW'
+                      ? <a href={`#/patients/${a.patientId}?appointmentId=${a.id}`}>{patientName(a.patient)}</a> : patientName(a.patient)}</td>
                     <td>{a.visitType ?? a.reason ?? '—'}</td>
                     <td>{STATUS_LABEL[a.status]}</td>
                   </tr>

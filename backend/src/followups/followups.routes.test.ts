@@ -28,6 +28,7 @@ const db = vi.hoisted(() => ({
 const audit = vi.hoisted(() => ({ writeAudit: vi.fn() }));
 const queue = vi.hoisted(() => ({ enqueueReminder: vi.fn() }));
 vi.mock('../prisma.js', () => ({ prisma: db }));
+vi.mock('../reminders/gateway.js', () => ({ channelAvailability: () => ({ SMS: true, EMAIL: true }) }));
 vi.mock('../reminders/queue.js', () => queue);
 vi.mock('../audit/audit.service.js', () => audit);
 
@@ -366,7 +367,9 @@ describe('POST /api/follow-ups/:id/decline', () => {
       .post('/api/follow-ups/f1/decline')
       .send({ closureNote: 'Seeing another doctor' });
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ status: 'DECLINED', closureNote: 'Seeing another doctor' });
+    expect(res.body.status).toBe('DECLINED');
+    expect(res.body).not.toHaveProperty('closureNote');
+    expect(db.followUp.update.mock.calls[0][0].data.closureNote).toBe('Seeing another doctor');
     expect(auditCalls()[0]).toMatchObject({
       action: 'FOLLOW_UP_STATUS_CHANGED',
       metadata: { from: 'OPEN', to: 'DECLINED', via: 'DECLINE' },
@@ -414,7 +417,7 @@ describe('POST /api/follow-ups/:id/remind', () => {
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ queued: true, jobId: 'job-1' });
-    expect(queue.enqueueReminder).toHaveBeenCalledWith({ followUpId: 'f1', channel: 'SMS' });
+    expect(queue.enqueueReminder).toHaveBeenCalledWith({ followUpId: 'f1', channel: 'SMS' }, expect.objectContaining({ userId: 'u-sec' }));
   });
 
   it('refuses, and queues nothing, without reminder consent', async () => {

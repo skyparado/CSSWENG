@@ -26,10 +26,7 @@ export class EncounterError extends Error {
   }
 }
 
-type Db = Pick<
-  typeof import("../prisma.js").prisma,
-  "patient" | "appointment" | "encounter" | "clinicalNote" | "user" | "examFinding" | "labResult" | "followUp" | "problem" | "$transaction"
->;
+type Db = Pick<typeof import("../prisma.js").prisma, "patient" | "appointment" | "encounter" | "clinicalNote" | "user" | "examFinding" | "labResult" | "followUp" | "problem" | "$transaction"> & Partial<Pick<typeof import("../prisma.js").prisma, "clinicalImage">>;
 
 /** Visit dates are clinic-local. All clinics are in Manila for now (Clinic.timezone defaults to it). */
 // Shared with the patients module; re-exported for the results services.
@@ -104,6 +101,14 @@ export async function createEncounter(db: Db, input: CreateEncounterInput, actor
   }
   const attendingDoctorId = await resolveAttendingDoctor(db, input, actor);
 
+  if (input.walkInKey) {
+    requireDoctor(actor, "open a walk-in image group");
+    if (input.appointmentId) throw new EncounterError(400, "AMBIGUOUS_VISIT", "Choose the walk-in or the appointment");
+    const image = await db.clinicalImage?.findFirst({ where: { patientId: input.patientId, clinicId: actor.activeClinicId,
+      walkInKey: input.walkInKey, status: "ACTIVE" } });
+    if (!image) throw new EncounterError(404, "NOT_FOUND", "Walk-in group not found at this clinic");
+    if (image.visitId) return toEncounterSummary(await loadEncounter(db, image.visitId), null);
+  }
   if (input.appointmentId) {
     const appt = await db.appointment.findFirst({ where: { id: input.appointmentId } });
     if (!appt || appt.patientId !== input.patientId || appt.clinicId !== actor.activeClinicId) {
@@ -121,6 +126,7 @@ export async function createEncounter(db: Db, input: CreateEncounterInput, actor
         patientId: input.patientId,
         clinicId: actor.activeClinicId,
         appointmentId: input.appointmentId ?? null,
+        walkInKey: input.walkInKey,
         attendingDoctorId,
         type: input.type,
         visitDate: new Date(`${visitDate}T00:00:00Z`),
@@ -313,6 +319,16 @@ export async function discardEncounter(db: Db, id: string, actor: Actor) {
       409,
       "HAS_FOLLOW_UPS",
       "A follow-up is linked to this visit. Keep it as a draft or sign it instead.",
+    );
+  }
+
+  // Drawings and images are kept as clinical records (ClinicalImage.visit is onDelete: Restrict).
+  const images = (await db.clinicalImage?.count({ where: { visitId: id } })) ?? 0;
+  if (images > 0) {
+    throw new EncounterError(
+      409,
+      "HAS_IMAGES",
+      "This visit has a saved drawing or image. Keep it as a draft or sign it instead.",
     );
   }
 

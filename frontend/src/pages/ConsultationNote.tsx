@@ -1,3 +1,5 @@
+import EyeTemplatePicker from '../EyeTemplatePicker';
+import { imagesPath } from '../imageApi';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { EXAM_FIELDS, ExamFindingSchema, type ComparisonResponse } from '@clinic/schemas';
 import {
@@ -16,7 +18,6 @@ import {
 } from '../clinicalApi';
 import { go, useSession } from '../session';
 import { AllergyBanner, Crumbs, patientLine } from './PatientParts';
-import EyeDrawing from './EyeDrawing';
 
 const SIGNED_NOTE_HELP = 'Once signed, the note is locked. Later corrections are added as dated addenda.';
 
@@ -57,8 +58,6 @@ export default function ConsultationNote({
 }: {
   patientId: string;
   encounterId: string;
-  /** True when this visit was just created by "+ New Note" this session (App passes ?new=1). */
-  isNew?: boolean;
 }) {
   const { user, clinic } = useSession();
   const [summary, setSummary] = useState<ChartSummary>();
@@ -88,6 +87,7 @@ export default function ConsultationNote({
       clinicalApi.encounter(encounterId),
       clinicalApi.findings(encounterId),
     ]);
+    if (enc.patientId !== s.patient.id) throw new Error('This visit does not belong to the selected patient.');
     const cmp = await clinicalApi.comparison(patientId, { show: 'exam', currentEncounterId: encounterId }).catch(() => undefined);
     setSummary(s);
     setEncounter(enc);
@@ -293,6 +293,7 @@ export default function ConsultationNote({
           <section className="card">
             <div className="row between">
               <h2>Objective · Examination Findings</h2>
+              <a href={`#${imagesPath(p.id, encounterId)}`}>Visit images</a>
               <a href={`#/patients/${p.id}/compare?current=${encounterId}`}>Compare with previous</a>
             </div>
             <table className="findings">
@@ -364,6 +365,7 @@ export default function ConsultationNote({
                 })}
               </tbody>
             </table>
+            {!locked && <EyeTemplatePicker patientId={p.id} visitId={encounterId} beforeOpen={flushBeforeLeaving} />}
             <p className="muted small">Values that changed from the previous visit are highlighted in red.</p>
           </section>
 
@@ -387,8 +389,6 @@ export default function ConsultationNote({
               <textarea id="plan" rows={3} value={draft.plan ?? ''} onChange={(e) => edit({ plan: e.target.value })} />
             )}
           </section>
-
-          <EyeDrawing patientId={p.id} encounterId={encounterId} locked={locked} beforeOpen={flushBeforeLeaving} />
 
           {signed && note && <Addenda note={note} encounterId={encounterId} onAdded={(a) => setNote({ ...note, addenda: [...note.addenda, a] })} />}
         </div>

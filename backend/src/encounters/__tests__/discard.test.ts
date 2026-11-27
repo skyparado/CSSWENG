@@ -135,6 +135,22 @@ describe("DELETE /api/encounters/:id (discard an unsigned visit)", () => {
     expect(writeAudit).not.toHaveBeenCalled();
   });
 
+  it("keeps a visit that has a saved drawing, deleting nothing", async () => {
+    const id = await startVisit();
+    await request(doc).put(`/api/encounters/${id}/note`).send({ subjective: "x" });
+    const images = [{ visitId: id }];
+    (db as unknown as { clinicalImage: unknown }).clinicalImage = {
+      count: async ({ where }: { where: { visitId: string } }) => images.filter((i) => i.visitId === where.visitId).length,
+    };
+
+    const res = await request(doc).delete(`/api/encounters/${id}`);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("HAS_IMAGES");
+    expect(db.encounter.rows).toHaveLength(1);
+    expect(db.clinicalNote.rows).toHaveLength(1);
+    expect(writeAudit).not.toHaveBeenCalled();
+  });
+
   it("forbids the secretary from discarding a visit", async () => {
     const id = await startVisit();
     const res = await request(sec).delete(`/api/encounters/${id}`);

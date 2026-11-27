@@ -1,3 +1,4 @@
+import { todayInClinic } from '@clinic/schemas';
 import { useState } from 'react';
 import { withPatient } from '../api';
 import {
@@ -46,8 +47,8 @@ function eyes(findings: Finding[], field: string) {
 }
 
 /** S06 Patient Chart Summary. */
-export default function PatientChart({ patientId }: { patientId: string }) {
-  const { user } = useSession();
+export default function PatientChart({ patientId, appointmentId }: { patientId: string; appointmentId?: string }) {
+  const { user, clinic } = useSession();
   const doctor = user.role === 'DOCTOR';
   const [tab, setTab] = useState<Tab>('summary');
   const [starting, setStarting] = useState(false);
@@ -62,13 +63,19 @@ export default function PatientChart({ patientId }: { patientId: string }) {
   // Resume today's open visit instead of starting a second one.
   const newNote = async () => {
     setFailure(undefined);
-    const open = data.recentVisits.find((v) => v.status === 'OPEN');
-    if (open) return go(`/patients/${p.id}/visits/${open.id}`);
     setStarting(true);
     try {
-      const enc = await clinicalApi.startVisit({ patientId: p.id, type: 'FOLLOW_UP' });
-      // ?new=1 marks a visit created this session, so Cancel can discard it if left empty.
-      go(`/patients/${p.id}/visits/${enc.id}?new=1`);
+      const visits = (await clinicalApi.encounters(p.id)).items.filter(v => v.clinicId === clinic?.id);
+      const candidates = appointmentId ? visits.filter(v => v.appointmentId === appointmentId)
+        : visits.filter(v => v.status === 'OPEN' && v.visitDate === todayInClinic());
+      if (candidates.length > 1) {
+        setTab('visits');
+        setFailure('Choose the consultation from Visits & Notes.');
+        setStarting(false);
+        return;
+      }
+      const enc = candidates[0] || await clinicalApi.startVisit({ patientId: p.id, type: 'FOLLOW_UP', appointmentId });
+      go(`/patients/${p.id}/visits/${enc.id}`);
     } catch (err) {
       setFailure(err instanceof Error ? err.message : String(err));
       setStarting(false);
@@ -91,6 +98,7 @@ export default function PatientChart({ patientId }: { patientId: string }) {
             <button className="primary" onClick={() => void newNote()} disabled={starting}>
               + New Note
             </button>
+            <a className="btn" href={`#/patients/${p.id}/images${appointmentId ? '?appointmentId=' + encodeURIComponent(appointmentId) : ''}`}>Clinical Images</a>
             <a className="btn" href={`#${withPatient('/documents/new', ref)}&type=PRESCRIPTION`}>
               Prescription
             </a>

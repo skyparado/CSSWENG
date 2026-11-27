@@ -1,3 +1,4 @@
+import { signInStaff } from '../test-utils/authAgent.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import supertest from 'supertest';
 import { createApp } from '../app.js';
@@ -230,10 +231,7 @@ describe('what the assignment actually gates', () => {
       .expect(200);
 
     const agent = supertest.agent(app);
-    await agent
-      .post('/api/auth/login')
-      .send({ username: applicant.username, password })
-      .expect(200);
+    await signInStaff(agent, applicant.username, password);
 
     await agent.post('/api/auth/select-clinic').send({ clinicId: clinicA }).expect(200);
     await agent.post('/api/auth/select-clinic').send({ clinicId: clinicB }).expect(403);

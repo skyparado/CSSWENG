@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import nodemailer from 'nodemailer';
 import type { DeliveryStatus } from '@prisma/client';
 import { env } from '../env.js';
@@ -20,6 +20,7 @@ export interface SmsMessage {
    * so a repeated call is not delivered twice.
    */
   idempotencyKey?: string;
+  deliveryId?: string;
 }
 
 export interface EmailMessage {
@@ -33,46 +34,31 @@ export interface EmailMessage {
 
 /** Implemented by the SMS provider adapter. Throw on any delivery failure. */
 export interface SmsGateway {
+  unconfigured?: boolean;
   send(message: SmsMessage): Promise<SendResult>;
 }
 
 /** Implemented by the email provider adapter. Throw on any delivery failure. */
 export interface EmailGateway {
+  unconfigured?: boolean;
   send(message: EmailMessage): Promise<SendResult>;
 }
 
-/** Mask all but the last 3 characters so logs never carry a full contact detail. */
-function mask(value: string): string {
-  return value.length <= 3 ? '***' : `${'*'.repeat(value.length - 3)}${value.slice(-3)}`;
-}
-
-/**
- * Test stub used until the real SMS service is chosen: logs instead of sending
- * and reports the message as delivered.
- */
+/** A disabled channel has no side effects and never supplies a provider receipt. */
 export class StubSmsGateway implements SmsGateway {
-  async send(message: SmsMessage): Promise<SendResult> {
-    // eslint-disable-next-line no-console
-    console.log(`[sms:stub] to=${mask(message.to)} chars=${message.body.length}`);
-    // Like a provider honouring an idempotency key: the same key yields the same id.
-    return {
-      providerMessageId: `stub-sms-${message.idempotencyKey ?? randomUUID()}`,
-      deliveryStatus: 'DELIVERED',
-    };
-  }
+  readonly unconfigured = true;
+  async send(_message: SmsMessage): Promise<SendResult> { throw new Error('SMS provider is not configured'); }
+}
+export class StubEmailGateway implements EmailGateway {
+  readonly unconfigured = true;
+  async send(_message: EmailMessage): Promise<SendResult> { throw new Error('Email provider is not configured'); }
 }
 
-/** Test stub used until the real email service is chosen. */
-export class StubEmailGateway implements EmailGateway {
-  async send(message: EmailMessage): Promise<SendResult> {
-    // eslint-disable-next-line no-console
-    console.log(`[email:stub] to=${mask(message.to)} subject="${message.subject}"`);
-    return {
-      providerMessageId: `stub-email-${message.idempotencyKey ?? randomUUID()}`,
-      deliveryStatus: 'DELIVERED',
-    };
-  }
-}
+export const channelAvailability = () => ({
+  SMS: env.SMS_PROVIDER === 'twilio' ? Boolean(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && (env.TWILIO_FROM || env.TWILIO_MESSAGING_SERVICE_SID))
+    : env.SMS_PROVIDER === 'semaphore' && Boolean(env.SEMAPHORE_API_KEY),
+  EMAIL: env.EMAIL_PROVIDER === 'smtp' && (env.NODE_ENV !== 'production' || Boolean(process.env.SMTP_URL)),
+});
 
 /** Sends through any SMTP server (SMTP_URL), e.g. Mailpit locally or a provider's SMTP relay. */
 export class SmtpEmailGateway implements EmailGateway {
@@ -85,8 +71,7 @@ export class SmtpEmailGateway implements EmailGateway {
       subject: message.subject,
       text: message.body,
       attachments: message.attachments,
-      // SMTP has no idempotency key, but a stable Message-ID lets the receiving
-      // server and the recipient's mailbox recognise a repeat of the same reminder.
+      // For provider tracing only. An SMTP Message-ID does not make resends safe.
       ...(message.idempotencyKey
         ? {
             messageId: `<${createHash('sha256').update(message.idempotencyKey).digest('hex').slice(0, 32)}@reminders.local>`,
@@ -109,7 +94,7 @@ export interface Gateways {
  */
 export function createGateways(): Gateways {
   return {
-    sms: createSmsProvider() ?? new StubSmsGateway(),
-    email: env.EMAIL_PROVIDER === 'smtp' ? new SmtpEmailGateway() : new StubEmailGateway(),
+    sms: channelAvailability().SMS ? createSmsProvider()! : new StubSmsGateway(),
+    email: channelAvailability().EMAIL ? new SmtpEmailGateway() : new StubEmailGateway(),
   };
 }

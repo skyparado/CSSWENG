@@ -47,40 +47,40 @@ test('secretary hands over a tablet, patient submits, staff reviews it', async (
 
   /* ---------------------- Patient fills it on the tablet ------------------ */
   // Separate context: no staff cookie, exactly like the real tablet.
-  const tabletContext = await browser.newContext();
+  const tabletContext = await browser.newContext({ viewport: { width: 800, height: 1280 }, hasTouch: true, isMobile: true });
   const tablet = await tabletContext.newPage();
 
   try {
     await tablet.goto(`/#/tablet/${token}`);
     await expect(tablet.getByRole('heading', { name: 'Welcome' })).toBeVisible();
-    await tablet.getByRole('button', { name: 'Start' }).click();
+    await tablet.getByRole('button', { name: 'Start' }).tap();
 
     // Name step
     await expect(tablet.getByRole('heading', { name: 'Your name' })).toBeVisible();
     await tablet.getByLabel('First name').fill(details.firstName);
     await tablet.getByLabel('Last name').fill(details.lastName);
     await tablet.getByLabel('Date of birth').fill(details.dob);
-    await tablet.getByRole('button', { name: 'Female' }).click();
-    await tablet.getByRole('button', { name: 'Next' }).click();
+    await tablet.getByRole('button', { name: 'Female' }).tap();
+    await tablet.getByRole('button', { name: 'Next' }).tap();
 
     // Contact step
     await expect(tablet.getByRole('heading', { name: 'How we reach you' })).toBeVisible();
     await tablet.getByLabel('Mobile number').fill(details.mobile);
-    await tablet.getByRole('button', { name: 'Next' }).click();
+    await tablet.getByRole('button', { name: 'Next' }).tap();
 
     // Health step, all optional
     await expect(tablet.getByRole('heading', { name: 'Your health' })).toBeVisible();
     await tablet.getByLabel('Allergies').fill('Penicillin');
-    await tablet.getByRole('button', { name: 'Next' }).click();
+    await tablet.getByRole('button', { name: 'Next' }).tap();
 
     // Consent step: both required boxes must be ticked before Finish works.
     await expect(tablet.getByRole('heading', { name: 'Your permission' })).toBeVisible();
-    await tablet.getByRole('button', { name: 'Finish' }).click();
+    await tablet.getByRole('button', { name: 'Finish' }).tap();
     await expect(tablet.getByRole('alert')).toContainText('agree to be examined');
 
-    await tablet.getByText('I agree to be examined and treated').click();
-    await tablet.getByText('I agree that the clinic may keep my health records').click();
-    await tablet.getByRole('button', { name: 'Finish' }).click();
+    await tablet.getByText('I agree to be examined and treated').tap();
+    await tablet.getByText('I agree that the clinic may keep my health records').tap();
+    await tablet.getByRole('button', { name: 'Finish' }).tap();
 
     // The patient only ever gets the neutral instruction, never record data.
     await expect(tablet.getByRole('heading', { name: 'Thank you' })).toBeVisible();
@@ -109,7 +109,7 @@ test('secretary hands over a tablet, patient submits, staff reviews it', async (
 
   await submission.getByRole('button', { name: 'Open' }).click();
   // What the patient typed is shown so staff can check it against an ID.
-  await expect(submission.getByText('Penicillin')).toBeVisible();
+  await expect(submission.getByText('Penicillin')).toHaveCount(0);
   await expect(submission.getByText(details.mobile)).toBeVisible();
 
   await submission.getByRole('button', { name: 'Details match the ID' }).click();
@@ -137,7 +137,7 @@ test('a cancelled session stops working on the tablet', async ({ page, browser }
   await page.getByRole('button', { name: 'Cancel session' }).click();
   await expect(page.getByRole('status')).toContainText('Cancelled');
 
-  const tabletContext = await browser.newContext();
+  const tabletContext = await browser.newContext({ viewport: { width: 800, height: 1280 }, hasTouch: true, isMobile: true });
   const tablet = await tabletContext.newPage();
   try {
     await tablet.goto(`/#/tablet/${token}`);
@@ -150,7 +150,7 @@ test('a cancelled session stops working on the tablet', async ({ page, browser }
 test('the tablet surface shows no staff navigation at all', async ({ browser }) => {
   // A patient holding the tablet must not be able to reach the app, even if
   // they poke at the URL.
-  const context = await browser.newContext();
+  const context = await browser.newContext({ viewport: { width: 800, height: 1280 }, hasTouch: true, isMobile: true });
   const tablet = await context.newPage();
   try {
     await tablet.goto('/#/tablet/not-a-real-token');
@@ -159,4 +159,27 @@ test('the tablet surface shows no staff navigation at all', async ({ browser }) 
   } finally {
     await context.close();
   }
+});
+
+test('a signed-in staff tablet locks on handover and clears a patient cancellation', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 800, height: 1280 }, hasTouch: true, isMobile: true });
+  try {
+    const page = await context.newPage();
+    await signIn(page, 'SECRETARY');
+    await page.goto('/#/intake');
+    await page.getByRole('button', { name: 'Start intake session' }).tap();
+    const handover = await page.locator('.intake-link').innerText();
+    await page.goto(handover);
+    await page.getByRole('button', { name: 'Start', exact: true }).tap();
+    expect((await page.request.get('/api/auth/me')).status()).toBe(401);
+    await page.getByLabel('First name').fill('Synthetic');
+    await page.getByRole('button', { name: 'Cancel intake' }).tap();
+    await expect(page.getByRole('heading', { name: 'This form has closed' })).toBeVisible();
+    await page.goto('/#/patients');
+    await expect(page.getByRole('heading', { name: 'Intake locked' })).toBeVisible();
+    await expect(page.getByRole('navigation', { name: 'Main' })).toHaveCount(0);
+    await page.goto(handover);
+    await expect(page.getByRole('heading', { name: 'This form has closed' })).toBeVisible();
+    await expect(page.getByLabel('First name')).toHaveCount(0);
+  } finally { await context.close(); }
 });

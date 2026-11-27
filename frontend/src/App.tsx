@@ -22,7 +22,7 @@ import Intake from './pages/Intake';
 import TabletIntake, { tabletTokenFromRoute } from './pages/TabletIntake';
 import SessionTimeout from './SessionTimeout';
 import ClinicalImages, { ClinicalImagesLanding } from './pages/ClinicalImages';
-import { annotateFromRoute, drawFromRoute, patientIdFromImagesRoute } from './imageApi';
+import { annotateFromRoute, patientIdFromImagesRoute } from './imageApi';
 
 // Recharts is large; load it only when the Reports page is opened.
 const Reports = lazy(() => import('./pages/Reports'));
@@ -45,11 +45,8 @@ function patientPage(route: string): ReactNode | undefined {
   if (parts.length === 1) return <Patients />;
   if (parts[1] === 'new' && parts.length === 2) return <PatientRegister />;
   const id = parts[1]!;
-  if (parts.length === 2) return <PatientChart key={id} patientId={id} />;
-  if (parts[2] === 'visits' && parts[3]) {
-    const isNew = new URLSearchParams(query).get('new') === '1';
-    return <ConsultationNote key={parts[3]} patientId={id} encounterId={parts[3]} isNew={isNew} />;
-  }
+  if (parts.length === 2) return <PatientChart key={route} patientId={id} appointmentId={new URLSearchParams(query).get('appointmentId') || undefined} />;
+  if (parts[2] === 'visits' && parts[3]) return <ConsultationNote key={route} patientId={id} encounterId={parts[3]} />;
   if (parts[2] === 'compare') {
     const current = new URLSearchParams(query).get('current') ?? undefined;
     return <Comparison key={id} patientId={id} currentEncounterId={current} />;
@@ -81,12 +78,26 @@ export default function App() {
   // session, no app shell, authenticated only by the token in the URL. It
   // has to be checked before anything that assumes a signed-in user.
   const tabletToken = tabletTokenFromRoute(route);
+  const [readyToken, setReadyToken] = useState('');
+  const [handoffError, setHandoffError] = useState(false);
+  const intakeOnly = sessionStorage.getItem('intakeOnly') === 'true';
 
   useEffect(() => {
     // Skip the session probe on the tablet. It would always 401 there, and
     // the failed call just adds noise to the audit log.
-    if (tabletToken) return;
-    api.me().then((r) => setUser(r.user), () => setUser(null));
+    let active = true;
+    if (tabletToken) {
+      setUser(null);
+      setClinics(undefined);
+      sessionStorage.clear();
+      sessionStorage.setItem('intakeOnly', 'true');
+      setHandoffError(false);
+      // A staff browser can be handed over too. End its server session before showing the form.
+      api.logout().then(() => { if (active) setReadyToken(tabletToken); }, () => { if (active) setHandoffError(true); });
+    } else if (!intakeOnly) {
+      api.me().then(r => { if (active) setUser(r.user); }, () => { if (active) setUser(null); });
+    }
+    return () => { active = false; };
   }, [tabletToken]);
   useEffect(() => {
     // On failure settle on an empty list rather than leaving it undefined,
@@ -99,7 +110,11 @@ export default function App() {
     }
   }, [user]);
 
-  if (tabletToken) return <TabletIntake token={tabletToken} />;
+  if (tabletToken) {
+    if (handoffError) return <p role="alert">The tablet could not be locked. Return it to staff and reload.</p>;
+    return readyToken === tabletToken ? <TabletIntake key={tabletToken} token={tabletToken} /> : <p>Locking tablet…</p>;
+  }
+  if (intakeOnly) return <main className="tablet-page"><h1>Intake locked</h1><p>Return the tablet to clinic staff.</p></main>;
 
   if (user === undefined) return <p className="page">Loading…</p>;
   if (user === null) return <Login onLogin={setUser} />;
@@ -196,14 +211,6 @@ function Routes() {
     );
   else if (route.startsWith('/medications'))
     page = doctor ? <MedicationsLanding /> : <p>Only the Doctor can view medications and allergies.</p>;
-  else if (drawFromRoute(route))
-    page = doctor ? (
-      <Suspense fallback={<p>Loading…</p>}>
-        <ImageAnnotator key={route} {...drawFromRoute(route)!} />
-      </Suspense>
-    ) : (
-      <p>Only the Doctor can view clinical images.</p>
-    );
   else if (annotateFromRoute(route))
     page = doctor ? (
       <Suspense fallback={<p>Loading…</p>}>
@@ -214,7 +221,9 @@ function Routes() {
     );
   else if (patientIdFromImagesRoute(route))
     page = doctor ? (
-      <ClinicalImages key={route} patientId={patientIdFromImagesRoute(route)!} />
+      <ClinicalImages key={route} patientId={patientIdFromImagesRoute(route)!}
+        visitId={new URLSearchParams(route.split('?')[1]).get('visitId') || undefined}
+        appointmentId={new URLSearchParams(route.split('?')[1]).get('appointmentId') || undefined} />
     ) : (
       <p>Only the Doctor can view clinical images.</p>
     );

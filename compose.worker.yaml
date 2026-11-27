@@ -1,0 +1,10 @@
+# Start on an existing, approved always-on host with access to the same stores as the API.
+services:
+  worker:
+    build: .
+    command: ["node", "backend/dist/maintenance/worker.js"]
+    env_file:
+      - ${WORKER_ENV_FILE:?Set WORKER_ENV_FILE to the private worker environment file}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 90s

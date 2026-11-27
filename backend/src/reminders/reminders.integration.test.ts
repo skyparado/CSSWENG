@@ -1,6 +1,12 @@
+import { removeTestOutreach } from '../test-utils/outreachFixtures.js';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import request from 'supertest';
+import { appWith } from '../testing/appWith.js';
+import { env } from '../env.js';
+import { smsWebhooksRouter, twilioSignature } from './webhooks.routes.js';
 import { prisma } from '../prisma.js';
 import { verifyChain, writeAudit } from '../audit/audit.service.js';
+import { recordDeliveryReport, logOutreachAttempt } from '../followups/outreach.service.js';
 import { processReminder } from './reminders.service.js';
 import type { Gateways } from './gateway.js';
 import { testPatientData } from '../test-utils/patientData.js';
@@ -71,7 +77,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await prisma.reminderDelivery.deleteMany({ where: { followUpId: ids.followUp } });
-  await prisma.outreachLog.deleteMany({ where: { followUpId: ids.followUp } });
+  await removeTestOutreach({ followUpId: ids.followUp });
   await prisma.followUp.deleteMany({ where: { id: ids.followUp } });
   await prisma.patientConsent.deleteMany({ where: { id: ids.consent } });
   await prisma.patient.deleteMany({ where: { id: ids.patient } });
@@ -111,7 +117,7 @@ describe('reminder send tracking (real database)', () => {
 
   it('rebuilds a missing outreach row from the delivery record without re-sending', async () => {
     // Simulate "sent, then the database failed": the delivery is SENT but the log row is gone.
-    await prisma.outreachLog.deleteMany({ where: { followUpId: ids.followUp } });
+    await removeTestOutreach({ followUpId: ids.followUp });
 
     const result = await processReminder(job(), gateways, { isFinalAttempt: false, jobKey: 'int-job-1' });
 
@@ -120,13 +126,68 @@ describe('reminder send tracking (real database)', () => {
     const rows = await prisma.outreachLog.findMany({ where: { followUpId: ids.followUp } });
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ outcome: 'SENT', providerMessageId: 'prov-int-job-1', consentId: ids.consent });
+    await expect(prisma.outreachLog.update({ where: { id: rows[0]!.id }, data: { attemptedAt: new Date(0) } })).rejects.toThrow(/outstanding delivery status/);
+    await expect(prisma.outreachLog.delete({ where: { id: rows[0]!.id } })).rejects.toThrow(/cannot be deleted/);
   });
 
   it('a later reminder is not queued by the scan once one is recorded as sent', async () => {
     const { findFollowUpsNeedingReminder } = await import('./reminders.service.js');
-    await prisma.outreachLog.deleteMany({ where: { followUpId: ids.followUp } }); // even with no log row
+    await removeTestOutreach({ followUpId: ids.followUp }); // even with no log row
     const due = await findFollowUpsNeedingReminder('SMS', new Date('2026-12-01'));
     expect(due).not.toContain(ids.followUp);
+  });
+
+  it('serializes simultaneous workers, including jobs with different ids, and counts repeated failed callbacks once', async () => {
+    const task = await prisma.followUp.create({ data: { patientId: ids.patient, clinicId: ids.clinic, reason: 'Fixture',
+      taskType: 'CHECK_UP', dueDate: new Date() } });
+    try {
+      const sms = { send: vi.fn(async () => { await new Promise((r) => setTimeout(r, 30)); return { providerMessageId: 'callback-' + task.id }; }) };
+      const data = { followUpId: task.id, channel: 'SMS' as const };
+      await Promise.all(['one', 'two', 'one'].map((key) => processReminder(data, { ...gateways, sms }, { isFinalAttempt: false, jobKey: task.id + key })));
+      expect(sms.send).toHaveBeenCalledTimes(1);
+      await logOutreachAttempt({ followUp: task, channel: 'CALL', outcome: 'NO_ANSWER' });
+      await logOutreachAttempt({ followUp: task, channel: 'CALL', outcome: 'WRONG_NUMBER' });
+      const sid = 'callback-' + task.id;
+      await Promise.all([recordDeliveryReport(sid, 'FAILED'), recordDeliveryReport(sid, 'FAILED')]);
+      await recordDeliveryReport(sid, 'DELIVERED');
+      expect(await prisma.outreachLog.findFirst({ where: { providerMessageId: sid } })).toMatchObject({ outcome: 'SENT', deliveryStatus: 'FAILED' });
+      expect(await prisma.outreachLog.count({ where: { followUpId: task.id } })).toBe(3);
+      expect(await prisma.followUp.findUnique({ where: { id: task.id } })).toMatchObject({ status: 'UNREACHABLE' });
+    } finally {
+      await prisma.reminderDelivery.deleteMany({ where: { followUpId: task.id } });
+      await removeTestOutreach({ followUpId: task.id });
+      await prisma.followUp.delete({ where: { id: task.id } });
+    }
+  });
+
+  it('reconciles a signed callback after provider acceptance and a crash before persisting the SID', async () => {
+    const task = await prisma.followUp.create({ data: { patientId: ids.patient, clinicId: ids.clinic,
+      taskType: 'CHECK_UP', reason: 'Synthetic callback fixture', dueDate: new Date() } });
+    const original = { PUBLIC_BASE_URL: env.PUBLIC_BASE_URL, TWILIO_AUTH_TOKEN: env.TWILIO_AUTH_TOKEN };
+    try {
+      env.PUBLIC_BASE_URL = 'https://callback.example.invalid';
+      env.TWILIO_AUTH_TOKEN = 'synthetic-callback-test';
+      const delivery = await prisma.reminderDelivery.create({ data: { followUpId: task.id, channel: 'SMS',
+        consentId: ids.consent, idempotencyKey: 'crash-' + task.id, status: 'DISPATCHING' } });
+      const retry = await processReminder({ followUpId: task.id, channel: 'SMS' }, gateways,
+        { isFinalAttempt: true, jobKey: delivery.idempotencyKey });
+      expect(retry).toMatchObject({ reason: 'AWAITING_CONFIRMATION' });
+      const path = '/api/webhooks/sms/twilio?delivery=' + delivery.id;
+      const params = { MessageSid: 'SM' + task.id, MessageStatus: 'delivered' };
+      const signature = twilioSignature(env.TWILIO_AUTH_TOKEN, env.PUBLIC_BASE_URL + path, params);
+      const app = appWith('/api/webhooks/sms', smsWebhooksRouter);
+      await request(app).post(path).type('form').send(params).expect(403);
+      for (let i = 0; i < 2; i++) await request(app).post(path).set('X-Twilio-Signature', signature).type('form').send(params).expect(204);
+      expect(await prisma.reminderDelivery.findUnique({ where: { id: delivery.id } })).toMatchObject({
+        providerMessageId: params.MessageSid, status: 'SENT', deliveryStatus: 'DELIVERED' });
+      expect(await prisma.outreachLog.count({ where: { followUpId: task.id, outcome: 'SENT', deliveryStatus: 'DELIVERED' } })).toBe(1);
+      expect(await prisma.auditLog.count({ where: { action: 'OUTREACH_DELIVERY_UPDATED', metadata: { path: ['patientId'], equals: ids.patient } } })).toBeGreaterThan(0);
+    } finally {
+      Object.assign(env, original);
+      await prisma.reminderDelivery.deleteMany({ where: { followUpId: task.id } });
+      await removeTestOutreach({ followUpId: task.id });
+      await prisma.followUp.delete({ where: { id: task.id } });
+    }
   });
 
   it('sends nothing once consent is withdrawn', async () => {

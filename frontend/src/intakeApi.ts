@@ -16,6 +16,8 @@ export interface IntakeSessionAdmin {
 }
 
 export interface IntakeSessionRow {
+  matchPatientId: string | null;
+  matchDecision: string | null;
   id: string;
   clinicId: string;
   status: IntakeStatus;
@@ -27,6 +29,7 @@ export interface IntakeSessionRow {
 }
 
 export interface IntakeSessionPublic {
+  needsStaff?: boolean;
   id: string;
   status: IntakeStatus;
   clinic: { id: string; name: string };
@@ -45,12 +48,23 @@ export interface IntakePayload {
   email?: string;
   address?: string;
   medicalHistory?: string;
+  ophthalmicHistory?: string;
+  emergencyContactName?: string;
+  emergencyContactPhone?: string;
+  hmoProvider?: string;
+  hmoMemberNumber?: string;
+  hmoValidUntil?: string;
+  philhealthNumber?: string;
+  referralSource?: string;
   allergies?: string;
+  reportedAllergens?: string[];
   medications?: string;
   consents: {
     treatment: boolean;
     dataPrivacy: boolean;
     photoConsent?: boolean;
+    smsReminders?: boolean;
+    emailReminders?: boolean;
   };
 }
 
@@ -66,16 +80,7 @@ export interface IntakeSubmission {
   createdAt: string;
 }
 
-export interface SubmitResult {
-  sessionId: string;
-  patientId: string;
-  /**
-   * False when the details matched an existing patient. The tablet must only
-   * say "please see the secretary" in that case and never show record data.
-   */
-  patientCreated: boolean;
-  submittedAt: string | null;
-}
+export interface SubmitResult { submittedAt: string; message?: string }
 
 export interface Paged<T> {
   items: T[];
@@ -99,7 +104,7 @@ async function call<T>(
 ): Promise<T> {
   const res = await fetch(path, {
     method,
-    credentials: 'include',
+    credentials: opts.trackActivity === false ? 'omit' : 'include',
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -121,6 +126,7 @@ async function call<T>(
 
 /** Staff-side calls. Require a signed-in Secretary or Doctor. */
 export const intakeApi = {
+  resolveMatch: (id: string, decision: 'EXISTING' | 'SEPARATE') => call<void>('POST', `/api/tablet-intake/sessions/${id}/match`, { decision }),
   startSession: (clinicId: string) =>
     call<IntakeSessionAdmin>('POST', '/api/tablet-intake/sessions', { clinicId }),
 
@@ -153,6 +159,10 @@ export const intakeApi = {
 
 /** Tablet-side calls. No session cookie; the token in the URL is the proof. */
 export const tabletApi = {
+  identify: (token: string, form: Pick<IntakePayload, 'firstName' | 'lastName' | 'dateOfBirth' | 'mobileNumber'>) =>
+    call<{needsStaff: boolean}>('POST', `/api/tablet-intake/tablet/${encodeURIComponent(token)}/identify`, form, { trackActivity: false }),
+  activity: (token: string) => call<void>('POST', `/api/tablet-intake/tablet/${encodeURIComponent(token)}/activity`, undefined, { trackActivity: false }),
+  cancel: (token: string) => call<void>('POST', `/api/tablet-intake/tablet/${encodeURIComponent(token)}/cancel`, undefined, { trackActivity: false }),
   session: (token: string) =>
     call<IntakeSessionPublic>(
       'GET',

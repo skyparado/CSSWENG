@@ -3,9 +3,11 @@ import request from 'supertest';
 import express from 'express';
 
 const db = vi.hoisted(() => ({
-  outreachLog: { updateMany: vi.fn() },
+  outreachLog: { updateMany: vi.fn(), findMany: vi.fn(), count: vi.fn() },
+  $queryRaw: vi.fn(), $transaction: vi.fn(),
   reminderDelivery: { updateMany: vi.fn() },
 }));
+vi.mock('../audit/audit.service.js', () => ({ writeAudit: vi.fn() }));
 vi.mock('../prisma.js', () => ({ prisma: db }));
 
 // Webhook secrets come from the environment; set them before the modules read it.
@@ -113,7 +115,7 @@ describe('SemaphoreSmsGateway', () => {
 
   it('throws on a non-2xx response', async () => {
     const doFetch = vi.fn().mockResolvedValue(json(401, { message: 'Invalid API key' }));
-    await expect(new SemaphoreSmsGateway({ apiKey: 'bad' }, doFetch).send({ to: '09175551234', body: 'x' })).rejects.toThrow(/Invalid API key/);
+    await expect(new SemaphoreSmsGateway({ apiKey: 'bad' }, doFetch).send({ to: '09175551234', body: 'x' })).rejects.toThrow(/HTTP 401/);
   });
 });
 
@@ -133,6 +135,9 @@ describe('delivery webhooks', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    db.$transaction.mockImplementation(async (fn) => fn(db));
+    db.outreachLog.findMany.mockResolvedValue([{ id: 'row', followUpId: 'f', patientId: 'p', clinicId: 'c' }]);
+    db.outreachLog.count.mockResolvedValue(0);
     db.outreachLog.updateMany.mockResolvedValue({ count: 1 });
     db.reminderDelivery.updateMany.mockResolvedValue({ count: 1 });
   });
@@ -148,8 +153,8 @@ describe('delivery webhooks', () => {
   it('records DELIVERED on the outreach row and the send record', async () => {
     const res = await post({ MessageSid: 'SM1', MessageStatus: 'delivered' });
     expect(res.status).toBe(204);
-    expect(db.outreachLog.updateMany).toHaveBeenCalledWith({ where: { providerMessageId: 'SM1' }, data: { deliveryStatus: 'DELIVERED' } });
-    expect(db.reminderDelivery.updateMany).toHaveBeenCalledWith({ where: { providerMessageId: 'SM1' }, data: { deliveryStatus: 'DELIVERED' } });
+    expect(db.outreachLog.updateMany).toHaveBeenCalledWith({ where: { id: 'row', deliveryStatus: null }, data: { deliveryStatus: 'DELIVERED' } });
+    expect(db.reminderDelivery.updateMany).toHaveBeenCalledWith({ where: { providerMessageId: 'SM1', channel: 'SMS', deliveryStatus: null }, data: { deliveryStatus: 'DELIVERED' } });
   });
 
   it.each(['failed', 'undelivered'])('records FAILED for %s', async (status) => {
@@ -178,14 +183,14 @@ describe('delivery webhooks', () => {
   describe('generic provider', () => {
     const generic = (secret: string | undefined, body: unknown) =>
       request(app)
-        .post(`/api/webhooks/sms/generic${secret ? `?secret=${secret}` : ''}`)
+         .post('/api/webhooks/sms/generic').set('x-webhook-secret', secret ?? '')
         .send(body as object);
 
     it('accepts a report with the shared secret', async () => {
       const res = await generic('shh-secret', { providerMessageId: 'abc', status: 'DELIVERED' });
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ updated: 1 });
-      expect(db.outreachLog.updateMany.mock.calls[0][0]).toEqual({ where: { providerMessageId: 'abc' }, data: { deliveryStatus: 'DELIVERED' } });
+      expect(db.outreachLog.updateMany.mock.calls[0][0]).toEqual({ where: { id: 'row', deliveryStatus: null }, data: { deliveryStatus: 'DELIVERED' } });
     });
 
     it('rejects a wrong or missing secret', async () => {

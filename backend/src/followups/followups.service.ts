@@ -83,30 +83,27 @@ export async function closeFollowUpsForCompletedAppointment(
   completedById?: string,
   actor: AuditActor = SYSTEM_ACTOR,
 ): Promise<number> {
-  return prisma.$transaction(async (tx) => {
-    const due = await tx.followUp.findMany({
-      where: {
-        appointmentId,
-        status: { in: ['OPEN', 'SCHEDULED'] },
-        taskType: { notIn: [...STAYS_OPEN_ON_APPOINTMENT] },
-      },
-      select: { id: true, patientId: true, clinicId: true, appointmentId: true, status: true },
-    });
-    if (due.length === 0) return 0;
+  return prisma.$transaction((tx) => reconcileAppointment(tx, appointmentId, 'COMPLETED', completedById, actor));
+}
 
-    await tx.followUp.updateMany({
-      where: { id: { in: due.map((f) => f.id) }, status: { in: ['OPEN', 'SCHEDULED'] } },
-      data: { status: 'COMPLETED', completedAt: new Date(), completedById },
-    });
-    for (const f of due) {
-      await auditFollowUpStatusChange(tx, actor, f, {
-        from: f.status,
-        to: 'COMPLETED',
-        via: 'APPOINTMENT_COMPLETED',
-      });
-    }
-    return due.length;
+export async function reconcileAppointment(tx: AuditTx, appointmentId: string,
+  status: 'CANCELLED' | 'NO_SHOW' | 'COMPLETED', completedById: string | undefined, actor: AuditActor) {
+  const complete = status === 'COMPLETED';
+  const tasks = await tx.followUp.findMany({
+    where: { appointmentId, status: { in: ['OPEN', 'SCHEDULED'] },
+      ...(complete ? { taskType: { notIn: [...STAYS_OPEN_ON_APPOINTMENT] } } : {}) },
+    select: { id: true, patientId: true, clinicId: true, status: true, appointmentId: true },
   });
+  let count = 0;
+  for (const task of tasks) {
+    const changed = await tx.followUp.updateMany({ where: { id: task.id, status: task.status, appointmentId },
+      data: complete ? { status: 'COMPLETED', completedAt: new Date(), completedById }
+        : { status: 'OPEN', appointmentId: null, reminderCycle: { increment: 1 } } });
+    if (!changed.count) continue;
+    await auditFollowUpStatusChange(tx, actor, task, { from: task.status, to: complete ? 'COMPLETED' : 'OPEN', via: `APPOINTMENT_${status}` });
+    count++;
+  }
+  return count;
 }
 
 export interface FollowUpFilters {

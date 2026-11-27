@@ -1,3 +1,6 @@
+import { requireOpenVisit } from './clinicalImages.service.js';
+import { randomUUID } from 'node:crypto';
+import { PDFDocument } from '@cantoo/pdf-lib';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import supertest from 'supertest';
 import type request from 'supertest';
@@ -32,13 +35,13 @@ let secretaryCleanup: () => Promise<void>;
 
 let patientId = '';
 let clinicId = '';
+let doctorId = '';
+const visitIds: string[] = [];
 const createdImageIds: string[] = [];
 
 /** A valid tiny PNG header + body — enough bytes that the file isn't empty. */
-const sampleBytes = Buffer.from(
-  '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489',
-  'hex',
-);
+const sampleBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+const drawing = { schema: 1, width: 800, height: 600, shapes: [{ kind: 'pen', points: [12, 21, 22, 35], color: '#aabbcc', width: 4 }] };
 
 beforeAll(async () => {
   const doctor = await loginAgent(app, 'DOCTOR');
@@ -51,6 +54,8 @@ beforeAll(async () => {
 
   const clinic = await prisma.clinic.create({ data: { name: 'Clinical Images Test Clinic' } });
   clinicId = clinic.id;
+  doctorId = doctor.userId;
+  await doctorAgent.post('/api/auth/select-clinic').send({ clinicId }).expect(200);
   const patient = await prisma.patient.create({
     data: testPatientData(clinicId, doctor.userId, { firstName: 'Image', lastName: 'Subject' }),
   });
@@ -69,6 +74,7 @@ afterAll(async () => {
     await prisma.imageAnnotation.deleteMany({ where: { clinicalImageId: id } }).catch(() => undefined);
     await prisma.clinicalImage.delete({ where: { id } }).catch(() => undefined);
   }
+  await prisma.encounter.deleteMany({ where: { id: { in: visitIds } } });
   if (patientId) {
     await prisma.patient.delete({ where: { id: patientId } }).catch(() => undefined);
   }
@@ -120,7 +126,7 @@ describe('POST /api/clinical-images (upload)', () => {
     expect(vi.mocked(s3.putObjectEncrypted)).toHaveBeenCalledTimes(1);
     const [key, body, contentType] = vi.mocked(s3.putObjectEncrypted).mock.calls[0];
     expect(key).toContain(`patients/${patientId}/`);
-    expect(key).toContain('fundus.png');
+    expect(key).toContain(res.body.id);
     expect(Buffer.isBuffer(body)).toBe(true);
     expect(contentType).toBe('image/png');
   });
@@ -165,7 +171,7 @@ describe('GET /api/clinical-images', () => {
       where: { patientId, status: 'ACTIVE' },
     });
     expect(existing).toBeTruthy();
-    const res = await doctorAgent.get(`/api/clinical-images/${existing!.id}/download`);
+    const res = await doctorAgent.get(`/api/clinical-images/${existing!.id}/download`).query({ patientId });
     expect(res.status).toBe(200);
     expect(res.body.url).toContain('https://s3.local/presigned/');
     expect(res.body.expiresIn).toBe(300);
@@ -179,13 +185,13 @@ describe('PATCH + DELETE', () => {
       where: { patientId, status: 'ACTIVE' },
     });
     const res = await doctorAgent
-      .patch(`/api/clinical-images/${existing!.id}`)
+      .patch(`/api/clinical-images/${existing!.id}`).query({ patientId })
       .send({ caption: 'Updated caption' });
     expect(res.status).toBe(200);
     expect(res.body.caption).toBe('Updated caption');
   });
 
-  it('soft-deletes the image and deletes the S3 object', async () => {
+  it('retains a removed original for read-only access', async () => {
     const upload = await doctorAgent
       .post('/api/clinical-images')
       .field('patientId', patientId)
@@ -193,14 +199,15 @@ describe('PATCH + DELETE', () => {
     expect(upload.status).toBe(201);
     createdImageIds.push(upload.body.id);
 
-    const del = await doctorAgent.delete(`/api/clinical-images/${upload.body.id}`);
+    const del = await doctorAgent.delete(`/api/clinical-images/${upload.body.id}`).query({ patientId });
     expect(del.status).toBe(200);
     expect(del.body.status).toBe('DELETED');
 
-    expect(vi.mocked(s3.deleteObject)).toHaveBeenCalledWith(upload.body.storageKey);
+    expect(vi.mocked(s3.deleteObject)).not.toHaveBeenCalled();
+    await doctorAgent.get(`/api/clinical-images/${upload.body.id}/content`).query({ patientId }).expect(200);
 
     // After soft-delete the image is 404 to normal reads.
-    const get = await doctorAgent.get(`/api/clinical-images/${upload.body.id}`);
+    const get = await doctorAgent.get(`/api/clinical-images/${upload.body.id}`).query({ patientId });
     expect(get.status).toBe(404);
   });
 });
@@ -219,16 +226,16 @@ describe('Annotations', () => {
 
   it('saves version 1 on the first annotation', async () => {
     const res = await doctorAgent
-      .post(`/api/clinical-images/${imageIdForAnnotations}/annotations`)
-      .send({ konvaData: { stage: 'v1', shapes: [{ type: 'arrow' }] } });
+      .post(`/api/clinical-images/${imageIdForAnnotations}/annotations`).query({ patientId })
+      .send({ konvaData: drawing });
     expect(res.status).toBe(201);
     expect(res.body.version).toBe(1);
   });
 
   it('increments version on subsequent saves (append-only)', async () => {
     const res = await doctorAgent
-      .post(`/api/clinical-images/${imageIdForAnnotations}/annotations`)
-      .send({ konvaData: { stage: 'v2', shapes: [{ type: 'text' }] } });
+      .post(`/api/clinical-images/${imageIdForAnnotations}/annotations`).query({ patientId })
+      .send({ konvaData: { ...drawing, shapes: [] } });
     expect(res.status).toBe(201);
     expect(res.body.version).toBe(2);
   });
@@ -236,7 +243,7 @@ describe('Annotations', () => {
   it('lists annotations newest-version first', async () => {
     const res = await doctorAgent.get(
       `/api/clinical-images/${imageIdForAnnotations}/annotations`,
-    );
+    ).query({ patientId });
     expect(res.status).toBe(200);
     expect(res.body.items.length).toBeGreaterThanOrEqual(2);
     expect(res.body.items[0].version).toBeGreaterThan(res.body.items[1].version);
@@ -245,15 +252,15 @@ describe('Annotations', () => {
   it('returns the latest annotation', async () => {
     const res = await doctorAgent.get(
       `/api/clinical-images/${imageIdForAnnotations}/annotations/latest`,
-    );
+    ).query({ patientId });
     expect(res.status).toBe(200);
     expect(res.body.version).toBe(2);
-    expect(res.body.konvaData.stage).toBe('v2');
+    expect(res.body.konvaData.shapes).toEqual([]);
   });
 
   it('rejects an empty konvaData payload with 400', async () => {
     const res = await doctorAgent
-      .post(`/api/clinical-images/${imageIdForAnnotations}/annotations`)
+      .post(`/api/clinical-images/${imageIdForAnnotations}/annotations`).query({ patientId })
       .send({});
     expect(res.status).toBe(400);
   });
@@ -282,14 +289,14 @@ describe('annotation body size (QA 7.5)', () => {
      * sequence the append-only tests above assert.
      */
     const shapes = Array.from({ length: 1200 }, (_, stroke) => ({
-      type: 'line',
-      stroke: '#d32f2f',
-      strokeWidth: 2,
+      kind: 'pen',
+      color: '#d32f2f',
+      width: 2,
       points: Array.from({ length: 120 }, (_, i) =>
         Number(((stroke * 7 + i * 3.14159) % 1024).toFixed(3)),
       ),
     }));
-    const konvaData = { stage: 'detailed', shapes };
+    const konvaData = { ...drawing, shapes };
 
     const bytes = Buffer.byteLength(JSON.stringify({ konvaData }));
     // Guard the guard: under 1mb this would pass on the default limit too,
@@ -297,7 +304,7 @@ describe('annotation body size (QA 7.5)', () => {
     expect(bytes).toBeGreaterThan(1_048_576);
 
     const res = await doctorAgent
-      .post(`/api/clinical-images/${bigImageId}/annotations`)
+      .post(`/api/clinical-images/${bigImageId}/annotations`).query({ patientId })
       .send({ konvaData });
 
     // A 413 here means the larger parser is not mounted ahead of the 1mb
@@ -323,7 +330,7 @@ describe('accepted file types and size (QA 7)', () => {
       .post('/api/clinical-images')
       .field('patientId', patientId)
       .field('caption', 'Referral report')
-      .attach('file', sampleBytes, {
+      .attach('file', Buffer.from(await (await PDFDocument.create()).save()), {
         filename: 'report.pdf',
         contentType: 'application/pdf',
       });
@@ -347,14 +354,18 @@ describe('accepted file types and size (QA 7)', () => {
 
   it('allows a file larger than the old 10mb ceiling, up to 20mb', async () => {
     // Fundus photography runs well past 10mb, which is why the cap is 20.
-    const big = Buffer.alloc(12 * 1024 * 1024, 7);
+    // The unused bytes are stripped with the private text chunk, before storage.
+    const chunk = Buffer.alloc(12 * 1024 * 1024, 0);
+    chunk.writeUInt32BE(chunk.length - 12);
+    chunk.write('tEXt', 4);
+    const big = Buffer.concat([sampleBytes.subarray(0, 33), chunk, sampleBytes.subarray(33)]);
     const res = await doctorAgent
       .post('/api/clinical-images')
       .field('patientId', patientId)
       .attach('file', big, { filename: 'large.png', contentType: 'image/png' });
 
     expect(res.status).toBe(201);
-    expect(res.body.sizeBytes).toBe(big.byteLength);
+    expect(res.body.sizeBytes).toBe(sampleBytes.length);
     createdImageIds.push(res.body.id);
   });
 
@@ -366,5 +377,101 @@ describe('accepted file types and size (QA 7)', () => {
       .attach('file', tooBig, { filename: 'huge.png', contentType: 'image/png' });
 
     expect(res.status).toBeGreaterThanOrEqual(400);
+  });
+});
+
+describe('visit drawings', () => {
+  async function visit(extra: { walkInKey?: string; appointmentId?: string } = {}) {
+    const v = await prisma.encounter.create({ data: { patientId, clinicId, type: 'WALK_IN', attendingDoctorId: doctorId,
+      createdById: doctorId, visitDate: new Date(), ...extra } });
+    visitIds.push(v.id);
+    return v.id;
+  }
+
+  it('opens all four blank diagrams with no patient record and atomically creates exactly one on retry', async () => {
+    const visitId = await visit();
+    const context = { patientId, visitId };
+    const before = await prisma.clinicalImage.count({ where: context });
+    for (const type of ['anterior-od', 'anterior-os', 'posterior-od', 'posterior-os']) {
+      await doctorAgent.get('/api/clinical-images/templates/' + type).query(context).expect(200).expect('Content-Type', /svg/);
+    }
+    expect(await prisma.clinicalImage.count({ where: context })).toBe(before);
+    const input = { ...context, templateType: 'posterior-os', commitKey: randomUUID(), konvaData: drawing };
+    const saves = await Promise.all([1, 2].map(() => doctorAgent.post('/api/clinical-images/templates').send(input).expect(201)));
+    const id = saves[0].body.id;
+    createdImageIds.push(id);
+    expect(saves[1].body.id).toBe(id);
+    expect(await prisma.clinicalImage.count({ where: context })).toBe(1);
+    expect(s3.putObjectEncrypted).toHaveBeenCalledTimes(1);
+    await doctorAgent.post(`/api/clinical-images/${id}/annotations`).query(context).send({ konvaData: drawing }).expect(201);
+    const layers = await doctorAgent.get(`/api/clinical-images/${id}/annotations`).query(context).expect(200);
+    expect(layers.body.items.map((x: {version: number}) => x.version)).toEqual([2, 1]);
+    expect(layers.body.items[0].konvaData).toEqual(drawing);
+    expect((await prisma.imageAnnotation.findFirstOrThrow({ where: { clinicalImageId: id } })).konvaData).toMatch(/^v1:/);
+    for (const wrong of [{ patientId: 'another-chart', visitId }, { patientId, visitId: await visit() }]) {
+      for (const suffix of ['', '/content', '/download', '/annotations', '/annotations/latest']) {
+        await doctorAgent.get(`/api/clinical-images/${id}${suffix}`).query(wrong).expect(404);
+      }
+      await doctorAgent.delete(`/api/clinical-images/${id}`).query(wrong).expect(404);
+      await doctorAgent.post(`/api/clinical-images/${id}/annotations`).query(wrong).send({ konvaData: drawing }).expect(404);
+    }
+    await doctorAgent.post('/api/clinical-images/templates').send({ ...input, commitKey: randomUUID(), patientId: 'another-chart' }).expect(404);
+    await secretaryAgent.get(`/api/clinical-images/${id}/content`).query(context).expect(403);
+    expect(await prisma.auditLog.count({ where: { action: 'IMAGE_TEMPLATE_SELECTED', userId: doctorId } })).toBeGreaterThanOrEqual(4);
+  });
+
+  it('links only the matching pre-visit walk-in batch, including a late upload', async () => {
+    const key = randomUUID();
+    const upload = async (walkInKey: string) => {
+      const res = await doctorAgent.post('/api/clinical-images').field('patientId', patientId).field('walkInKey', walkInKey)
+        .attach('file', sampleBytes, { filename: 'walk-in.png', contentType: 'image/png' }).expect(201);
+      createdImageIds.push(res.body.id);
+      return res.body;
+    };
+    const early = await upload(key);
+    const other = await upload(randomUUID());
+    expect(early.visitId).toBeNull();
+    const visitId = await visit({ walkInKey: key });
+    expect((await upload(key)).visitId).toBe(visitId);
+    expect((await prisma.clinicalImage.findUniqueOrThrow({ where: { id: early.id } })).visitId).toBe(visitId);
+    expect((await prisma.clinicalImage.findUniqueOrThrow({ where: { id: other.id } })).visitId).toBeNull();
+  });
+
+  it('resolves the exact booked appointment before and after the encounter opens', async () => {
+    const appt = await prisma.appointment.create({ data: { patientId, clinicId,
+      startsAt: new Date('2001-12-01T06:00:00Z'), endsAt: new Date('2001-12-01T06:30:00Z') } });
+    try {
+      const upload = async () => {
+        const res = await doctorAgent.post('/api/clinical-images').field('patientId', patientId).field('appointmentId', appt.id)
+          .attach('file', sampleBytes, { filename: 'scheduled.png', contentType: 'image/png' }).expect(201);
+        createdImageIds.push(res.body.id);
+        return res.body;
+      };
+      const early = await upload();
+      expect(early.visitId).toBeNull();
+      const unrelated = await visit();
+      expect((await prisma.clinicalImage.findUniqueOrThrow({ where: { id: early.id } })).visitId).toBeNull();
+      const booked = await visit({ appointmentId: appt.id });
+      expect((await upload()).visitId).toBe(booked);
+      expect((await prisma.clinicalImage.findUniqueOrThrow({ where: { id: early.id } })).visitId).toBe(booked);
+      await doctorAgent.post('/api/clinical-images').field('patientId', patientId).field('visitId', unrelated).field('appointmentId', appt.id)
+        .attach('file', sampleBytes, { filename: 'wrong.png', contentType: 'image/png' }).expect(400);
+      // Exercise the same visit guard used by upload and template commits. The
+      // rejection rolls back signing, so the immutable fixture can be cleaned up.
+      await expect(prisma.$transaction(async tx => {
+        await tx.encounter.update({ where: { id: booked }, data: { status: 'SIGNED' } });
+        await requireOpenVisit(tx, { patientId, visitId: booked }, { userId: doctorId, clinicId });
+      })).rejects.toMatchObject({ status: 409 });
+    } finally { await prisma.appointment.delete({ where: { id: appt.id } }); }
+  });
+
+  it('rolls back the base record, layer and audit on storage failure, then accepts a retry', async () => {
+    const input = { patientId, visitId: await visit(), templateType: 'anterior-os', commitKey: randomUUID(), konvaData: drawing };
+    vi.mocked(s3.putObjectEncrypted).mockRejectedValueOnce(new Error('test storage failure'));
+    await doctorAgent.post('/api/clinical-images/templates').send(input).expect(500);
+    expect(await prisma.clinicalImage.count({ where: { commitKey: input.commitKey } })).toBe(0);
+    expect(s3.deleteObject).toHaveBeenCalledTimes(1);
+    const retried = await doctorAgent.post('/api/clinical-images/templates').send(input).expect(201);
+    createdImageIds.push(retried.body.id);
   });
 });

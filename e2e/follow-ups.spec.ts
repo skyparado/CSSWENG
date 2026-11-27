@@ -61,6 +61,44 @@ test.describe('S11 follow-ups and S12 outreach log', () => {
     await expect(row(page, reason)).toContainText('Done');
   });
 
+  test('creates at the clinic displayed in the dialog even when another clinic is active', async ({ page }) => {
+    await page.goto('/#/follow-ups');
+    const select = page.getByRole('region', { name: 'Filters' }).getByLabel('Clinic');
+    const active = await select.inputValue();
+    const other = await select.locator('option').evaluateAll((options, activeId) => {
+      const option = (options as HTMLOptionElement[]).find((o) => o.value && o.value !== activeId)!;
+      return { name: option.textContent!.trim(), id: option.value };
+    }, active);
+    await select.selectOption(other.id);
+    await page.getByRole('button', { name: /New Follow-Up/ }).click();
+    const dialog = page.getByRole('dialog', { name: 'New follow-up' });
+    await expect(dialog).toContainText(other.name);
+    await dialog.getByLabel('Patient').fill(patient.firstName);
+    await page.getByRole('option', { name: patient.name }).click();
+    await dialog.getByLabel('Reason').fill('Clinic selection fixture');
+    const saved = page.waitForResponse((r) => r.url().endsWith('/api/follow-ups') && r.request().method() === 'POST');
+    await dialog.getByRole('button', { name: 'Create follow-up' }).click();
+    expect(await (await saved).json()).toMatchObject({ clinicId: other.id });
+  });
+
+  test('pages seven tasks and intersects reason, priority and task-type filters', async ({ page }) => {
+    for (let i = 0; i < 8; i++) {
+      await createFollowUp(page, { patientId: patient.id, reason: `Page fixture ${i}`, dueDate: manilaDate(i),
+        priority: i === 7 ? 'HIGH' : 'NORMAL', taskType: i === 7 ? 'PROCEDURE' : 'CHECK_UP' });
+    }
+    await page.goto('/#/follow-ups');
+    await filterToPatient(page, patient);
+    await expect(page.getByTestId('followup-row')).toHaveCount(7);
+    await page.getByRole('button', { name: /Next/ }).click();
+    await expect(page.getByTestId('followup-row')).toHaveCount(1);
+    const filters = page.getByRole('region', { name: 'Filters' });
+    await filters.getByLabel('Reason').fill('Page fixture');
+    await filters.getByLabel('Priority').selectOption('HIGH');
+    await filters.getByLabel('Task type').selectOption('PROCEDURE');
+    await expect(page.getByTestId('followup-row')).toHaveCount(1);
+    await expect(page.getByTestId('followup-row')).toContainText('Page fixture 7');
+  });
+
   test('status chips filter the list by due date', async ({ page }) => {
     const stamp = Date.now();
     const [overdue, soon, later] = [`Past ${stamp}`, `Soon ${stamp}`, `Later ${stamp}`];
@@ -154,6 +192,9 @@ test.describe('follow-ups for the Secretary', () => {
     await page.goto('/#/follow-ups');
     await expect(page.getByRole('heading', { name: 'Follow-Ups and Procedures' })).toBeVisible();
     await expect(page.getByRole('button', { name: /New Follow-Up/ })).toHaveCount(0);
+    await expect(page.getByLabel('Reason', { exact: true })).toHaveCount(0);
+    const search = await page.request.get('/api/follow-ups?reason=private');
+    expect(search.status()).toBe(403);
     await expect(page.getByLabel('Clinic', { exact: true })).toBeDisabled(); // limited to the active clinic
   });
 });

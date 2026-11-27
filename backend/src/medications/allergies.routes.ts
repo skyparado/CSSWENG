@@ -11,7 +11,8 @@ import { prisma } from '../prisma.js';
 import { asyncHandler, conflict, notFound, validate } from '../http.js';
 import { clinicForWrite, currentUser, requireAuth, requireRole } from '../auth/guards.js';
 import { findAllergyConflicts } from './medicationSafety.js';
-import { getDrugReference } from './drugReference.js';
+import { activeReference, lockPatient } from './review.js';
+import { actorFromRequest, auditPatientChange } from '../audit/record.js';
 
 export const allergiesRouter = Router();
 
@@ -23,8 +24,9 @@ async function conflictingMedications(patientId: string, allergy: Parameters<typ
   const current = await prisma.medication.findMany({
     where: { patientId, isCurrent: true, status: { not: 'DISCONTINUED' } },
   });
+  const ref = await activeReference();
   return current.flatMap((m) =>
-    findAllergyConflicts(m.medicationName, [allergy]).map((a) => ({ ...a, relatedId: m.id })),
+    findAllergyConflicts(m.medicationName, [allergy], ref).map((a) => ({ ...a, relatedId: m.id })),
   );
 }
 
@@ -61,13 +63,18 @@ allergiesRouter.post(
     const patient = await prisma.patient.findUnique({ where: { id: body.patientId } });
     if (!patient) throw notFound('Patient not found');
 
-    const allergy = await prisma.allergy.create({
-      data: {
-        ...body,
-        clinicId,
-        recordedById: currentUser(req).userId,
-        lookupVersion: getDrugReference().version,
-      },
+    const allergy = await prisma.$transaction(async (tx) => {
+      await lockPatient(tx, body.patientId);
+      const row = await tx.allergy.create({
+        data: {
+          ...body,
+          clinicId,
+          recordedById: currentUser(req).userId,
+          lookupVersion: (await activeReference(tx)).version,
+        },
+      });
+      await auditPatientChange(tx, actorFromRequest(req), 'ALLERGY_CREATED', 'Allergy', row, { fields: Object.keys(req.body) });
+      return row;
     });
     const alerts = await conflictingMedications(body.patientId, allergy);
     res.status(201).json({ allergy, alerts });
@@ -84,7 +91,12 @@ allergiesRouter.patch(
     if (!existing) throw notFound('Allergy not found');
     if (existing.voidedAt) throw conflict('This allergy was voided');
 
-    const allergy = await prisma.allergy.update({ where: { id: existing.id }, data: req.body });
+    const allergy = await prisma.$transaction(async (tx) => {
+      await lockPatient(tx, existing.patientId);
+      const row = await tx.allergy.update({ where: { id: existing.id, voidedAt: null }, data: req.body });
+      await auditPatientChange(tx, actorFromRequest(req), 'ALLERGY_UPDATED', 'Allergy', row, { fields: Object.keys(req.body) });
+      return row;
+    });
     const alerts = await conflictingMedications(existing.patientId, allergy);
     res.json({ allergy, alerts });
   }),
@@ -100,9 +112,14 @@ allergiesRouter.post(
     if (!existing) throw notFound('Allergy not found');
     if (existing.voidedAt) throw conflict('Allergy already voided');
 
-    const allergy = await prisma.allergy.update({
-      where: { id: existing.id },
-      data: { voidedAt: new Date(), voidReason: (req.body as { reason: string }).reason },
+    const allergy = await prisma.$transaction(async (tx) => {
+      await lockPatient(tx, existing.patientId);
+      const row = await tx.allergy.update({
+        where: { id: existing.id, voidedAt: null },
+        data: { voidedAt: new Date(), voidReason: (req.body as { reason: string }).reason },
+      });
+      await auditPatientChange(tx, actorFromRequest(req), 'ALLERGY_VOIDED', 'Allergy', row, { fields: Object.keys(req.body) });
+      return row;
     });
     res.json(allergy);
   }),

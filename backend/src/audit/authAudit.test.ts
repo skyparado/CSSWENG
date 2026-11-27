@@ -1,3 +1,4 @@
+import { signInStaff } from '../test-utils/authAgent.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import supertest from 'supertest';
 import { createApp } from '../app.js';
@@ -56,10 +57,7 @@ afterAll(async () => {
 
 describe('login audit entries (QA 1.3)', () => {
   it('writes LOGIN_SUCCESS with the actor on a good sign-in', async () => {
-    await supertest(app)
-      .post('/api/auth/login')
-      .send({ username, password: PASSWORD })
-      .expect(200);
+    await signInStaff(supertest.agent(app), username, PASSWORD);
 
     const entry = await latest(AuditActions.LOGIN_SUCCESS);
     expect(entry.userId).toBe(userId);
@@ -107,7 +105,7 @@ describe('login audit entries (QA 1.3)', () => {
 
   it('writes LOGOUT when a session is destroyed', async () => {
     const agent = supertest.agent(app);
-    await agent.post('/api/auth/login').send({ username, password: PASSWORD }).expect(200);
+    await signInStaff(agent, username, PASSWORD);
     await agent.post('/api/auth/logout').expect(204);
 
     const entry = await latest(AuditActions.LOGOUT);
@@ -171,10 +169,7 @@ describe('login audit entries (QA 1.3)', () => {
       where: { action: AuditActions.HTTP_REQUEST, path: '/api/auth/login' },
     });
 
-    await supertest(app)
-      .post('/api/auth/login')
-      .send({ username, password: PASSWORD })
-      .expect(200);
+    await signInStaff(supertest.agent(app), username, PASSWORD);
 
     // Wait for the named entry to land, which means the request's audit work
     // is done, then confirm no generic row joined it.

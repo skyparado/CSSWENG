@@ -78,6 +78,10 @@ export function sessionCookieOptions() {
 // Augment express-session's SessionData so req.session.user is typed.
 declare module 'express-session' {
   interface SessionData {
-    user?: AuthSession;
+    user?: AuthSession & { mfaVerified?: boolean };
+    pendingMfa?: {
+      userId: string; role: AuthSession['role']; passwordBinding: string;
+      expiresAt: number; enrollmentSecret?: string;
+    };
   }
 }

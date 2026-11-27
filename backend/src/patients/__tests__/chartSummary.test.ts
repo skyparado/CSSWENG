@@ -121,6 +121,7 @@ describe("GET /api/patients/:id/summary", () => {
     expect(body.latestExam).toBeNull();
     expect(body.iopTrend).toBeNull();
     expect(body.patient).not.toHaveProperty("medicalHistory");
+    for (const task of body.followUps) expect(task).not.toHaveProperty("reason");
     expect(body.allergies).toHaveLength(1);
   });
 

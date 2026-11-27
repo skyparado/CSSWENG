@@ -4,12 +4,7 @@ import type { DrugReferenceInput } from './drugReference.js';
  * STARTER medication / allergen reference, bundled so the safety check works
  * out of the box. It is NOT yet signed off: `approval` is empty on purpose.
  *
- * To roll out the clinic's approved list:
- *   1. copy this object to a JSON file and edit it (add drugs, brands, classes);
- *   2. fill `approval.approvedBy` and `approval.approvedAt` once the Doctor has
- *      reviewed it, and raise `version`;
- *   3. point DRUG_REFERENCE_PATH at the file.
- * Nothing else in the code needs to change.
+ * Doctors can review, edit and publish a version from S10.
  */
 export const DEFAULT_DRUG_REFERENCE: DrugReferenceInput = {
   version: 1,
