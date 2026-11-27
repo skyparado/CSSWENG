@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 
 const db = vi.hoisted(() => ({
+  $queryRaw: vi.fn(),
+  medicationReference: { findFirst: vi.fn() },
   medication: {
     findMany: vi.fn(),
     findUnique: vi.fn(),
@@ -112,9 +114,12 @@ describe('POST /api/medications', () => {
     ]);
     expect(db.medication.create).not.toHaveBeenCalled();
 
+    const blanket = await request(medsApp).post('/api/medications').send({ ...newMed, acknowledgeAlerts: true });
+    expect(blanket.status).toBe(409);
+
     const acknowledged = await request(medsApp)
       .post('/api/medications')
-      .send({ ...newMed, acknowledgeAlerts: true });
+      .send({ ...newMed, acknowledgedAlerts: [{ type: 'ALLERGY_CONFLICT', relatedId: 'a1' }] });
     expect(acknowledged.status).toBe(201);
     // The acknowledgement flag is not a column.
     expect(db.medication.create.mock.calls[0][0].data).not.toHaveProperty('acknowledgeAlerts');
@@ -127,7 +132,7 @@ describe('POST /api/medications', () => {
 
     const res = await request(medsApp)
       .post('/api/medications')
-      .send({ ...newMed, acknowledgeAlerts: true });
+      .send({ ...newMed, acknowledgedAlerts: [{ type: 'ALLERGY_CONFLICT', relatedId: 'a1' }] });
 
     expect(res.status).toBe(201);
     const saved = db.medication.create.mock.calls[0][0].data.safetyAcknowledgements;
@@ -147,9 +152,9 @@ describe('POST /api/medications', () => {
       { id: 'a1', allergenName: 'Penicillin', severity: 'SEVERE' },
     ]);
 
-    await request(medsApp).post('/api/medications').send({ ...newMed, acknowledgeAlerts: true });
+    await request(medsApp).post('/api/medications').send({ ...newMed, acknowledgedAlerts: [{ type: 'ALLERGY_CONFLICT', relatedId: 'a1' }] });
 
-    expect(auditEntries()).toHaveLength(1);
+    expect(auditEntries().filter((e) => e.action === 'MEDICATION_SAFETY_ALERTS_ACKNOWLEDGED')).toHaveLength(1);
     expect(auditEntries()[0]).toMatchObject({
       action: 'MEDICATION_SAFETY_ALERTS_ACKNOWLEDGED',
       resourceType: 'Medication',
@@ -173,7 +178,7 @@ describe('POST /api/medications', () => {
 
     const res = await request(medsApp)
       .post('/api/medications')
-      .send({ ...newMed, acknowledgeAlerts: true, acknowledgementReason: 'Tolerated amoxicillin in 2019' });
+      .send({ ...newMed, acknowledgedAlerts: [{ type: 'ALLERGY_CONFLICT', relatedId: 'a1' }], acknowledgementReason: 'Tolerated amoxicillin in 2019' });
 
     expect(res.status).toBe(201);
     const data = db.medication.create.mock.calls[0][0].data;
@@ -185,14 +190,14 @@ describe('POST /api/medications', () => {
 
   it('works without a reason', async () => {
     db.allergy.findMany.mockResolvedValue([{ id: 'a1', allergenName: 'Penicillin' }]);
-    await request(medsApp).post('/api/medications').send({ ...newMed, acknowledgeAlerts: true });
+    await request(medsApp).post('/api/medications').send({ ...newMed, acknowledgedAlerts: [{ type: 'ALLERGY_CONFLICT', relatedId: 'a1' }] });
     expect(db.medication.create.mock.calls[0][0].data.safetyAcknowledgements).not.toHaveProperty('reason');
     expect(auditEntries()[0].metadata.reasonGiven).toBe(false);
   });
 
   it('writes no acknowledgement when there was nothing to acknowledge', async () => {
     await request(medsApp).post('/api/medications').send(newMed);
-    expect(audit.writeAudit).not.toHaveBeenCalled();
+    expect(auditEntries().map((e) => e.action)).toEqual(['MEDICATION_CREATED']);
     expect(db.medication.create.mock.calls[0][0].data.safetyAcknowledgements).toBeUndefined();
   });
 
@@ -241,7 +246,7 @@ describe('POST /api/medications', () => {
     audit.writeAudit.mockRejectedValue(new Error('audit down'));
     const res = await request(medsApp)
       .post('/api/medications')
-      .send({ ...newMed, acknowledgeAlerts: true });
+      .send({ ...newMed, acknowledgedAlerts: [{ type: 'ALLERGY_CONFLICT', relatedId: 'a1' }] });
     expect(res.status).toBe(500); // the transaction rolls back with the failed audit write
   });
 
@@ -303,7 +308,7 @@ describe('PATCH /api/medications/:id', () => {
 
     expect(res.status).toBe(200);
     expect(db.medication.update).toHaveBeenCalledWith({
-      where: { id: 'm1' },
+      where: { id: 'm1', isCurrent: true },
       data: { isCurrent: false },
     });
     const created = db.medication.create.mock.calls[0][0].data;
@@ -352,7 +357,7 @@ describe('PATCH /api/medications/:id', () => {
     db.allergy.findMany.mockResolvedValue([{ id: 'a1', allergenName: 'Penicillin' }]);
     const res = await request(medsApp)
       .patch('/api/medications/m1')
-      .send({ medicationName: 'Amoxicillin', acknowledgeAlerts: true });
+      .send({ medicationName: 'Amoxicillin', acknowledgedAlerts: [{ type: 'ALLERGY_CONFLICT', relatedId: 'a1' }] });
 
     expect(res.status).toBe(200);
     expect(db.medication.create.mock.calls[0][0].data.safetyAcknowledgements.alerts).toHaveLength(1);
@@ -400,11 +405,11 @@ describe('PATCH /api/medications/:id', () => {
 
       const res = await request(medsApp)
         .patch('/api/medications/m1')
-        .send({ status: 'ACTIVE', acknowledgeAlerts: true });
+        .send({ status: 'ACTIVE', acknowledgedAlerts: [{ type: 'ALLERGY_CONFLICT', relatedId: 'a1' }] });
 
       expect(res.status).toBe(200);
       expect(db.medication.create.mock.calls[0][0].data.safetyAcknowledgements.alerts).toHaveLength(1);
-      expect(auditEntries()).toHaveLength(1);
+      expect(auditEntries().filter((e) => e.action === 'MEDICATION_SAFETY_ALERTS_ACKNOWLEDGED')).toHaveLength(1);
     });
 
     it('DISCONTINUED -> ON_HOLD still checks', async () => {
@@ -521,5 +526,13 @@ describe('allergies', () => {
   it('does not offer a delete endpoint', async () => {
     const res = await request(allergyApp).delete('/api/allergies/a1');
     expect(res.status).toBe(404);
+  });
+});
+
+describe('validating the resulting version', () => {
+  it.each([{ discontinuationReason: ' ' }, { startDate: '2026-12-02' }, { endDate: '2026-09-01' }])('rejects %j without superseding history', async (patch) => {
+    db.medication.findUnique.mockResolvedValue({ ...timolol, endDate: new Date('2026-12-01'), status: 'DISCONTINUED', discontinuationReason: 'Completed course' });
+    expect((await request(medsApp).patch('/api/medications/m1').send(patch)).status).toBe(400);
+    expect(db.medication.update).not.toHaveBeenCalled();
   });
 });

@@ -1,3 +1,4 @@
+import { eyeTemplateSchema, type EyeTemplate, type ImageContext } from '@clinic/schemas';
 // API calls for S09 clinical images and annotations. Kept apart from api.ts so
 // each module's client stays with its screens, the same way clinicalApi.ts is.
 //
@@ -12,6 +13,9 @@ export interface ClinicalImage {
   patientId: string;
   appointmentId: string | null;
   uploadedById: string | null;
+  visitId: string | null;
+  walkInKey: string | null;
+  templateType: EyeTemplate | null;
   storageKey: string;
   fileName: string;
   mimeType: string;
@@ -91,46 +95,47 @@ async function request<T>(
   return (await res.json()) as T;
 }
 
+function query(context: ImageContext) {
+  const params = new URLSearchParams({ patientId: context.patientId });
+  if (context.visitId) params.set('visitId', context.visitId);
+  return params.toString();
+}
+
+function resource(id: string, context: ImageContext, suffix = '') {
+  return `/api/clinical-images/${encodeURIComponent(id)}${suffix}?${query(context)}`;
+}
+
+export function imagesPath(patientId: string, visitId?: string, imageId?: string, templateType?: EyeTemplate) {
+  const params = new URLSearchParams();
+  if (visitId) params.set('visitId', visitId);
+  if (templateType) params.set('templateType', templateType);
+  return `/patients/${encodeURIComponent(patientId)}/images${imageId ? '/' + encodeURIComponent(imageId) : ''}${params.size ? '?' + params : ''}`;
+}
+
 export const imageApi = {
-  list: (patientId: string, status: ImageStatus = 'ACTIVE') =>
-    request<Paged<ClinicalImage>>(
-      'GET',
-      `/api/clinical-images?patientId=${encodeURIComponent(patientId)}&status=${status}&pageSize=100`,
-    ),
-
-  get: (id: string) => request<ClinicalImage>('GET', `/api/clinical-images/${id}`),
-
-  /**
-   * A presigned S3 link, good for five minutes. Fetched on demand rather than
-   * stored, so a stale link never ends up in the DOM or in a screenshot.
-   */
-  downloadUrl: (id: string) =>
-    request<{ url: string; expiresIn: number }>('GET', `/api/clinical-images/${id}/download`),
-
-  upload: (input: { patientId: string; file: File; caption?: string; appointmentId?: string }) => {
+  list: (patientId: string, status: ImageStatus, visitId?: string, appointmentId?: string, page = 1) =>
+    request<Paged<ClinicalImage>>('GET', `/api/clinical-images?${query({patientId, visitId})}&status=${status}&pageSize=100&page=${page}${appointmentId ? '&appointmentId=' + encodeURIComponent(appointmentId) : ''}`),
+  get: (id: string, context: ImageContext) => request<ClinicalImage>('GET', resource(id, context)),
+  contentUrl: (id: string, context: ImageContext) => resource(id, context, '/content'),
+  templateUrl: (type: EyeTemplate, context: ImageContext) => `/api/clinical-images/templates/${type}?${query(context)}`,
+  commit: (input: ImageContext & { templateType: EyeTemplate; commitKey: string; konvaData: AnnotationData }) =>
+    request<ClinicalImage>('POST', '/api/clinical-images/templates', input),
+  upload: (input: ImageContext & { file: File; caption?: string; appointmentId?: string; walkInKey?: string }) => {
     const form = new FormData();
     form.append('file', input.file);
-    form.append('patientId', input.patientId);
-    if (input.caption) form.append('caption', input.caption);
-    if (input.appointmentId) form.append('appointmentId', input.appointmentId);
+    for (const key of ['patientId', 'visitId', 'caption', 'appointmentId', 'walkInKey'] as const) {
+      const value = input[key];
+      if (value) form.append(key, value);
+    }
     return request<ClinicalImage>('POST', '/api/clinical-images', form);
   },
-
-  setCaption: (id: string, caption: string | null) =>
-    request<ClinicalImage>('PATCH', `/api/clinical-images/${id}`, { caption }),
-
-  /** Soft delete: the row flips to DELETED and the file stays in S3. */
-  remove: (id: string) => request<ClinicalImage>('DELETE', `/api/clinical-images/${id}`),
-
-  listAnnotations: (id: string) =>
-    request<{ items: ImageAnnotation[] }>('GET', `/api/clinical-images/${id}/annotations`),
-
-  latestAnnotation: (id: string) =>
-    request<ImageAnnotation | null>('GET', `/api/clinical-images/${id}/annotations/latest`),
-
-  /** Always creates a new layer; the server picks the next version number. */
-  saveAnnotation: (id: string, konvaData: AnnotationData) =>
-    request<ImageAnnotation>('POST', `/api/clinical-images/${id}/annotations`, { konvaData }),
+  setCaption: (id: string, context: ImageContext, caption: string | null) =>
+    request<ClinicalImage>('PATCH', resource(id, context), { caption }),
+  remove: (id: string, context: ImageContext) => request<ClinicalImage>('DELETE', resource(id, context)),
+  listAnnotations: (id: string, context: ImageContext) =>
+    request<{ items: ImageAnnotation[] }>('GET', resource(id, context, '/annotations')),
+  saveAnnotation: (id: string, context: ImageContext, konvaData: AnnotationData) =>
+    request<ImageAnnotation>('POST', resource(id, context, '/annotations'), { konvaData }),
 };
 
 /* ------------------------------- Routing --------------------------------- */
@@ -152,11 +157,14 @@ export function patientIdFromImagesRoute(route: string): string | undefined {
 /** `#/patients/:patientId/images/:imageId` -> both ids, or undefined. */
 export function annotateFromRoute(
   route: string,
-): { patientId: string; imageId: string } | undefined {
+): { patientId: string; imageId: string; visitId?: string; templateType?: EyeTemplate } | undefined {
   const path = route.split('?')[0] ?? route;
   const parts = path.split('/').filter(Boolean);
   if (parts[0] !== 'patients' || parts[2] !== 'images' || parts.length !== 4) return undefined;
-  return { patientId: parts[1]!, imageId: parts[3]! };
+  const params = new URLSearchParams(route.split('?')[1]);
+  const template = eyeTemplateSchema.safeParse(params.get('templateType'));
+  return { patientId: parts[1]!, imageId: parts[3]!, visitId: params.get('visitId') || undefined,
+    templateType: parts[3] === 'new' && template.success ? template.data : undefined };
 }
 
 /** Human-readable size for the list, e.g. "3.4 MB". */
@@ -167,4 +175,4 @@ export function formatBytes(bytes: number): string {
 }
 
 export const IS_DRAWABLE = (mimeType: string) =>
-  mimeType === 'image/jpeg' || mimeType === 'image/png';
+  mimeType === 'image/jpeg' || mimeType === 'image/png' || mimeType === 'image/svg+xml';

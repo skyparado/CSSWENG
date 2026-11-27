@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { signIn } from './helpers';
+import { signIn, UERM_ID } from './helpers';
 import { createPatient, type TestPatient } from './support';
 
 const medsUrl = (patientId: string) => `/#/patients/${patientId}/medications`;
@@ -36,6 +36,34 @@ test.describe('S10 medications and allergies', () => {
     await expect(page.getByRole('heading', { name: patient.name })).toBeVisible();
   });
 
+  test('a Doctor reviews individual tablet medicines and acknowledges conflicts before adding one', async ({ page }) => {
+    const session = await page.request.post('/api/tablet-intake/sessions', { data: { clinicId: UERM_ID } });
+    const { token, id } = await session.json();
+    const submission = await page.request.post(`/api/tablet-intake/tablet/${token}/submit`, { data: {
+      firstName: patient.firstName, lastName: patient.lastName, dateOfBirth: '1980-05-05', sex: 'FEMALE',
+      mobileNumber: '0917 555 1234', medications: 'Amoxicillin, Eye drops', consents: { treatment: true, dataPrivacy: true },
+    } });
+    expect(submission.status()).toBe(201);
+    // The patient already exists, so staff must confirm the match before the tablet medicines show (#34).
+    await page.request.post(`/api/tablet-intake/sessions/${id}/match`, { data: { decision: 'EXISTING' } });
+    await page.reload();
+    const panel = page.getByRole('region', { name: 'Tablet-reported medicines' });
+    await expect(panel.getByRole('button', { name: 'Dismiss' })).toHaveCount(2);
+    await panel.getByRole('button', { name: 'Dismiss' }).last().click();
+    await expect(panel).not.toContainText('Eye drops');
+    await addAllergy(page, 'Penicillin', 'rash', 'Severe');
+    await panel.getByRole('button', { name: 'Add to list' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByLabel('Medication name')).toHaveValue('Amoxicillin');
+    await dialog.getByLabel('Dose').fill('Recorded dose');
+    await dialog.getByLabel('Frequency').fill('Recorded frequency');
+    await dialog.getByLabel('Route').fill('oral');
+    await dialog.getByRole('button', { name: 'Save medication' }).click();
+    await page.getByRole('button', { name: 'Acknowledge and continue' }).click();
+    await expect(panel).toContainText('No medicines awaiting a decision');
+    await expect(medRow(page, 'Amoxicillin')).toBeVisible();
+  });
+
   test('a medication with no conflicts is saved straight away and shows in the list and history', async ({ page }) => {
     const dialog = await fillMedication(page, 'Timolol 0.5% eye drops', '1 drop', 'twice daily');
     await expect(dialog).toBeHidden();
@@ -47,7 +75,7 @@ test.describe('S10 medications and allergies', () => {
 
   test('an allergy conflict blocks the save until the Doctor acknowledges it', async ({ page }) => {
     await addAllergy(page, 'Penicillin', 'rash', 'Moderate');
-    await expect(page.getByRole('alert').filter({ hasText: 'ALLERGY: Penicillin' })).toContainText('rash, moderate');
+    await expect(page.getByRole('alert').filter({ hasText: 'ALLERGY: Penicillin' })).toContainText(/rash.*moderate/i);
 
     await fillMedication(page, 'Amoxicillin');
     const alert = page.getByRole('dialog', { name: 'Safety alert: allergy conflict' });

@@ -31,7 +31,7 @@ Service `clinic-emr` > Environment. Generate each key once, keep a copy somewher
 | `SESSION_SECRET` | Created by Render (`generateValue`). |
 | `FIELD_ENCRYPTION_KEY` | `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` |
 | `BLIND_INDEX_KEY` | Same command, a different value. |
-| `PRISMA_FIELD_ENCRYPTION_KEY` | `node -e "console.log('k1.aesgcm256.' + require('crypto').randomBytes(32).toString('base64'))"` The server will not start without it. |
+| `PRISMA_FIELD_ENCRYPTION_KEY` | `node -e "console.log('k1.aesgcm256.' + require('crypto').randomBytes(32).toString('base64url'))"` The server will not start without it. |
 | `BACKUP_ENCRYPTION_KEY` | Same command as `FIELD_ENCRYPTION_KEY`. |
 | `S3_*`, `BACKUP_S3_*` | From the storage provider. Use two buckets: documents and backups. |
 | `SMTP_URL`, `EMAIL_FROM` | From the SMTP account (section 5). |

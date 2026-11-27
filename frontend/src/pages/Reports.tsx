@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Bar, BarChart, CartesianGrid, LabelList, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, type ReportExportView, type ReportKey } from '../api';
 import { chartFor, visibleTabs } from '../reportCharts';
 import { useLoad, useSession } from '../session';
@@ -15,7 +15,7 @@ export default function Reports() {
   const [report, setReport] = useState<ReportKey>('patient-volume');
   const [from, setFrom] = useState(addDays(today, -6));
   const [to, setTo] = useState(today);
-  const [clinicId, setClinicId] = useState(doctor ? '' : clinic!.id); // '' = all clinics (Doctor)
+  const [clinicId, setClinicId] = useState(clinic!.id);
   // The query that was last applied; changing a field does nothing until Apply, as in the wireframe.
   const [applied, setApplied] = useState({ report, from, to, clinicId });
   const [exportJob, setExportJob] = useState<ReportExportView>();
@@ -31,11 +31,21 @@ export default function Reports() {
 
   // Poll the export job until the file is ready (SDD 5.2: large exports are rendered in the background).
   useEffect(() => {
-    if (!exportJob || exportJob.status === 'READY' || exportJob.status === 'FAILED' || exportJob.status === 'EXPIRED') return;
-    const t = setTimeout(() => {
-      api.exportStatus(exportJob.id).then(setExportJob, (e: Error) => setExportError(e.message));
-    }, 1500);
-    return () => clearTimeout(t);
+    if (!exportJob || exportJob.status === 'FAILED' || exportJob.status === 'EXPIRED') return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      try {
+        const next = await api.exportStatus(exportJob!.id);
+        if (!cancelled) { setExportError(undefined); setExportJob(next); }
+      } catch (err) {
+        if (cancelled) return;
+        setExportError((err as Error).message);
+        timer = setTimeout(poll, 4000);
+      }
+    }
+    timer = setTimeout(poll, exportJob.status === 'READY' ? 30000 : 1500);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [exportJob]);
 
   const startExport = (format: 'PDF' | 'CSV') => {
@@ -83,7 +93,7 @@ export default function Reports() {
         <div>
           <label htmlFor="r-clinic">Clinic</label>
           <select id="r-clinic" value={clinicId} disabled={!doctor} onChange={(e) => setClinicId(e.target.value)}>
-            {doctor && <option value="">All clinics</option>}
+            {doctor && <option value="all">All clinics</option>}
             {(doctor ? clinics : clinics.filter((c) => c.id === clinic!.id)).map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
@@ -115,7 +125,8 @@ export default function Reports() {
                   Download {exportJob.fileName}
                 </a>
               </>
-            ) : exportJob?.status === 'FAILED' ? (
+            ) : exportJob?.status === 'EXPIRED' ? 'This export has expired. Request a new file.'
+              : exportJob?.status === 'RETRYING' ? 'The export will retry automatically.' : exportJob?.status === 'FAILED' ? (
               `The export failed: ${exportJob.error ?? 'unknown error'}`
             ) : (
               `Preparing your ${exportJob?.format} in the background…`
@@ -159,7 +170,7 @@ export default function Reports() {
                       <Tooltip />
                       {chart.series.length > 1 && <Legend />}
                       {chart.series.map((s) => (
-                        <Bar key={s.key} dataKey={s.key} name={s.label} fill={s.color} stackId={chart.series.length > 1 ? 'a' : undefined} isAnimationActive={false} />
+                        <Bar key={s.key} dataKey={s.key} name={s.label} fill={s.color} stackId={chart.series.length > 1 ? 'a' : undefined} isAnimationActive={false}>{r.report === 'patient-volume' && <LabelList dataKey={s.key} position="top" />}</Bar>
                       ))}
                     </BarChart>
                   </ResponsiveContainer>
@@ -197,7 +208,7 @@ export default function Reports() {
               )}
               {r.note && <p className="muted" style={{ marginTop: 12 }}>{r.note}</p>}
               <p className="muted" style={{ marginTop: 12 }}>
-                {doctor ? 'Doctor view: all three clinics.' : 'The Secretary sees patient volume for the active clinic only.'}
+                {doctor ? `Showing ${r.clinicName}.` : 'The Secretary sees patient volume for the active clinic only.'}
               </p>
             </section>
           </div>

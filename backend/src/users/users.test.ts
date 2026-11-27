@@ -251,7 +251,7 @@ describe('reset password', () => {
     const newLogin = await supertest(app)
       .post('/api/auth/login')
       .send({ username, password: 'Harbour-Thimble-55' });
-    expect(newLogin.status).toBe(200);
+    expect(newLogin.status).toBe(202);
   });
 });
 
@@ -297,7 +297,7 @@ describe('password policy (QA 1)', () => {
     const login = await supertest(app)
       .post('/api/auth/login')
       .send({ username, password: 'Sandpiper-Vellum-6' });
-    expect(login.status).toBe(200);
+    expect(login.status).toBe(202);
   });
 
   it('accepts a password that meets the policy at the minimum length', async () => {
@@ -378,7 +378,7 @@ describe('username (SRS, SDD, S01)', () => {
     const login = await supertest(app)
       .post('/api/auth/login')
       .send({ username: base.toUpperCase(), password: 'Lantern-Bramble-19' });
-    expect(login.status).toBe(200);
+    expect(login.status).toBe(202);
   });
 
   it('does not accept the email address as a credential any more', async () => {
@@ -402,6 +402,6 @@ describe('username (SRS, SDD, S01)', () => {
     const byUsername = await supertest(app)
       .post('/api/auth/login')
       .send({ username, password: 'Driftwood-Ember-31' });
-    expect(byUsername.status).toBe(200);
+    expect(byUsername.status).toBe(202);
   });
 });

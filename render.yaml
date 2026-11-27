@@ -35,7 +35,7 @@ services:
       - key: FIELD_ENCRYPTION_KEY
         sync: false
       # Used by prisma-field-encryption. It must start with "k1.aesgcm256."; generate with:
-      #   node -e "console.log('k1.aesgcm256.' + require('crypto').randomBytes(32).toString('base64'))"
+      #   node -e "console.log('k1.aesgcm256.' + require('crypto').randomBytes(32).toString('base64url'))"
       # The server will not start without it.
       - key: PRISMA_FIELD_ENCRYPTION_KEY
         sync: false

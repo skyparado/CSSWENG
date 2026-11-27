@@ -38,8 +38,7 @@ npm run dev:frontend    # http://localhost:5173
 ```
 
 Then open http://localhost:5173 and sign in with a seeded account
-(`doctor@pacio.clinic.local` / `DoctorPass123!` or
-`secretary@pacio.clinic.local` / `SecretaryPass123!`).
+using the usernames printed by the local seed. Complete authenticator enrollment on first sign-in.
 
 Email the app sends (documents, reminders) goes to **Mailpit**, a local inbox at
 http://localhost:8025 (`EMAIL_PROVIDER=smtp`, `SMTP_URL=smtp://localhost:1025`).
@@ -130,17 +129,11 @@ Reports: `GET /api/reports/{patient-volume|follow-up-compliance|overdue-patients
 Exports are BullMQ jobs: `POST /api/reports/exports`, poll `GET /api/reports/exports/:id`, then `GET .../download`.
 Every view and export is written to the audit log.
 
-**Background jobs** (BullMQ, started with the API unless `BACKGROUND_JOBS_ENABLED=false`):
-report exports; a nightly `pg_dump` backup, encrypted with `BACKUP_ENCRYPTION_KEY`, to a separate
-bucket (`BACKUP_S3_*`) together with a copy of the stored files; and a nightly retention purge
-(audit entries older than 5 years, expired exports, backups older than `BACKUP_RETENTION_DAYS`, never the
-newest backup). To restore: `npm run db:restore-backup --workspace backend -- --list`, then `-- --key ... --out file.dump`,
-then `pg_restore` into an empty database (the script prints the command).
+The Doctor can review each tablet-reported medicine and approve versioned medication and allergen lookup data in S10. S11 shows seven follow-ups per page. The Doctor can configure a routine recall interval on a check-up. Secretaries see scheduling and contact details for their active clinic.
 
-**SMS and email.** `SMS_PROVIDER=stub` (default) only logs. `twilio` and `semaphore` are implemented but not
-selected until the clinic chooses a provider; set that provider's credentials (see `backend/.env.example`) and
-`PUBLIC_BASE_URL`. Delivery reports arrive at `POST /api/webhooks/sms/twilio` (signature-checked) or
-`/api/webhooks/sms/generic?secret=` (shared secret). Email already works with any SMTP relay (`EMAIL_PROVIDER=smtp`).
+BullMQ generates report exports, daily encrypted database and uploaded-file snapshots, and a separate daily audit archive. The standalone worker, recovery commands and isolated restore drill are documented in [Running the clinic jobs](WORKER.md).
+
+SMS and email providers require clinic selection and configuration. Disabled channels are labelled in Outreach. Twilio supports signed final status callbacks. SMTP acceptance remains pending a final delivery or bounce report.
 
 ## Testing
 
@@ -174,9 +167,8 @@ managed PostgreSQL and Key Value (Redis). To deploy: Render dashboard →
 New → Blueprint → this repository, then fill in the values it asks for
 (`CORS_ORIGIN` = the site URL; the `S3_*` settings of an S3-compatible bucket
 such as AWS S3 or Cloudflare R2; `SMTP_URL` and `EMAIL_FROM` of an email
-provider's SMTP relay). After the first deploy, run the seed once from the
-Render shell (`npm run db:seed --workspace @clinic/backend`) or create the
-real accounts and clinics. Render uses `/health/ready` as its health check.
+provider's SMTP relay). Provision demonstration accounts using the private environment inputs in the
+[Developer 4 demo and device guide](DEV4-DEMO.md). The development seed is restricted to local use. Render uses `/health/ready` as its health check.
 
 ### Uptime monitor
 

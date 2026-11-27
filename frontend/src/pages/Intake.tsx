@@ -44,6 +44,14 @@ export default function Intake() {
     }
   }
 
+  async function resolveMatch(id: string, decision: 'EXISTING' | 'SEPARATE') {
+    try {
+      await intakeApi.resolveMatch(id, decision);
+      setNotice('Recorded the verified identity decision.');
+      sessions.reload();
+    } catch (e) { setStartError(e instanceof Error ? e.message : String(e)); }
+  }
+
   async function cancel(id: string) {
     setNotice(null);
     try {
@@ -97,7 +105,7 @@ export default function Intake() {
       )}
 
       <section className="card stack-gap">
-        <h2>Recent sessions</h2>
+        <h2>Recent sessions</h2><button type="button" onClick={sessions.reload}>Refresh sessions</button>
         {sessions.error && <p className="error">{sessions.error}</p>}
         {!sessions.data && !sessions.error && <p>Loading...</p>}
         {sessions.data && sessions.data.items.length === 0 && (
@@ -126,6 +134,11 @@ export default function Intake() {
                   </td>
                   <td className="muted nowrap">{formatDateTime(s.submittedAt)}</td>
                   <td>
+                    {s.matchDecision === 'PENDING' && (s.status === 'ACTIVE' || s.status === 'SUBMITTED') && <div>
+                      <a href={`#/patients/${s.matchPatientId}`}>Check candidate chart against patient ID</a>
+                      <button type="button" onClick={() => void resolveMatch(s.id, 'EXISTING')}>Use verified chart</button>
+                      <button type="button" onClick={() => void resolveMatch(s.id, 'SEPARATE')}>Register separately</button>
+                    </div>}
                     {s.status === 'ACTIVE' && (
                       <button type="button" onClick={() => cancel(s.id)}>
                         Cancel

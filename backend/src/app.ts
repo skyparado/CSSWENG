@@ -1,3 +1,4 @@
+import rateLimit from 'express-rate-limit';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express, { type Express } from 'express';
@@ -18,6 +19,7 @@ import { followUpsRouter } from './followups/followups.routes.js';
 import { outreachRouter } from './followups/outreach.routes.js';
 import { medicationsRouter } from './medications/medications.routes.js';
 import { allergiesRouter } from './medications/allergies.routes.js';
+import { requireClinicAccess } from './auth/clinicScope.js';
 import { denyUnauthenticatedByDefault, requireAuth } from './auth/middleware.js';
 import { createPatientRouter } from './patients/patient.routes.js';
 import { chartSummaryRouter } from './patients/chartSummary.routes.js';
@@ -56,6 +58,13 @@ export function createApp(): Express {
     }),
   );
 
+  app.use('/api', (req, res, next) => {
+    if (env.NODE_ENV === 'production' && !req.secure) return res.status(403).json({ error: 'HTTPS is required' });
+    next();
+  });
+  app.use('/api', rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: 'draft-7', legacyHeaders: false,
+    skip: () => env.NODE_ENV === 'test' }));
+  app.use('/api', (_req, res, next) => { res.set('Cache-Control', 'private, no-store'); next(); });
   app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
 
   /*
@@ -105,12 +114,12 @@ export function createApp(): Express {
   app.use('/api/documents', documentsRouter);
   // Follow-ups, reminders and outreach; consents; medications and allergies.
   app.use('/api/consents', consentsRouter);
-  app.use('/api/follow-ups', followUpsRouter);
-  app.use('/api/outreach-logs', outreachRouter);
+  app.use('/api/follow-ups', requireClinicAccess, followUpsRouter);
+  app.use('/api/outreach-logs', requireClinicAccess, outreachRouter);
   app.use('/api/medications', medicationsRouter);
   app.use('/api/allergies', allergiesRouter);
   // Management reports (S17): five read-only reports and background exports.
-  app.use('/api/reports', reportsRouter);
+  app.use('/api/reports', (req, res, next) => req.session.user?.role === 'SECRETARY' ? requireClinicAccess(req, res, next) : next(), reportsRouter);
   // Delivery reports from the SMS provider; authenticated by signature or shared secret, not by session.
   app.use('/api/webhooks/sms', smsWebhooksRouter);
   // Patient registration, search and demographics (Doctor and Secretary).

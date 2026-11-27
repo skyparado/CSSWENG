@@ -1,3 +1,5 @@
+import EyeTemplatePicker from '../EyeTemplatePicker';
+import { imagesPath } from '../imageApi';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { EXAM_FIELDS, ExamFindingSchema, type ComparisonResponse } from '@clinic/schemas';
 import {
@@ -74,6 +76,7 @@ export default function ConsultationNote({ patientId, encounterId }: { patientId
       clinicalApi.encounter(encounterId),
       clinicalApi.findings(encounterId),
     ]);
+    if (enc.patientId !== s.patient.id) throw new Error('This visit does not belong to the selected patient.');
     const cmp = await clinicalApi.comparison(patientId, { show: 'exam', currentEncounterId: encounterId }).catch(() => undefined);
     setSummary(s);
     setEncounter(enc);
@@ -234,6 +237,7 @@ export default function ConsultationNote({ patientId, encounterId }: { patientId
           <section className="card">
             <div className="row between">
               <h2>Objective · Examination Findings</h2>
+              <a href={`#${imagesPath(p.id, encounterId)}`}>Visit images</a>
               <a href={`#/patients/${p.id}/compare?current=${encounterId}`}>Compare with previous</a>
             </div>
             <table className="findings">
@@ -305,6 +309,7 @@ export default function ConsultationNote({ patientId, encounterId }: { patientId
                 })}
               </tbody>
             </table>
+            {!locked && <EyeTemplatePicker patientId={p.id} visitId={encounterId} />}
             <p className="muted small">Values that changed from the previous visit are highlighted in red.</p>
           </section>
 

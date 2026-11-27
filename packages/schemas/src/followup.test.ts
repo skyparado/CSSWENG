@@ -111,14 +111,10 @@ describe('followUpDeclineSchema / followUpRemindSchema', () => {
 });
 
 describe('outreachCreateSchema', () => {
-  it('defaults to a phone call and coerces the attempt time', () => {
-    const r = outreachCreateSchema.parse({
-      followUpId: 'f1',
-      outcome: 'NO_ANSWER',
-      attemptedAt: '2026-11-05T09:00:00Z',
-    });
-    expect(r.channel).toBe('CALL');
-    expect(r.attemptedAt).toBeInstanceOf(Date);
+  it('defaults to a call and rejects client-supplied timestamps', () => {
+    const data = { followUpId: 'f1', outcome: 'NO_ANSWER' };
+    expect(outreachCreateSchema.parse(data).channel).toBe('CALL');
+    expect(outreachCreateSchema.safeParse({ ...data, attemptedAt: '2026-11-05T09:00:00Z' }).success).toBe(false);
   });
 
   it('keeps SMS/email rows and SENT out of manual logging', () => {

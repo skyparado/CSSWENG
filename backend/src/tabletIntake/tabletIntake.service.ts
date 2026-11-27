@@ -1,9 +1,11 @@
+import { encrypt, decrypt } from '../lib/fieldCrypto.js';
+import type { AuditTx } from '../audit/audit.service.js';
 import { randomBytes } from 'node:crypto';
 import { prisma } from '../prisma.js';
 import { badRequest, notFound } from '../http.js';
 import {
   INTAKE_SESSION_TTL_MINUTES,
-  type IntakeFormSubmit,
+  type IntakeFormSubmit, type IntakeIdentity,
   type IntakeReview,
   type IntakeReviewStatus,
   type TabletIntakeSessionAdmin,
@@ -88,17 +90,19 @@ export async function getSessionByToken(token: string): Promise<TabletIntakeSess
   // Auto-expire on read so stale sessions don't look usable in the UI.
   let effective = session;
   if (session.status === 'ACTIVE' && session.expiresAt.getTime() < Date.now()) {
-    effective = {
-      ...(await prisma.tabletIntakeSession.update({
-        where: { id: session.id },
-        data: { status: 'EXPIRED' },
-      })),
-      clinic: session.clinic,
-    } as typeof session;
+    await prisma.$transaction(async tx => {
+      const expired = await tx.tabletIntakeSession.updateMany({ where: { id: session.id, status: 'ACTIVE', expiresAt: { lte: new Date() } },
+        data: { status: 'EXPIRED', cancelledAt: new Date() } });
+      if (expired.count) await writeAudit({ userId: session.startedBySecretaryId, userEmail: null, userRole: null,
+        action: AuditActions.INTAKE_SESSION_CANCELLED, resourceType: INTAKE_RESOURCE, resourceId: session.id,
+        method: null, path: null, statusCode: null, ipAddress: null, userAgent: null, metadata: { clinicId: session.clinicId, reason: 'idle timeout' } }, tx);
+    });
+    effective = await prisma.tabletIntakeSession.findUniqueOrThrow({ where: { id: session.id }, include: { clinic: { select: { id: true, name: true } } } });
   }
 
   return {
     id: effective.id,
+    ...(effective.matchDecision === 'PENDING' ? { needsStaff: true } : {}),
     status: effective.status,
     clinic: effective.clinic,
     expiresAt: effective.expiresAt,
@@ -109,15 +113,10 @@ export async function getSessionByToken(token: string): Promise<TabletIntakeSess
 
 /* ------------------------------- Submit ----------------------------------- */
 
-async function findOrCreatePatient(
-  payload: IntakeFormSubmit,
-  session: { clinicId: string; startedBySecretaryId: string },
-) {
-  // Patient columns are encrypted with a random IV, so dedup matches on the
-  // blind indexes instead. Name, birth date and phone together, per QA 8:
-  // name and phone alone would match a parent and child sharing a number.
-  const match = await prisma.patient.findFirst({
+function matchingPatient(tx: AuditTx, payload: IntakeIdentity, patientId?: string) {
+  return tx.patient.findFirst({
     where: {
+      id: patientId,
       firstNameIdx: indexes.firstName(payload.firstName),
       lastNameIdx: indexes.lastName(payload.lastName),
       dobIdx: indexes.dob(payload.dateOfBirth),
@@ -125,11 +124,52 @@ async function findOrCreatePatient(
       voidedAt: null,
     },
   });
-  if (match) return { patient: match, created: false };
+}
 
+async function lockIntake(tx: AuditTx, token: string) {
+  await tx.$queryRaw`SELECT id FROM "TabletIntakeSession" WHERE token = ${token} FOR UPDATE`;
+  const session = await tx.tabletIntakeSession.findFirst({ where: { token, status: 'ACTIVE', expiresAt: { gt: new Date() } } });
+  if (!session) throw badRequest('This intake session has closed');
+  return session;
+}
+
+export function identifyPatient(token: string, input: IntakeIdentity) {
+  return prisma.$transaction(async tx => {
+    const session = await lockIntake(tx, token);
+    if (session.matchDecision === 'PENDING') return { needsStaff: true };
+    if (session.matchDecision && session.matchPatientId && await matchingPatient(tx, input, session.matchPatientId)) {
+      return { needsStaff: false };
+    }
+    const match = await matchingPatient(tx, input);
+    if (!match) return { needsStaff: false };
+    await tx.tabletIntakeSession.update({ where: { id: session.id }, data: { matchPatientId: match.id, matchDecision: 'PENDING' } });
+    return { needsStaff: true };
+  });
+}
+
+async function findOrCreatePatient(
+  tx: AuditTx,
+  payload: IntakeFormSubmit,
+  session: { clinicId: string; startedBySecretaryId: string; matchPatientId?: string | null; matchDecision?: string | null },
+) {
+  // Patient columns are encrypted with a random IV, so dedup matches on the
+  // blind indexes instead. Name, birth date and phone together, per QA 8:
+  // name and phone alone would match a parent and child sharing a number.
+  // Two tablets can finish the same new registration together. Serialize the
+  // final identity check while still permitting a staff-approved separate chart.
+  const identity = [indexes.firstName(payload.firstName), indexes.lastName(payload.lastName),
+    indexes.dob(payload.dateOfBirth), indexes.mobile(payload.mobileNumber)].join('|');
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${identity}, 1))`;
+  const reviewed = session.matchPatientId && session.matchDecision
+    ? await matchingPatient(tx, payload, session.matchPatientId) : null;
+  if (reviewed && session.matchDecision === 'EXISTING') return { patient: reviewed, created: false };
+  if (!(reviewed && session.matchDecision === 'SEPARATE')) {
+    const match = reviewed || await matchingPatient(tx, payload);
+    if (match) return { patient: match, created: false };
+  }
   // Every Patient records who registered it. The secretary who started the
   // session stands in; submitSession already refused a session without one.
-  const patient = await prisma.patient.create({
+  const patient = await tx.patient.create({
     data: {
       ...(toDbData({
         firstName: payload.firstName,
@@ -139,7 +179,10 @@ async function findOrCreatePatient(
         mobileNumber: payload.mobileNumber,
         email: payload.email,
         address: payload.address,
-        medicalHistory: payload.medicalHistory,
+        medicalHistory: payload.medicalHistory, ophthalmicHistory: payload.ophthalmicHistory,
+        emergencyContactName: payload.emergencyContactName, emergencyContactPhone: payload.emergencyContactPhone,
+        hmoProvider: payload.hmoProvider, hmoMemberNumber: payload.hmoMemberNumber, hmoValidUntil: payload.hmoValidUntil,
+        philhealthNumber: payload.philhealthNumber, referralSource: payload.referralSource,
       }) as Prisma.PatientUncheckedCreateInput),
       registeredClinicId: session.clinicId,
       createdById: session.startedBySecretaryId,
@@ -170,6 +213,10 @@ function consentRowsFor(
     intakeSessionId: session.id,
   };
   return [
+    ...(['SMS', 'EMAIL'] as const).flatMap(channel => {
+      const granted = channel === 'SMS' ? payload.consents.smsReminders : payload.consents.emailReminders;
+      return granted === undefined ? [] : [{ ...common, consentType: 'REMINDER' as const, channel, isGranted: granted }];
+    }),
     { ...common, consentType: 'TREATMENT', isGranted: payload.consents.treatment },
     { ...common, consentType: 'DATA_PROCESSING', isGranted: payload.consents.dataPrivacy },
     {
@@ -180,6 +227,46 @@ function consentRowsFor(
   ];
 }
 
+type SupervisedSession = { id: string; clinicId: string; startedBySecretaryId: string };
+
+async function applyVerifiedIntake(tx: AuditTx, payload: IntakeFormSubmit, patientId: string, created: boolean,
+  session: SupervisedSession, actor: { userId: string; role: string }) {
+  await tx.patientConsent.createMany({ data: consentRowsFor(payload, patientId, session) });
+  await tx.$queryRaw`SELECT id FROM "Patient" WHERE id = ${patientId} FOR UPDATE`;
+  const audit = (action: string, resourceType: string, resourceId: string, changes: Record<string, unknown>) =>
+    writeAudit({ action, resourceType, resourceId, userId: actor.userId, userRole: actor.role, userEmail: null, method: null,
+      path: null, statusCode: null, ipAddress: null, userAgent: null,
+      metadata: { patientId, clinicId: session.clinicId, intakeSessionId: session.id, ...changes } }, tx);
+
+  if (!created && (payload.medicalHistory || payload.ophthalmicHistory)) {
+    const chart = await tx.patient.findUniqueOrThrow({ where: { id: patientId } });
+    const updates: { medicalHistory?: string; ophthalmicHistory?: string } = {};
+    for (const field of ['medicalHistory', 'ophthalmicHistory'] as const) {
+      const report = payload[field]?.trim();
+      const previous = chart[field] ? decrypt(chart[field]!) : '';
+      if (report && previous !== report) updates[field] = previous ? previous + '\n\nPatient-reported at intake: ' + report : report;
+    }
+    if (Object.keys(updates).length) {
+      await tx.patient.update({ where: { id: patientId }, data: toDbData(updates) });
+      await audit('patient.updated', 'Patient', patientId, { fields: Object.keys(updates) });
+    }
+  }
+
+  // Older forms collected unrestricted prose. Only the list of substances
+  // entered in the named-allergen field goes into the medication safety lookup.
+  if (!payload.reportedAllergens?.length) return;
+  const recorded = await tx.allergy.findMany({ where: { patientId, voidedAt: null }, select: { allergenName: true } });
+  const names = new Set(recorded.map(a => a.allergenName.toLowerCase()));
+  for (const name of payload.reportedAllergens) {
+    const normalized = name.trim().toLowerCase();
+    if (!normalized || names.has(normalized) || /^(?:no\b|none\b|not\b|unknown\b|unsure\b|nil\b|nkda\b|nka\b|n\/a\b)/i.test(normalized)) continue;
+    const allergy = await tx.allergy.create({ data: { patientId, clinicId: session.clinicId, allergenName: name,
+      recordedById: session.startedBySecretaryId, intakeSessionId: session.id } });
+    names.add(normalized);
+    await audit(AuditActions.ALLERGY_CREATED, 'Allergy', allergy.id, { source: 'PATIENT_REPORTED' });
+  }
+}
+
 export async function submitSession(token: string, payload: IntakeFormSubmit) {
   const session = await prisma.tabletIntakeSession.findUnique({ where: { token } });
   if (!session) throw notFound('Intake session not found');
@@ -188,10 +275,7 @@ export async function submitSession(token: string, payload: IntakeFormSubmit) {
     throw badRequest(`Session is ${session.status} and cannot accept a submission`);
   }
   if (session.expiresAt.getTime() < Date.now()) {
-    await prisma.tabletIntakeSession.update({
-      where: { id: session.id },
-      data: { status: 'EXPIRED' },
-    });
+    await getSessionByToken(token);
     throw badRequest('Session has expired');
   }
 
@@ -200,61 +284,90 @@ export async function submitSession(token: string, payload: IntakeFormSubmit) {
   if (!session.startedBySecretaryId) {
     throw badRequest('This intake session has no registering staff member; start a new one');
   }
-  const supervised = { id: session.id, startedBySecretaryId: session.startedBySecretaryId };
+  const supervised = { id: session.id, clinicId: session.clinicId, startedBySecretaryId: session.startedBySecretaryId };
 
-  const { patient, created } = await findOrCreatePatient(payload, {
-    clinicId: session.clinicId,
-    startedBySecretaryId: supervised.startedBySecretaryId,
-  });
-
-  // Submission + status flip in one transaction so a crashed submit never
-  // leaves us with a submission row and an ACTIVE session (which would allow
-  // a second submit).
-  const result = await prisma.$transaction(async (tx) => {
-    const submission = await tx.tabletIntakeSubmission.create({
+  return prisma.$transaction(async tx => {
+    const locked = await lockIntake(tx, token);
+    const now = new Date();
+    const used = await tx.tabletIntakeSession.updateMany({ where: { id: session.id, status: 'ACTIVE', expiresAt: { gt: now } },
+      data: { status: 'SUBMITTED', submittedAt: now } });
+    if (!used.count) throw badRequest('This intake session has closed');
+    const { patient, created } = await findOrCreatePatient(tx, payload, { ...locked, startedBySecretaryId: supervised.startedBySecretaryId });
+    await tx.tabletIntakeSubmission.create({
       data: {
         sessionId: session.id,
         patientId: patient.id,
-        rawPayload: payload as any,
+        rawPayload: encrypt(JSON.stringify(payload)),
       },
     });
-    await tx.patientConsent.createMany({
-      data: consentRowsFor(payload, patient.id, supervised),
-    });
-    const updatedSession = await tx.tabletIntakeSession.update({
-      where: { id: session.id },
-      data: { status: 'SUBMITTED', submittedAt: new Date() },
-    });
-    return { submission, session: updatedSession };
+    const verified = created || (locked.matchDecision === 'EXISTING' && locked.matchPatientId === patient.id);
+    const supervisor = await tx.user.findUniqueOrThrow({ where: { id: supervised.startedBySecretaryId }, select: { role: true } });
+    if (verified) {
+      await applyVerifiedIntake(tx, payload, patient.id, created, supervised, { userId: supervised.startedBySecretaryId, role: supervisor.role });
+    } else {
+      // Older tablet clients may submit without the identity step. Hold every
+      // clinical side effect until staff verify the candidate away from the tablet.
+      await tx.tabletIntakeSession.update({ where: { id: session.id }, data: { matchDecision: 'PENDING', matchPatientId: patient.id } });
+    }
+    await writeAudit({
+      userId: session.startedBySecretaryId,
+      userEmail: null,
+      userRole: supervisor.role,
+      action: AuditActions.INTAKE_SESSION_SUBMITTED,
+      resourceType: INTAKE_RESOURCE,
+      resourceId: session.id,
+      method: null,
+      path: null,
+      statusCode: null,
+      ipAddress: null,
+      userAgent: null,
+      metadata: {
+        patientId: patient.id,
+        patientCreated: created,
+        clinicId: session.clinicId,
+        consentsRecorded: verified,
+        photoConsentGranted: payload.consents.photoConsent ?? false,
+      },
+    }, tx);
+    return { sessionId: session.id, patientId: patient.id, patientCreated: created, submittedAt: now };
   });
+}
 
-  await writeAudit({
-    userId: session.startedBySecretaryId,
-    userEmail: null,
-    userRole: 'SECRETARY',
-    action: AuditActions.INTAKE_SESSION_SUBMITTED,
-    resourceType: INTAKE_RESOURCE,
-    resourceId: session.id,
-    method: null,
-    path: null,
-    statusCode: null,
-    ipAddress: null,
-    userAgent: null,
-    metadata: {
-      patientId: patient.id,
-      patientCreated: created,
-      clinicId: session.clinicId,
-      consentsRecorded: ['TREATMENT', 'DATA_PROCESSING', 'CLINICAL_PHOTOGRAPHY'],
-      photoConsentGranted: payload.consents.photoConsent ?? false,
-    },
+export async function resolveMatch(id: string, decision: 'EXISTING' | 'SEPARATE', actor: { userId: string; role: string }) {
+  await prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM "TabletIntakeSession" WHERE id = ${id} FOR UPDATE`;
+    const session = await tx.tabletIntakeSession.findFirst({ where: { id, matchDecision: 'PENDING', status: { in: ['ACTIVE', 'SUBMITTED'] } },
+      include: { submission: true } });
+    if (!session || !session.matchPatientId || !session.startedBySecretaryId) throw badRequest('This match is no longer pending');
+    const { submission } = session;
+    if (submission) {
+      const payload = readIntakePayload(submission.rawPayload);
+      const supervised = { id, clinicId: session.clinicId, startedBySecretaryId: session.startedBySecretaryId };
+      if (!await matchingPatient(tx, payload, session.matchPatientId)) throw badRequest('The candidate identity changed. Review the chart again.');
+      const resolved = await findOrCreatePatient(tx, payload, { ...supervised, matchPatientId: session.matchPatientId, matchDecision: decision });
+      await tx.tabletIntakeSubmission.update({ where: { id: submission.id }, data: { patientId: resolved.patient.id } });
+      await applyVerifiedIntake(tx, payload, resolved.patient.id, resolved.created, supervised, actor);
+    }
+    await tx.tabletIntakeSession.update({ where: { id }, data: { matchDecision: decision } });
+    await writeAudit({ action: 'INTAKE_MATCH_RESOLVED', resourceType: INTAKE_RESOURCE, resourceId: id, userId: actor.userId,
+      userRole: actor.role, userEmail: null, method: null, path: null, statusCode: null, ipAddress: null, userAgent: null,
+      metadata: { clinicId: session.clinicId, decision } }, tx);
   });
+}
 
-  return {
-    sessionId: result.session.id,
-    patientId: patient.id,
-    patientCreated: created,
-    submittedAt: result.session.submittedAt,
-  };
+export async function tabletActivity(token: string) {
+  const active = await prisma.tabletIntakeSession.updateMany({ where: { token, status: 'ACTIVE', expiresAt: { gt: new Date() } },
+    data: { expiresAt: minutesFromNow(INTAKE_SESSION_TTL_MINUTES) } });
+  if (!active.count) throw badRequest('This intake session has closed');
+}
+
+export function readIntakePayload(value: Prisma.JsonValue): IntakeFormSubmit {
+  return typeof value === 'string' ? JSON.parse(decrypt(value)) : value as unknown as IntakeFormSubmit;
+}
+
+export function reviewView<T extends {rawPayload: Prisma.JsonValue}>(row: T, role: string) {
+  const { medicalHistory, ophthalmicHistory, medications, allergies, reportedAllergens, ...demographics } = readIntakePayload(row.rawPayload);
+  return { ...row, rawPayload: role === 'DOCTOR' ? { ...demographics, medicalHistory, ophthalmicHistory, medications, allergies, reportedAllergens } : demographics };
 }
 
 /* ------------------------------- Cancel ----------------------------------- */
@@ -272,7 +385,7 @@ export async function cancelSession(input: {
   }
 
   const updated = await prisma.tabletIntakeSession.update({
-    where: { id: input.id },
+    where: { id: input.id, status: 'ACTIVE' },
     data: { status: 'CANCELLED', cancelledAt: new Date() },
   });
 
@@ -319,6 +432,7 @@ export async function listSessionsForClinic(
         submittedAt: true,
         cancelledAt: true,
         startedBySecretaryId: true,
+        matchDecision: true, matchPatientId: true,
       },
     }),
     prisma.tabletIntakeSession.count({ where }),
@@ -405,10 +519,11 @@ export async function reviewSubmission(input: {
 }) {
   const existing = await prisma.tabletIntakeSubmission.findUnique({
     where: { id: input.id },
-    select: { id: true, patientId: true, reviewStatus: true, session: { select: { clinicId: true } } },
+    select: { id: true, patientId: true, reviewStatus: true, session: { select: { clinicId: true, matchDecision: true } } },
   });
   if (!existing) throw notFound('Intake submission not found');
 
+  if (existing.session.matchDecision === 'PENDING') throw badRequest('Resolve the identity match before reviewing this intake');
   if (existing.reviewStatus !== 'PENDING_REVIEW') {
     throw badRequest(
       `This submission was already reviewed as ${existing.reviewStatus}.`,
@@ -416,7 +531,7 @@ export async function reviewSubmission(input: {
   }
 
   const updated = await prisma.tabletIntakeSubmission.update({
-    where: { id: input.id },
+    where: { id: input.id, reviewStatus: 'PENDING_REVIEW' },
     data: {
       reviewStatus: input.review.decision,
       reviewedById: input.reviewerId,

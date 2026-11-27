@@ -1,3 +1,4 @@
+import { createPatient } from './support';
 import { expect, test, type Page } from '@playwright/test';
 import { PATIENT_ID, signIn } from './helpers';
 
@@ -44,7 +45,7 @@ async function uploadImage(page: Page, caption: string) {
     buffer: TEST_PNG,
   });
   await page.getByLabel('Caption').fill(caption);
-  await page.getByRole('button', { name: 'Upload' }).click();
+  await page.getByRole('button', { name: 'Upload', exact: true }).click();
   await expect(page.getByText(`Uploaded fundus.png`)).toBeVisible();
   await expect(page.getByText(caption)).toBeVisible();
   return caption;
@@ -146,5 +147,86 @@ test.describe('S09 clinical images', () => {
     // refuses as well (SDD 7.1 makes the whole module Doctor-only).
     await page.goto(IMAGES);
     await expect(page.getByText('Only the Doctor can view clinical images.')).toBeVisible();
+  });
+});
+
+test.describe('S07 tablet drawings', () => {
+  test.use({ viewport: { width: 800, height: 1280 }, hasTouch: true, isMobile: true });
+
+  test('fits a 4096-pixel photograph in the available tablet width', async ({ page }) => {
+    await signIn(page, 'DOCTOR');
+    const patient = await createPatient(page);
+    const data = await page.evaluate(() => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 4096; canvas.height = 3072;
+      const context = canvas.getContext('2d')!;
+      context.fillStyle = '#fff'; context.fillRect(0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/png').split(',')[1]!;
+    });
+    await page.goto('/#/patients/' + patient.id + '/images');
+    await page.getByLabel('File', { exact: true }).setInputFiles({ name: 'large-test.png', mimeType: 'image/png', buffer: Buffer.from(data, 'base64') });
+    await page.getByRole('button', { name: 'Upload', exact: true }).tap();
+    await page.getByRole('button', { name: 'Draw', exact: true }).tap();
+    const stage = page.locator('.annotate-canvas canvas').first();
+    await expect(stage).toBeVisible();
+    const bounds = (await stage.boundingBox())!;
+    expect(bounds.width).toBeLessThanOrEqual(800);
+    expect(Math.abs(bounds.width / bounds.height - 4 / 3)).toBeLessThan(.01);
+  });
+
+  test('switches untouched templates, saves a touch stroke once, and reopens it in the same visit', async ({ page }) => {
+    await signIn(page, 'DOCTOR');
+    const patient = await createPatient(page);
+    const start = await page.request.post('/api/encounters', { data: { patientId: patient.id, type: 'WALK_IN' } });
+    expect(start.status()).toBe(201);
+    const visit = await start.json();
+    const gallery = '/api/clinical-images?patientId=' + patient.id + '&visitId=' + visit.id;
+    const consultation = '/#/patients/' + patient.id + '/visits/' + visit.id;
+
+    await page.goto(consultation);
+    await page.getByLabel('Eye diagram').selectOption('anterior-od');
+    await page.getByRole('button', { name: 'Open Drawing' }).tap();
+    await expect(page.locator('.annotate-canvas canvas').first()).toBeVisible();
+    await page.getByRole('link', { name: 'Clinical Images', exact: true }).last().tap();
+    expect((await (await page.request.get(gallery)).json()).total).toBe(0);
+
+    await page.getByLabel('Eye diagram').selectOption('posterior-os');
+    await page.getByRole('button', { name: 'Open Drawing' }).tap();
+    const canvas = page.locator('.annotate-canvas canvas').first();
+    await expect(canvas).toBeVisible();
+    await canvas.scrollIntoViewIfNeeded();
+    const bounds = (await canvas.boundingBox())!;
+    expect(bounds.width).toBeLessThanOrEqual(800);
+    const touch = await page.context().newCDPSession(page);
+    for (const [type, fraction] of [['touchStart', .25], ['touchMove', .5], ['touchEnd', 0]] as const) {
+      await touch.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [
+        { x: bounds.x + bounds.width * fraction, y: bounds.y + bounds.height * fraction },
+      ] });
+    }
+    expect((await (await page.request.get(gallery)).json()).total).toBe(0);
+    const save = page.getByRole('button', { name: 'Save as new layer' });
+    await save.scrollIntoViewIfNeeded();
+    await save.tap();
+    await expect(page.getByRole('button', { name: /Version 1/ })).toBeVisible();
+    const { items, total } = await (await page.request.get(gallery)).json();
+    expect(total).toBe(1);
+    expect(items[0]).toMatchObject({ patientId: patient.id, visitId: visit.id, templateType: 'posterior-os' });
+    const resource = '/api/clinical-images/' + items[0].id;
+    const query = '?patientId=' + patient.id + '&visitId=' + visit.id;
+    const original = await (await page.request.get(resource + '/content' + query)).body();
+    const base = await (await page.request.get('/api/clinical-images/templates/posterior-os' + query)).body();
+    expect(original.equals(base)).toBe(true);
+    const layer = await (await page.request.get(resource + '/annotations/latest' + query)).json();
+    const points = layer.konvaData.shapes[0].points;
+    expect(Math.abs(points[0] - 200)).toBeLessThan(4);
+    expect(Math.abs(points[1] - 150)).toBeLessThan(4);
+
+    await page.reload();
+    await expect(page.getByRole('button', { name: 'Undo' })).toBeEnabled();
+    await page.getByRole('button', { name: 'Undo' }).tap();
+    await page.getByRole('button', { name: 'Save as new layer' }).tap();
+    await expect(page.getByRole('button', { name: /Version 2/ })).toBeVisible();
+    expect((await (await page.request.get(gallery)).json()).total).toBe(1);
+    expect(await (await page.request.get(resource + '/content' + query)).body()).toEqual(original);
   });
 });

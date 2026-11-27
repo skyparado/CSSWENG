@@ -15,10 +15,12 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
+    "db:provision-demo": "tsx prisma/provisionDemo.ts",
     "db:seed": "tsx prisma/seed.ts",
     "db:seed:demo": "tsx src/demo/cli.ts",
     "start:render": "prisma migrate deploy && node dist/demo/cli.js --if-enabled && node dist/index.js",
     "db:encrypt-existing": "tsx prisma/encryptExisting.ts",
+    "db:restore-drill": "node --import tsx prisma/restoreDrill.ts",
     "db:restore-backup": "tsx prisma/restoreBackup.ts"
   },
   "prisma": {

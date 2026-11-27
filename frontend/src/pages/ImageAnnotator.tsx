@@ -1,3 +1,5 @@
+import { eyeTemplateLabels, type EyeTemplate } from '@clinic/schemas';
+import { imagesPath } from '../imageApi';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Arrow, Image as KonvaImage, Layer, Line, Stage, Text } from 'react-konva';
 import type Konva from 'konva';
@@ -35,10 +37,12 @@ type Tool = 'pen' | 'arrow' | 'text';
 
 export default function ImageAnnotator({
   patientId,
-  imageId,
+  imageId, visitId, templateType,
 }: {
   patientId: string;
   imageId: string;
+  visitId?: string;
+  templateType?: EyeTemplate;
 }) {
   const [image, setImage] = useState<ClinicalImage | undefined>();
   const [bitmap, setBitmap] = useState<HTMLImageElement | null>(null);
@@ -58,6 +62,19 @@ export default function ImageAnnotator({
   const [basedOn, setBasedOn] = useState<number | null>(null);
 
   const drawing = useRef(false);
+  const saving = useRef(false);
+  const saveTouch = useRef<{ id: number; x: number; y: number } | null>(null);
+  const savedOnTouch = useRef(false);
+  const [commitKey] = useState(() => crypto.randomUUID());
+  const container = useRef<HTMLDivElement>(null);
+  const [availableWidth, setAvailableWidth] = useState(0);
+  useEffect(() => {
+    const element = container.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => setAvailableWidth(entry!.contentRect.width));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   /* ----------------------------- Loading ---------------------------------- */
 
@@ -66,26 +83,30 @@ export default function ImageAnnotator({
 
     async function load() {
       try {
-        const [meta, link, saved] = await Promise.all([
-          imageApi.get(imageId),
-          imageApi.downloadUrl(imageId),
-          imageApi.listAnnotations(imageId),
-        ]);
-        if (cancelled) return;
-        setImage(meta);
-        setLayers(saved.items);
-
-        // The presigned link is short-lived, so decode it into a bitmap now
-        // and keep the bitmap rather than the URL.
+        const context = { patientId, visitId };
+        let url: string;
+        if (templateType && visitId && imageId === 'new') {
+          url = imageApi.templateUrl(templateType, context);
+        } else {
+          const [meta, saved] = await Promise.all([imageApi.get(imageId, context), imageApi.listAnnotations(imageId, context)]);
+          if (cancelled) return;
+          setImage(meta);
+          setLayers(saved.items);
+          const latest = saved.items[0];
+          if (latest) {
+            setShapes(Array.isArray(latest.konvaData?.shapes) ? latest.konvaData.shapes : []);
+            setBasedOn(latest.version);
+          }
+          url = imageApi.contentUrl(imageId, context);
+        }
         const el = new window.Image();
-        el.crossOrigin = 'anonymous';
         el.onload = () => {
           if (!cancelled) setBitmap(el);
         };
         el.onerror = () => {
           if (!cancelled) setError('The image could not be loaded from storage.');
         };
-        el.src = link.url;
+        el.src = url;
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Could not open this image.');
@@ -97,9 +118,9 @@ export default function ImageAnnotator({
     return () => {
       cancelled = true;
     };
-  }, [imageId]);
+  }, [imageId, patientId, visitId, templateType]);
 
-  const scale = bitmap ? Math.min(1, MAX_DISPLAY_WIDTH / bitmap.naturalWidth) : 1;
+  const scale = bitmap ? Math.min(1, Math.min(MAX_DISPLAY_WIDTH, availableWidth) / bitmap.naturalWidth, 1200 / bitmap.naturalHeight) : 1;
   const displayWidth = bitmap ? bitmap.naturalWidth * scale : 0;
   const displayHeight = bitmap ? bitmap.naturalHeight * scale : 0;
 
@@ -115,7 +136,7 @@ export default function ImageAnnotator({
 
   /* ----------------------------- Drawing ---------------------------------- */
 
-  function start(e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) {
+  function start(e: Konva.KonvaEventObject<PointerEvent>) {
     const at = pointIn(e.target.getStage());
     if (!at) return;
 
@@ -138,12 +159,12 @@ export default function ImageAnnotator({
     setShapes((prev) => [
       ...prev,
       tool === 'pen'
-        ? { kind: 'pen', points: [at[0], at[1]], color, width: strokeWidth }
+        ? { kind: 'pen', points: [at[0], at[1], at[0], at[1]], color, width: strokeWidth }
         : { kind: 'arrow', points: [at[0], at[1], at[0], at[1]], color, width: strokeWidth },
     ]);
   }
 
-  function move(e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) {
+  function move(e: Konva.KonvaEventObject<PointerEvent>) {
     if (!drawing.current) return;
     const at = pointIn(e.target.getStage());
     if (!at) return;
@@ -188,11 +209,12 @@ export default function ImageAnnotator({
   }
 
   async function save() {
-    if (!bitmap) return;
-    if (shapes.length === 0) {
+    if (!bitmap || saving.current) return;
+    if (!templateType && !layers.length && shapes.length === 0) {
       setError('Nothing drawn yet.');
       return;
     }
+    saving.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -202,14 +224,20 @@ export default function ImageAnnotator({
         height: bitmap.naturalHeight,
         shapes,
       };
-      const saved = await imageApi.saveAnnotation(imageId, data);
-      const refreshed = await imageApi.listAnnotations(imageId);
-      setLayers(refreshed.items);
+      const context = { patientId, visitId };
+      if (templateType) {
+        const created = await imageApi.commit({ ...context, templateType, commitKey, konvaData: data });
+        window.location.replace('#' + imagesPath(patientId, visitId, created.id));
+        return;
+      }
+      const saved = await imageApi.saveAnnotation(imageId, context, data);
+      setLayers(previous => [saved, ...previous]);
       setBasedOn(saved.version);
       setNotice(`Saved as version ${saved.version}. The image itself is unchanged.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save the drawing.');
     } finally {
+      saving.current = false;
       setBusy(false);
     }
   }
@@ -219,10 +247,10 @@ export default function ImageAnnotator({
   return (
     <>
       <p className="crumbs">
-        <a href={`#/patients/${patientId}/images`}>Clinical Images</a> / Draw
+        <a href={'#' + imagesPath(patientId, visitId)}>Clinical Images</a> / Draw
       </p>
 
-      <h1>{image?.caption || image?.fileName || 'Image'}</h1>
+      <h1>{templateType ? eyeTemplateLabels[templateType] : image?.caption || image?.fileName || 'Image'}</h1>
       <p className="muted">
         Drawings save as a new layer. The uploaded image is never overwritten,
         so every earlier version stays available.
@@ -309,12 +337,29 @@ export default function ImageAnnotator({
           <button type="button" onClick={clear} disabled={shapes.length === 0}>
             Clear
           </button>
-          <button type="button" className="primary" onClick={() => void save()} disabled={busy}>
+          <button type="button" className="primary" disabled={busy || !bitmap}
+            onPointerDown={e => {
+              savedOnTouch.current = false;
+              saveTouch.current = e.pointerType === 'touch' ? { id: e.pointerId, x: e.clientX, y: e.clientY } : null;
+            }}
+            onPointerCancel={() => { saveTouch.current = null; }}
+            onPointerUp={e => {
+              const start = saveTouch.current;
+              saveTouch.current = null;
+              if (!start || start.id !== e.pointerId || Math.hypot(e.clientX - start.x, e.clientY - start.y) > 10) return;
+              // Mobile Chrome can suppress the compatibility click immediately
+              // after a canvas drag. Commit a stationary touch release once.
+              savedOnTouch.current = true;
+              void save();
+            }}
+            onClick={e => { if (e.detail === 0 || !savedOnTouch.current) void save(); }}
+          >
             {busy ? 'Saving...' : 'Save as new layer'}
           </button>
         </div>
       </div>
 
+      <div ref={container} className="drawing-area">
       {bitmap === null ? (
         <p className="muted">Loading image...</p>
       ) : (
@@ -325,13 +370,11 @@ export default function ImageAnnotator({
             height={displayHeight}
             scaleX={scale}
             scaleY={scale}
-            onMouseDown={start}
-            onMouseMove={move}
-            onMouseUp={end}
-            onMouseLeave={end}
-            onTouchStart={start}
-            onTouchMove={move}
-            onTouchEnd={end}
+            onPointerDown={start}
+            onPointerMove={move}
+            onPointerUp={end}
+            onPointerLeave={end}
+            onPointerCancel={end}
           >
             <Layer listening={false}>
               <KonvaImage image={bitmap} />
@@ -381,6 +424,7 @@ export default function ImageAnnotator({
         </div>
       )}
 
+      </div>
       <section className="card">
         <h2>Saved layers</h2>
         {layers.length === 0 ? (

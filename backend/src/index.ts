@@ -33,7 +33,7 @@ async function main() {
   // Report exports, nightly database backup and retention purge (BullMQ).
   // Disable with BACKGROUND_JOBS_ENABLED=false.
   if (env.BACKGROUND_JOBS_ENABLED) {
-    startExportWorker();
+    await startExportWorker();
     startMaintenanceWorker().catch((err) => {
       // eslint-disable-next-line no-console
       console.error('Maintenance worker failed to start:', err);

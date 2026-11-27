@@ -23,7 +23,7 @@ a { color: var(--navy); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
 /* Layout */
-.app { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
+.app { display: grid; grid-template-columns: 240px minmax(0, 1fr); min-height: 100vh; }
 .sidebar { background: var(--navy); color: #fff; padding: 20px 14px; }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 20px; margin: 0 8px 28px; }
 .brand-mark { width: 34px; height: 34px; border-radius: 50%; background: #fff; display: grid; place-items: center; }
@@ -667,6 +667,10 @@ fieldset.plain { border: 0; padding: 0; margin: 0; min-width: 0; }
 .image-row-actions { flex-wrap: wrap; }
 
 .annotate-toolbar { display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 16px; }
+.annotate-toolbar button, .layer-strip button { touch-action: manipulation; }
+.annotate-toolbar .pills, .annotate-toolbar .seg { flex-wrap: wrap; }
+.annotate-toolbar > fieldset { flex: 0 1 auto; max-width: 100%; }
+.annotate-toolbar > .row { flex: 1 0 100%; }
 .annotate-toolbar .seg button { padding: 9px 14px; }
 .swatch { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--line); padding: 0; }
 .swatch[aria-checked='true'] { border-color: var(--navy); box-shadow: 0 0 0 2px #fff inset; }
@@ -678,3 +682,22 @@ fieldset.plain { border: 0; padding: 0; margin: 0; min-width: 0; }
 .layer-strip button { display: grid; gap: 2px; text-align: left; font-weight: 600; }
 .layer-strip button[aria-pressed='true'] { background: var(--navy); color: #fff; }
 .layer-strip button[aria-pressed='true'] small { color: #dbe7f7; }
+
+.drawing-area { width: 100%; min-width: 0; }
+.annotate-canvas { max-width: 100%; }
+.eye-template-picker { align-items: end; gap: .75rem; flex-wrap: wrap; margin: 1rem 0; }
+.tablet-extra summary, .eye-template-picker select, .eye-template-picker button { min-height: 44px; }
+@media (pointer: coarse) {
+  .annotate-toolbar button, .annotate-toolbar .swatch, .layer-strip button { min-width: 44px; min-height: 44px; }
+}
+
+@media (max-width: 900px) {
+  .app { display: block; }
+  .sidebar { padding: 8px 14px; }
+  .sidebar .brand { margin: 0 0 6px; }
+  .sidebar nav { display: flex; overflow-x: auto; }
+  .sidebar nav a { flex: none; margin: 0; }
+  .page { padding: 18px 16px; }
+  .topbar { gap: 12px; padding: 10px 16px; flex-wrap: wrap; }
+  .drawing-area { overflow: hidden; }
+}

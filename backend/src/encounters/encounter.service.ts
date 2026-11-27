@@ -23,7 +23,7 @@ export class EncounterError extends Error {
   }
 }
 
-type Db = Pick<typeof import("../prisma.js").prisma, "patient" | "appointment" | "encounter" | "clinicalNote" | "user">;
+type Db = Pick<typeof import("../prisma.js").prisma, "patient" | "appointment" | "encounter" | "clinicalNote" | "user"> & Partial<Pick<typeof import("../prisma.js").prisma, "clinicalImage">>;
 
 /** Visit dates are clinic-local. All clinics are in Manila for now (Clinic.timezone defaults to it). */
 // Shared with the patients module; re-exported for the results services.
@@ -98,6 +98,14 @@ export async function createEncounter(db: Db, input: CreateEncounterInput, actor
   }
   const attendingDoctorId = await resolveAttendingDoctor(db, input, actor);
 
+  if (input.walkInKey) {
+    requireDoctor(actor, "open a walk-in image group");
+    if (input.appointmentId) throw new EncounterError(400, "AMBIGUOUS_VISIT", "Choose the walk-in or the appointment");
+    const image = await db.clinicalImage?.findFirst({ where: { patientId: input.patientId, clinicId: actor.activeClinicId,
+      walkInKey: input.walkInKey, status: "ACTIVE" } });
+    if (!image) throw new EncounterError(404, "NOT_FOUND", "Walk-in group not found at this clinic");
+    if (image.visitId) return toEncounterSummary(await loadEncounter(db, image.visitId), null);
+  }
   if (input.appointmentId) {
     const appt = await db.appointment.findFirst({ where: { id: input.appointmentId } });
     if (!appt || appt.patientId !== input.patientId || appt.clinicId !== actor.activeClinicId) {
@@ -115,6 +123,7 @@ export async function createEncounter(db: Db, input: CreateEncounterInput, actor
         patientId: input.patientId,
         clinicId: actor.activeClinicId,
         appointmentId: input.appointmentId ?? null,
+        walkInKey: input.walkInKey,
         attendingDoctorId,
         type: input.type,
         visitDate: new Date(`${visitDate}T00:00:00Z`),

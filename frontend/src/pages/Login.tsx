@@ -20,6 +20,8 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attemptsRemaining, setAttemptsRemaining] = useState<number | null>(null);
+  const [challenge, setChallenge] = useState<{ setupKey?: string } | null>(null);
+  const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
 
   async function submit(e: FormEvent) {
@@ -28,8 +30,12 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
     setAttemptsRemaining(null);
     setBusy(true);
     try {
-      const res = await api.login(username, password);
-      onLogin(res.user);
+      if (challenge) {
+        onLogin((await api.verifyMfa(code)).user);
+      } else {
+        setChallenge(await api.login(username, password));
+        setPassword('');
+      }
     } catch (err) {
       if (err instanceof ApiError) {
         setError(err.message);
@@ -67,7 +73,7 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
 
       <main className="login-main">
         <form className="login-card" onSubmit={submit} noValidate>
-          <h1>Sign in</h1>
+          <h1>{challenge ? 'Authenticator verification' : 'Sign in'}</h1>
           <p className="muted">
             For the doctor and authorized clinic staff. Patients do not sign
             in; they use the supervised tablet intake form.
@@ -92,6 +98,13 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
             </div>
           )}
 
+          {challenge ? <>
+            {challenge.setupKey && <p>In your authenticator app, add a time-based account for {username} using this setup key. <code aria-label="Authenticator setup key">{challenge.setupKey}</code></p>}
+            <label htmlFor="mfa-code">Verification code</label>
+            <input id="mfa-code" autoFocus inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6}
+              value={code} onChange={e => setCode(e.target.value)} required />
+            <button type="button" onClick={async () => { await api.logout(); setChallenge(null); setCode(''); setError(null); setAttemptsRemaining(null); }}>Start again</button>
+          </> : <>
           <label htmlFor="login-username">Username</label>
           <input
             id="login-username"
@@ -130,8 +143,9 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
             </button>
           </div>
 
-          <button type="submit" className="primary login-submit" disabled={busy}>
-            {busy ? 'Signing in...' : 'Sign in'}
+          </>}
+          <button type="submit" className="primary login-submit" disabled={busy || (!!challenge && !/^\d{6}$/.test(code))}>
+            {busy ? 'Signing in...' : challenge ? 'Verify code' : 'Sign in'}
           </button>
 
           <p className="login-help muted">

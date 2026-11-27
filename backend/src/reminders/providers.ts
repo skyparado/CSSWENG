@@ -31,6 +31,7 @@ export class ProviderError extends Error {
     message: string,
     /** True for errors a retry cannot fix (bad number, bad credentials). */
     public permanent = false,
+    public conclusivelyRejected = true,
   ) {
     super(`${provider}: ${message}`);
     this.name = 'ProviderError';
@@ -67,7 +68,11 @@ export class TwilioSmsGateway implements SmsGateway {
     const body = new URLSearchParams({ To: toInternationalPh(message.to), Body: message.body });
     if (this.config.messagingServiceSid) body.set('MessagingServiceSid', this.config.messagingServiceSid);
     else body.set('From', this.config.from as string);
-    if (this.config.statusCallback) body.set('StatusCallback', this.config.statusCallback);
+    if (this.config.statusCallback) {
+      const callback = new URL(this.config.statusCallback);
+      if (message.deliveryId) callback.searchParams.set('delivery', message.deliveryId);
+      body.set('StatusCallback', callback.toString());
+    }
 
     const res = await this.doFetch(
       `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(this.config.accountSid)}/Messages.json`,
@@ -83,7 +88,7 @@ export class TwilioSmsGateway implements SmsGateway {
     const data = (await res.json().catch(() => ({}))) as { sid?: string; status?: string; message?: string; code?: number };
     if (!res.ok || !data.sid) {
       // 4xx other than rate limiting (429) will not succeed on retry.
-      throw new ProviderError('twilio', `HTTP ${res.status}${data.code ? ` (code ${data.code})` : ''}: ${data.message ?? 'send failed'}`.replace(/\+?\d{9,}/g, '[number]'), res.status >= 400 && res.status < 500 && res.status !== 429);
+      throw new ProviderError('twilio', `HTTP ${res.status}${data.code ? ` (code ${data.code})` : ''}: send failed`, res.status >= 400 && res.status < 500 && res.status !== 429, res.status >= 400 && res.status < 500);
     }
     // "queued" / "sent" are not delivery: the status callback reports "delivered".
     return { providerMessageId: data.sid, deliveryStatus: data.status === 'delivered' ? 'DELIVERED' : undefined };
@@ -123,7 +128,7 @@ export class SemaphoreSmsGateway implements SmsGateway {
       | null;
     const first = Array.isArray(data) ? data[0] : undefined;
     if (!res.ok || !first?.message_id || /fail|reject/i.test(first.status ?? '')) {
-      throw new ProviderError('semaphore', `HTTP ${res.status}: ${(!Array.isArray(data) && data?.message) || first?.status || 'send failed'}`.replace(/\+?\d{9,}/g, '[number]'), res.status >= 400 && res.status < 500 && res.status !== 429);
+      throw new ProviderError('semaphore', `HTTP ${res.status}: send failed`, res.status >= 400 && res.status < 500 && res.status !== 429, (res.status >= 400 && res.status < 500) || Boolean(first?.message_id && /fail|reject/i.test(first.status ?? '')));
     }
     return { providerMessageId: String(first.message_id) };
   }

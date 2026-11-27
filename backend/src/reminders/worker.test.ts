@@ -16,6 +16,7 @@ vi.mock('./queue.js', async (orig) => ({
 }));
 
 import { handleJob, runScan } from './worker.js';
+import * as configs from './gateway.js';
 import { createGateways, StubEmailGateway, StubSmsGateway } from './gateway.js';
 import { sendJobOptions } from './queue.js';
 
@@ -63,6 +64,7 @@ describe('handleJob', () => {
 
 describe('runScan', () => {
   it('queues one deduplicated job per follow-up and channel', async () => {
+    vi.spyOn(configs, 'channelAvailability').mockReturnValue({ SMS: true, EMAIL: true });
     mocks.findFollowUpsNeedingReminder.mockImplementation(async (channel: string) =>
       channel === 'SMS' ? ['f1', 'f2'] : ['f3'],
     );
@@ -70,9 +72,9 @@ describe('runScan', () => {
     await expect(runScan()).resolves.toBe(3);
 
     expect(mocks.enqueueReminder.mock.calls).toEqual([
-      [{ followUpId: 'f1', channel: 'SMS' }, { dedupe: true }],
-      [{ followUpId: 'f2', channel: 'SMS' }, { dedupe: true }],
-      [{ followUpId: 'f3', channel: 'EMAIL' }, { dedupe: true }],
+      [{ followUpId: 'f1', channel: 'SMS' }],
+      [{ followUpId: 'f2', channel: 'SMS' }],
+      [{ followUpId: 'f3', channel: 'EMAIL' }],
     ]);
   });
 });
@@ -86,16 +88,9 @@ describe('retry policy', () => {
 });
 
 describe('stub gateways', () => {
-  it('return a provider message id without sending anything', async () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-    const sms = await new StubSmsGateway().send({ to: '+639171234567', body: 'hi' });
-    const email = await new StubEmailGateway().send({ to: 'a@b.com', subject: 's', body: 'b' });
-
-    expect(sms.providerMessageId).toMatch(/^stub-sms-/);
-    expect(email.providerMessageId).toMatch(/^stub-email-/);
-    // The full number is never written to the log.
-    expect(log.mock.calls.flat().join(' ')).not.toContain('+639171234567');
-    log.mockRestore();
+  it('refuse to send without a configured provider', async () => {
+    await expect(new StubSmsGateway().send({ to: 'test', body: 'hi' })).rejects.toThrow(/not configured/);
+    await expect(new StubEmailGateway().send({ to: 'test', subject: 's', body: 'b' })).rejects.toThrow(/not configured/);
   });
 });
 

@@ -14,7 +14,7 @@ export { normalizeName };
 /**
  * Allergy and duplicate-medicine checks (FR-5.6.6). Which drugs belong to which
  * class, what their brand names are and which classes can cross-react all come
- * from the Doctor-approved reference in drugReference.ts, never from code. Each
+ * from the selected version of the reference in drugReference.ts, never from code. Each
  * function takes the reference as an optional last argument (default: the
  * active one) so tests can supply their own.
  */

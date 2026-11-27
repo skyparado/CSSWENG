@@ -75,6 +75,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await prisma.allergy.deleteMany({ where: { intakeSessionId: { in: createdSessionIds } } });
   // Consent rows point at both the patient and the session with onDelete:
   // Restrict, so they have to go before either of those.
   if (createdPatientIds.length) {
@@ -140,6 +141,53 @@ describe('POST /api/tablet-intake/sessions (start)', () => {
       .send({ clinicId: 'does_not_exist' });
     expect(res.status).toBe(404);
   });
+});
+
+it('serializes concurrent submissions for the same new patient and holds the second for review', async () => {
+  const body = fullPayload({ lastName: 'Concurrent-' + clinicId });
+  const sessions = await Promise.all([1, 2].map(async () => {
+    const response = await secretaryAgent.post('/api/tablet-intake/sessions').send({ clinicId }).expect(201);
+    createdSessionIds.push(response.body.id);
+    return response.body;
+  }));
+  await Promise.all(sessions.map(s => supertest(app).post('/api/tablet-intake/tablet/' + s.token + '/submit').send(body).expect(201)));
+  const patients = await Promise.all(sessions.map(s => patientIdForSession(s.id)));
+  createdPatientIds.push(...new Set(patients));
+  expect(new Set(patients).size).toBe(1);
+  expect(await prisma.tabletIntakeSession.count({ where: { id: { in: sessions.map(s => s.id) }, matchDecision: 'PENDING' } })).toBe(1);
+  expect(await prisma.patientConsent.count({ where: { patientId: patients[0] } })).toBe(3);
+});
+
+it('holds a probable duplicate for staff and keeps clinical changes off the candidate chart', async () => {
+  const body = fullPayload({ mobileNumber: '+639175559998' });
+  async function startSession() {
+    const res = await secretaryAgent.post('/api/tablet-intake/sessions').send({ clinicId }).expect(201);
+    createdSessionIds.push(res.body.id);
+    return res.body;
+  }
+  const first = await startSession();
+  await supertest(app).post(`/api/tablet-intake/tablet/${first.token}/submit`).send(body).expect(201);
+  const original = await patientIdForSession(first.id);
+  createdPatientIds.push(original);
+  const next = await startSession();
+  const base = '/api/tablet-intake/tablet/' + next.token;
+  const match = await supertest(app).post(base + '/identify').send(body).expect(200);
+  expect(match.body).toEqual({ needsStaff: true });
+  const report = { ...body, reportedAllergens: ['Penicillin', 'penicillin', 'None'] };
+  await supertest(app).post(base + '/submit').send(report).expect(201);
+  expect(await prisma.allergy.count({ where: { patientId: original } })).toBe(0);
+  expect(await prisma.patientConsent.count({ where: { intakeSessionId: next.id } })).toBe(0);
+  await secretaryAgent.post(`/api/tablet-intake/sessions/${next.id}/match`).send({ decision: 'SEPARATE' }).expect(204);
+  const different = await patientIdForSession(next.id);
+  createdPatientIds.push(different);
+  expect(different).not.toBe(original);
+  const drugs = await doctorAgent.get('/api/allergies').query({ patientId: different }).expect(200);
+  expect(drugs.body.items).toHaveLength(1);
+  expect(drugs.body.items[0]).toMatchObject({ allergenName: 'Penicillin', intakeSessionId: next.id });
+  await secretaryAgent.get('/api/allergies').query({ patientId: different }).expect(403);
+  const stored = await prisma.$queryRaw<{ allergenName: string }[]>`SELECT "allergenName" FROM "Allergy" WHERE "intakeSessionId" = ${next.id}`;
+  expect(stored[0]?.allergenName).toMatch(/^v1\.aesgcm256\./);
+  expect(await prisma.patientConsent.count({ where: { intakeSessionId: next.id, patientId: different } })).toBe(3);
 });
 
 describe('GET /api/tablet-intake/tablet/:token (tablet read)', () => {

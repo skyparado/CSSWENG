@@ -39,7 +39,7 @@ describe('auth.service lockout policy', () => {
     await prisma.user.deleteMany({ where: { username: login } });
   }
 
-  it('authenticates with the correct password and clears failure counters', async () => {
+  it('verifies a correct password and waits for MFA before recording a login', async () => {
     const login = uniqueLogin();
     const password = 'CorrectPass123!';
     await createUser(login, password);
@@ -49,7 +49,7 @@ describe('auth.service lockout policy', () => {
 
     const after = await prisma.user.findUnique({ where: { username: login } });
     expect(after?.failedLoginAttempts).toBe(0);
-    expect(after?.lastLoginAt).not.toBeNull();
+    expect(after?.lastLoginAt).toBeNull();
 
     await cleanup(login);
   });
