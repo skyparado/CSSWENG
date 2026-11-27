@@ -58,7 +58,28 @@ export async function handleMaintenanceJob(job: Pick<Job, 'name'>) {
       throw err; // BullMQ retries with backoff
     }
   }
-  if (job.name === PURGE_JOB) return runRetentionPurge();
+  if (job.name === PURGE_JOB) {
+    // Record every run, even one that removed nothing, so a purge started by
+    // hand (or the nightly one) leaves visible evidence that it ran.
+    try {
+      const summary = await runRetentionPurge();
+      await recordAudit(SYSTEM_ACTOR, {
+        action: AuditActions.RETENTION_PURGE_COMPLETED,
+        resourceType: 'RetentionPurge',
+        resourceId: 'retention',
+        metadata: { ...summary },
+      });
+      return summary;
+    } catch (err) {
+      await recordAudit(SYSTEM_ACTOR, {
+        action: AuditActions.RETENTION_PURGE_FAILED,
+        resourceType: 'RetentionPurge',
+        resourceId: 'retention',
+        metadata: { error: (err instanceof Error ? err.message : String(err)).slice(0, 500) },
+      }).catch(() => undefined);
+      throw err;
+    }
+  }
   throw new Error(`Unknown maintenance job: ${job.name}`);
 }
 

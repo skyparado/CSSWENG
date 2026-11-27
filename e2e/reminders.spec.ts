@@ -80,6 +80,59 @@ test.describe('reminders: consent, content and delivery', () => {
     await expect(attempt).toContainText('Awaiting report');
   });
 
+  test('with SMS consent the reminder goes through the SMS gateway once, contains no clinical details, and is logged', async ({ page }) => {
+    await grantReminderConsent(page, patient.id, 'SMS');
+    const dueDate = manilaDate(2);
+    const id = await createFollowUp(page, { patientId: patient.id, reason: reasonText, dueDate, taskType: 'INJECTION' });
+    await page.request.delete('/api/dev/sms-outbox'); // the SMS stub's outbox, the SMS counterpart of Mailpit
+    await page.request.delete(`${MAILPIT}/api/v1/messages`);
+
+    await page.goto(outreachUrl(id));
+    await expect(page.getByRole('region', { name: 'Reminder consent' })).toContainText('✓ Active · SMS');
+    await channelRadio(page, 'SMS').click();
+    await page.getByRole('button', { name: 'Send SMS Reminder' }).click();
+    await expect(page.getByText('SMS reminder queued')).toBeVisible();
+
+    // The worker sends it through the SMS gateway (the stub here), once.
+    const outbox = async () => (await (await page.request.get('/api/dev/sms-outbox')).json()).items as Array<{ to: string; body: string }>;
+    await expect.poll(async () => (await outbox()).length, { timeout: 30_000 }).toBe(1);
+    const [sms] = await outbox();
+    expect(sms.to).toMatch(/^\*+234$/); // the number is masked
+    expect(sms.body).toContain('UERM');
+    expect(sms.body).toContain(dueDate);
+    expect(sms.body).not.toMatch(/inject|macular|edema|intravitreal|laborator|procedure/i);
+    expect(await mailTo(page, patient.email)).toHaveLength(0); // SMS consent only: no email
+
+    const attempt = page.getByTestId('attempt-row');
+    await expect(attempt).toHaveCount(1, { timeout: 20_000 });
+    await expect(attempt).toContainText('SMS');
+    await expect(attempt).toContainText('Sent');
+    await expect(attempt).toContainText('Automated');
+    await expect(attempt).toContainText('Delivered'); // the stub reports delivery at once
+  });
+
+  test('the daily reminder check sends only to consenting patients', async ({ page }) => {
+    const consenting = patient;
+    const notConsenting = await createPatient(page);
+    await grantReminderConsent(page, consenting.id, 'SMS');
+    const withConsent = await createFollowUp(page, { patientId: consenting.id, reason: reasonText, dueDate: manilaDate(1), taskType: 'PROCEDURE' });
+    const withoutConsent = await createFollowUp(page, { patientId: notConsenting.id, reason: reasonText, dueDate: manilaDate(1), taskType: 'PROCEDURE' });
+
+    // The same job the 8 AM schedule runs, started from Reports > System Jobs.
+    const res = await page.request.post('/api/maintenance/reminder-scan');
+    expect(res.status()).toBe(202);
+
+    await page.goto(outreachUrl(withConsent));
+    await expect(page.getByTestId('attempt-row')).toHaveCount(1, { timeout: 30_000 });
+    await expect(page.getByTestId('attempt-row')).toContainText('SMS');
+
+    await page.goto(outreachUrl(withoutConsent));
+    await expect(page.getByRole('region', { name: 'Reminder consent' })).toContainText('None · SMS');
+    await page.waitForTimeout(2_000); // give the worker the chance to (wrongly) send something
+    await page.reload();
+    await expect(page.getByTestId('attempt-row')).toHaveCount(0);
+  });
+
   test('withdrawing consent stops reminders: the screen and the API both refuse', async ({ page }) => {
     const consentId = await grantReminderConsent(page, patient.id, 'EMAIL');
     const id = await createFollowUp(page, { patientId: patient.id, reason: reasonText, dueDate: manilaDate(2), taskType: 'CHECK_UP' });

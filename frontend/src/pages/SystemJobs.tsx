@@ -6,11 +6,23 @@ const OUTCOME: Record<string, { label: string; tone: string }> = {
   BACKUP_REQUESTED: { label: 'Backup requested', tone: '' },
   BACKUP_COMPLETED: { label: 'Backup completed', tone: 'ok' },
   BACKUP_FAILED: { label: 'Backup failed', tone: 'bad' },
+  RETENTION_PURGE_REQUESTED: { label: 'Retention purge requested', tone: '' },
+  RETENTION_PURGE_COMPLETED: { label: 'Retention purge completed', tone: 'ok' },
+  RETENTION_PURGE_FAILED: { label: 'Retention purge failed', tone: 'bad' },
 };
 
+/** "removed 0 audit entries, 2 exports, 1 backup" from a completed purge's counts. */
+function purgeSummary(m: Record<string, unknown> | null): string | undefined {
+  if (!m || typeof m.auditEntries !== 'number') return undefined;
+  const n = (v: unknown) => (typeof v === 'number' ? v : 0);
+  const count = (v: unknown, one: string, many: string) => `${n(v)} ${n(v) === 1 ? one : many}`;
+  return `removed ${count(m.auditEntries, 'audit entry', 'audit entries')}, ${count(m.exports, 'export', 'exports')}, ${count(m.backups, 'backup', 'backups')}`;
+}
+
 /**
- * Doctor only: run the encrypted backup or the reminder scan now. Both normally
- * run overnight, but the free hosting plan sleeps when idle, so they may not.
+ * Doctor only: run the encrypted backup, the retention purge or the reminder
+ * scan now. All three normally run overnight, but the free hosting plan sleeps
+ * when idle, so they may not.
  */
 export default function SystemJobs() {
   const { clinic } = useSession();
@@ -54,7 +66,7 @@ export default function SystemJobs() {
     <section className="card" aria-label="System jobs" style={{ marginTop: 20 }}>
       <h2>System Jobs</h2>
       <p className="muted">
-        Backups and reminder checks run every night. Use these to run them now, for example before a demo or a risky change.
+        Backups, the retention purge and reminder checks run every night. Use these to run them now, for example before a demo or a risky change.
       </p>
       <div className="row">
         <button className="primary" disabled={busy} onClick={() => run(api.runBackupNow, 'Backup started. Its result appears below.', 10)}>
@@ -66,24 +78,34 @@ export default function SystemJobs() {
         >
           Send Due Reminders Now
         </button>
+        <button
+          disabled={busy}
+          onClick={() =>
+            run(api.runRetentionPurgeNow, 'Retention purge started. It removes only records already past retention; its result appears below.', 10)
+          }
+        >
+          Run Retention Purge Now
+        </button>
       </div>
       {msg && (
         <p className={msg.error ? 'error' : 'muted'} role={msg.error ? 'alert' : 'status'}>
           {msg.text}
         </p>
       )}
-      <h3 style={{ fontSize: 15, marginTop: 16 }}>Recent backups</h3>
+      <h3 style={{ fontSize: 15, marginTop: 16 }}>Recent backups and purges</h3>
       {history.error && <p className="error">{history.error}</p>}
-      {history.data && history.data.items.length === 0 && <p className="muted">No backups recorded yet.</p>}
+      {history.data && history.data.items.length === 0 && <p className="muted">No backups or purges recorded yet.</p>}
       <ul className="history" aria-label="Recent backups">
         {(history.data?.items ?? []).map((b) => {
           const view = OUTCOME[b.action] ?? { label: b.action, tone: '' };
           const bytes = typeof b.metadata?.databaseBytes === 'number' ? b.metadata.databaseBytes : undefined;
+          const purged = b.action === 'RETENTION_PURGE_COMPLETED' ? purgeSummary(b.metadata) : undefined;
           return (
             <li key={b.id}>
               <span className={`badge ${view.tone}`}>{view.label}</span> {fmt(b.createdAt)}
               {bytes !== undefined && <span className="muted"> · {(bytes / 1024).toFixed(0)} KB encrypted</span>}
-              {b.action === 'BACKUP_FAILED' && typeof b.metadata?.error === 'string' && (
+              {purged && <span className="muted"> · {purged}</span>}
+              {(b.action === 'BACKUP_FAILED' || b.action === 'RETENTION_PURGE_FAILED') && typeof b.metadata?.error === 'string' && (
                 <div className="muted">{b.metadata.error}</div>
               )}
             </li>

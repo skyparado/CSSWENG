@@ -45,6 +45,9 @@ const ACTIONS: Array<{ value: string; label: string; group: string }> = [
   { value: 'BACKUP_COMPLETED', label: 'Backup completed', group: 'Maintenance' },
   { value: 'BACKUP_FAILED', label: 'Backup failed', group: 'Maintenance' },
   { value: 'REMINDER_SCAN_REQUESTED', label: 'Reminder check requested', group: 'Maintenance' },
+  { value: 'RETENTION_PURGE_REQUESTED', label: 'Retention purge requested', group: 'Maintenance' },
+  { value: 'RETENTION_PURGE_COMPLETED', label: 'Retention purge completed', group: 'Maintenance' },
+  { value: 'RETENTION_PURGE_FAILED', label: 'Retention purge failed', group: 'Maintenance' },
   { value: 'HTTP_REQUEST', label: 'Raw HTTP request', group: 'Other' },
 ];
 

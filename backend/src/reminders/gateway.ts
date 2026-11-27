@@ -46,19 +46,43 @@ function mask(value: string): string {
   return value.length <= 3 ? '***' : `${'*'.repeat(value.length - 3)}${value.slice(-3)}`;
 }
 
+/** One message the SMS stub "sent", kept in memory so it can be shown like Mailpit shows email. */
+export interface StubSmsRecord {
+  /** Masked: only the last 3 digits. */
+  to: string;
+  body: string;
+  providerMessageId: string;
+  sentAt: string;
+}
+
+const STUB_OUTBOX_SIZE = 50;
+const stubOutbox: StubSmsRecord[] = [];
+
+/** The most recent stub SMS messages, newest first. Process memory only: gone on restart. */
+export function stubSmsOutbox(): StubSmsRecord[] {
+  return [...stubOutbox].reverse();
+}
+
+export function clearStubSmsOutbox(): void {
+  stubOutbox.length = 0;
+}
+
 /**
  * Test stub used until the real SMS service is chosen: logs instead of sending
- * and reports the message as delivered.
+ * and reports the message as delivered. It also keeps the last few messages in
+ * memory (number masked) for the development SMS outbox (dev/smsOutbox.routes.ts),
+ * which plays the part Mailpit plays for email. Reminder text never carries
+ * clinical details, so this holds nothing beyond the clinic name and a date.
  */
 export class StubSmsGateway implements SmsGateway {
   async send(message: SmsMessage): Promise<SendResult> {
     // eslint-disable-next-line no-console
     console.log(`[sms:stub] to=${mask(message.to)} chars=${message.body.length}`);
     // Like a provider honouring an idempotency key: the same key yields the same id.
-    return {
-      providerMessageId: `stub-sms-${message.idempotencyKey ?? randomUUID()}`,
-      deliveryStatus: 'DELIVERED',
-    };
+    const providerMessageId = `stub-sms-${message.idempotencyKey ?? randomUUID()}`;
+    stubOutbox.push({ to: mask(message.to), body: message.body, providerMessageId, sentAt: new Date().toISOString() });
+    if (stubOutbox.length > STUB_OUTBOX_SIZE) stubOutbox.shift();
+    return { providerMessageId, deliveryStatus: 'DELIVERED' };
   }
 }
 

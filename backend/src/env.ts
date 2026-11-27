@@ -115,6 +115,10 @@ const envSchema = z.object({
   // 32 random bytes, base64. Backups are encrypted with it; losing it makes them unreadable.
   BACKUP_ENCRYPTION_KEY: z.string().optional(),
   PG_DUMP_PATH: z.string().default('pg_dump'),
+  // pg_restore and psql, used only by the restore script (prisma/restoreBackup.ts).
+  // Left unset, they are taken from the same folder as PG_DUMP_PATH.
+  PG_RESTORE_PATH: z.string().optional(),
+  PSQL_PATH: z.string().optional(),
 
   PRISMA_FIELD_ENCRYPTION_KEY: z
     .string()

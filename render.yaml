@@ -92,5 +92,9 @@ services:
 databases:
   - name: clinic-db
     plan: free
+    # Keep equal to postgresql-client-16 in the Dockerfile: pg_dump must not be
+    # older than the server. Applies when the database is created; an existing
+    # database keeps its version (check it on the database's Info page).
+    postgresMajorVersion: "16"
     databaseName: clinic
     user: clinic

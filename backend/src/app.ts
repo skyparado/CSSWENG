@@ -16,6 +16,7 @@ import { usersRouter } from './users/users.routes.js';
 import { consentsRouter } from './consents/consents.routes.js';
 import { rightsRouter } from './rights/rights.routes.js';
 import { maintenanceRouter } from './maintenance/maintenance.routes.js';
+import { smsOutboxRouter } from './dev/smsOutbox.routes.js';
 import { medicationReviewsRouter } from './medications/medicationReviews.routes.js';
 import { followUpsRouter } from './followups/followups.routes.js';
 import { outreachRouter } from './followups/outreach.routes.js';
@@ -110,6 +111,8 @@ export function createApp(): Express {
   app.use('/api/consents', consentsRouter);
   app.use('/api/rights-requests', rightsRouter);
   app.use('/api/maintenance', maintenanceRouter);
+  // Development SMS outbox (the stub's sent messages), never in production.
+  if (env.NODE_ENV !== 'production' && env.SMS_PROVIDER === 'stub') app.use('/api/dev/sms-outbox', smsOutboxRouter);
   app.use('/api/medication-reviews', medicationReviewsRouter);
   app.use('/api/follow-ups', followUpsRouter);
   app.use('/api/outreach-logs', outreachRouter);

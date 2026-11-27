@@ -12,6 +12,7 @@ vi.mock('../prisma.js', () => ({ prisma: db }));
 vi.mock('../audit/audit.service.js', () => audit);
 vi.mock('./queue.js', () => ({
   BACKUP_JOB: 'database-backup',
+  PURGE_JOB: 'retention-purge',
   getMaintenanceQueue: () => ({ add: queues.maintenanceAdd }),
 }));
 vi.mock('../reminders/queue.js', () => ({
@@ -68,6 +69,28 @@ describe('POST /api/maintenance/reminder-scan', () => {
   });
 });
 
+describe('POST /api/maintenance/purge', () => {
+  it('queues the same retention purge the nightly schedule runs, and audits who asked', async () => {
+    const res = await request(asDoctor).post('/api/maintenance/purge');
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ queued: true, jobId: 'job-b1' });
+    expect(queues.maintenanceAdd.mock.calls[0][0]).toBe('retention-purge');
+    expect(queues.maintenanceAdd.mock.calls[0][2]).toMatchObject({ attempts: 1 });
+    expect(audit.writeAudit.mock.calls[0][0]).toMatchObject({
+      action: 'RETENTION_PURGE_REQUESTED',
+      resourceId: 'job-b1',
+      userId: 'u-doc',
+    });
+  });
+
+  it('refuses the Secretary', async () => {
+    const res = await request(asSecretary).post('/api/maintenance/purge');
+    expect(res.status).toBe(403);
+    expect(queues.maintenanceAdd).not.toHaveBeenCalled();
+  });
+});
+
 describe('GET /api/maintenance/backups', () => {
   it('lists the latest backup outcomes from the audit trail', async () => {
     db.auditLog.findMany.mockResolvedValue([{ id: 'a1', action: 'BACKUP_COMPLETED' }]);
@@ -76,5 +99,6 @@ describe('GET /api/maintenance/backups', () => {
     expect(res.status).toBe(200);
     expect(res.body.items).toHaveLength(1);
     expect(db.auditLog.findMany.mock.calls[0][0].where.action.in).toContain('BACKUP_COMPLETED');
+    expect(db.auditLog.findMany.mock.calls[0][0].where.action.in).toContain('RETENTION_PURGE_COMPLETED');
   });
 });

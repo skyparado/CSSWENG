@@ -463,6 +463,7 @@ export const api = {
   /** Doctor only: run the nightly jobs now (the free hosting plan sleeps through their schedule). */
   runBackupNow: () => call<{ queued: boolean; jobId?: string }>('POST', '/api/maintenance/backup'),
   runReminderScanNow: () => call<{ queued: boolean; jobId?: string }>('POST', '/api/maintenance/reminder-scan'),
+  runRetentionPurgeNow: () => call<{ queued: boolean; jobId?: string }>('POST', '/api/maintenance/purge'),
   backupHistory: () =>
     call<{
       items: Array<{ id: string; action: string; resourceId: string | null; metadata: Record<string, unknown> | null; createdAt: string }>;
