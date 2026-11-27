@@ -19,6 +19,8 @@ import {
 import { go, useSession } from '../session';
 import { AllergyBanner, Crumbs, patientLine } from './PatientParts';
 
+const SIGNED_NOTE_HELP = 'Once signed, the note is locked. Later corrections are added as dated addenda.';
+
 type FieldKey = keyof typeof EXAM_FIELDS;
 const FIELDS = Object.keys(EXAM_FIELDS) as FieldKey[];
 const EYES: Array<Exclude<Eye, 'OU'>> = ['OD', 'OS'];
@@ -50,7 +52,13 @@ function previousValues(cmp: ComparisonResponse | undefined, visitDate: string) 
 }
 
 /** S07 Consultation Note and Examination Findings (Doctor only). */
-export default function ConsultationNote({ patientId, encounterId }: { patientId: string; encounterId: string }) {
+export default function ConsultationNote({
+  patientId,
+  encounterId,
+}: {
+  patientId: string;
+  encounterId: string;
+}) {
   const { user, clinic } = useSession();
   const [summary, setSummary] = useState<ChartSummary>();
   const [encounter, setEncounter] = useState<Encounter>();
@@ -62,9 +70,12 @@ export default function ConsultationNote({ patientId, encounterId }: { patientId
   const [previous, setPrevious] = useState<{ values: Map<string, string>; date?: string }>({ values: new Map() });
   const [saveState, setSaveState] = useState<{ at?: Date; saving?: boolean; error?: string }>({});
   const [confirming, setConfirming] = useState(false);
+  const [discardPrompt, setDiscardPrompt] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
   const [loadError, setLoadError] = useState<string>();
 
   const dirty = useRef(false);
+  const saveFailed = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout>>();
   const saving = useRef<Promise<Note | null>>(Promise.resolve(null));
   const latest = useRef({ draft, note });
@@ -113,6 +124,7 @@ export default function ConsultationNote({ patientId, encounterId }: { patientId
         const saved = await clinicalApi.saveDraft(encounterId, { ...d, version: n?.version });
         latest.current.note = saved;
         setNote(saved);
+        saveFailed.current = false;
         setSaveState({ at: new Date() });
         return saved;
       } catch (err) {
@@ -122,12 +134,26 @@ export default function ConsultationNote({ patientId, encounterId }: { patientId
             : err instanceof Error
               ? err.message
               : String(err);
+        saveFailed.current = true;
         setSaveState({ error: msg });
         return null;
       }
     });
     return saving.current;
   }, [encounterId]);
+
+  /**
+   * Before leaving S07 for the drawing tool: write out anything typed but not yet
+   * autosaved, and wait for a save already under way. False if the draft could
+   * not be saved, so the doctor stays here (the footer shows the error) rather
+   * than losing what they typed.
+   */
+  const flushBeforeLeaving = useCallback(async (): Promise<boolean> => {
+    clearTimeout(timer.current);
+    await saving.current;
+    if (dirty.current) await saveDraft();
+    return !saveFailed.current;
+  }, [saveDraft]);
 
   const edit = (patch: Partial<Draft>) => {
     setDraft((d) => ({ ...d, ...patch }));
@@ -192,6 +218,36 @@ export default function ConsultationNote({ patientId, encounterId }: { patientId
   const changed = (key: string, value: string) => {
     const prev = previous.values.get(key);
     return Boolean(prev && value && prev !== value);
+  };
+
+  const leave = () => go(`/patients/${p.id}`);
+
+  /** Delete this unsigned draft (and the visit, if it was created only for this note), then return to the chart. */
+  const discard = async () => {
+    clearTimeout(timer.current);
+    dirty.current = false;
+    setDiscarding(true);
+    try {
+      await saving.current; // let an in-flight autosave finish so it can't recreate the note
+      await clinicalApi.discardVisit(encounterId);
+      leave();
+    } catch (err) {
+      setDiscardPrompt(false);
+      setDiscarding(false);
+      setSaveState({ error: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  /**
+   * Cancel (S07). An empty visit that this session just started leaves no trace —
+   * discard it silently so no phantom "unsigned note" shows on the chart (S06).
+   * A visit with content, or one that already existed, is never deleted without
+   * the doctor's say-so: ask whether to keep it as an unsigned draft or discard it.
+   */
+  /** Cancel (S07): always ask "Discard this draft?" before anything is deleted. */
+  const onCancel = () => {
+    clearTimeout(timer.current);
+    setDiscardPrompt(true);
   };
 
   return (
@@ -309,7 +365,7 @@ export default function ConsultationNote({ patientId, encounterId }: { patientId
                 })}
               </tbody>
             </table>
-            {!locked && <EyeTemplatePicker patientId={p.id} visitId={encounterId} />}
+            {!locked && <EyeTemplatePicker patientId={p.id} visitId={encounterId} beforeOpen={flushBeforeLeaving} />}
             <p className="muted small">Values that changed from the previous visit are highlighted in red.</p>
           </section>
 
@@ -358,11 +414,13 @@ export default function ConsultationNote({ patientId, encounterId }: { patientId
               Draft · {saveState.saving ? 'saving…' : saveState.at ? `saved automatically at ${saveState.at.toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' })}` : 'not saved yet'}
             </span>
           )}
-          <div className="muted small">Once signed, the note is locked. Later corrections are added as dated addenda.</div>
+          <div className="muted small footer-note" title={SIGNED_NOTE_HELP}>
+            {SIGNED_NOTE_HELP}
+          </div>
         </div>
         {!signed && (
           <>
-            <button type="button" onClick={() => go(`/patients/${p.id}`)}>
+            <button type="button" onClick={onCancel} disabled={discarding}>
               Cancel
             </button>
             <button
@@ -397,6 +455,23 @@ export default function ConsultationNote({ patientId, encounterId }: { patientId
               </button>
               <button type="button" className="primary" onClick={() => void sign()}>
                 Sign and Lock
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {discardPrompt && (
+        <div className="backdrop" role="presentation">
+          <div className="card dialog" role="alertdialog" aria-modal="true" aria-labelledby="discard-title">
+            <h2 id="discard-title">Discard this draft?</h2>
+            <p>The unsigned note and its findings will be deleted. This cannot be undone.</p>
+            <div className="footer-bar">
+              <button type="button" onClick={() => setDiscardPrompt(false)} disabled={discarding}>
+                No, keep editing
+              </button>
+              <button type="button" className="danger" onClick={() => void discard()} disabled={discarding}>
+                {discarding ? 'Discarding…' : 'Yes, discard'}
               </button>
             </div>
           </div>

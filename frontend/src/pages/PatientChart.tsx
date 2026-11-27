@@ -6,6 +6,7 @@ import {
   ENCOUNTER_LABEL,
   formatDate,
   fullName,
+  type ActiveProblem,
   type ChartSummary,
   type Finding,
 } from '../clinicalApi';
@@ -22,6 +23,8 @@ const TASK_LABEL: Record<string, string> = {
   INJECTION: 'Injection',
   PROCEDURE: 'Procedure',
 };
+
+const EYE_LABEL = { OD: 'Right eye', OS: 'Left eye', OU: 'Both eyes' } as const;
 
 const DOC_LABEL = { PRESCRIPTION: 'Prescription', MEDICAL_CERTIFICATE: 'Medical certificate' } as const;
 
@@ -50,7 +53,7 @@ export default function PatientChart({ patientId, appointmentId }: { patientId: 
   const [tab, setTab] = useState<Tab>('summary');
   const [starting, setStarting] = useState(false);
   const [failure, setFailure] = useState<string>();
-  const { data, error } = useLoad(() => clinicalApi.summary(patientId), [patientId]);
+  const { data, error, reload } = useLoad(() => clinicalApi.summary(patientId), [patientId]);
 
   if (error) return <p className="error">{error}</p>;
   if (!data) return <p>Loading…</p>;
@@ -121,7 +124,7 @@ export default function PatientChart({ patientId, appointmentId }: { patientId: 
         )}
       </div>
 
-      {tab === 'summary' && <Summary data={data} doctor={doctor} onTab={setTab} />}
+      {tab === 'summary' && <Summary data={data} doctor={doctor} onTab={setTab} onResolved={reload} />}
       {tab === 'visits' && <Visits data={data} />}
       {tab === 'medications' && <Medications data={data} />}
       {tab === 'documents' && <Documents data={data} />}
@@ -133,13 +136,72 @@ export default function PatientChart({ patientId, appointmentId }: { patientId: 
   );
 }
 
-function Summary({ data, doctor, onTab }: { data: ChartSummary; doctor: boolean; onTab: (t: Tab) => void }) {
+/** S06 Active Problems (wireframe item 5). Doctor only; Resolved keeps the row as history. */
+function ActiveProblems({ patientId, problems, onResolved }: { patientId: string; problems: ActiveProblem[]; onResolved: () => void }) {
+  const [busy, setBusy] = useState<string>();
+  const [failure, setFailure] = useState<string>();
+
+  const resolve = async (problem: ActiveProblem) => {
+    setBusy(problem.id);
+    setFailure(undefined);
+    try {
+      await clinicalApi.resolveProblem(patientId, problem.id);
+      onResolved();
+    } catch (err) {
+      setFailure(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  return (
+    <section className="card">
+      <h2>Active Problems</h2>
+      {problems.length === 0 && <p className="muted">No active problems. Diagnoses join this list when a note is signed.</p>}
+      {failure && <p className="error">{failure}</p>}
+      <ul className="plain problem-list">
+        {problems.map((p) => (
+          <li key={p.id} className="row between">
+            <div>
+              <strong>{p.diagnosis}</strong>
+              {p.eye && <span className="muted">, {EYE_LABEL[p.eye].toLowerCase()}</span>}
+              <div className="muted small">
+                Since {formatDate(p.dateFirstRecorded)} ·{' '}
+                <a href={`#/patients/${patientId}/visits/${p.encounterId}`}>
+                  {ENCOUNTER_LABEL[p.visitType]} visit, {formatDate(p.visitDate, false)}
+                </a>
+              </div>
+            </div>
+            <button onClick={() => void resolve(p)} disabled={busy === p.id} aria-label={`Mark ${p.diagnosis} as resolved`}>
+              Resolved
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function Summary({
+  data,
+  doctor,
+  onTab,
+  onResolved,
+}: {
+  data: ChartSummary;
+  doctor: boolean;
+  onTab: (t: Tab) => void;
+  onResolved: () => void;
+}) {
   const p = data.patient;
   const exam = data.latestExam;
   const iopSeries = data.iopTrend?.series ?? [];
   return (
     <div className="chart-grid">
       <div className="stack">
+        {doctor && data.activeProblems && (
+          <ActiveProblems patientId={p.id} problems={data.activeProblems} onResolved={onResolved} />
+        )}
         <section className="card">
           <h2>Medical History</h2>
           {doctor ? (
@@ -200,7 +262,7 @@ function Summary({ data, doctor, onTab }: { data: ChartSummary; doctor: boolean;
               </>
             )}
             {data.iopTrend && iopSeries.length > 0 && (
-              <TrendChart chart={data.iopTrend} label="IOP trend (mmHg)" height={160} />
+              <TrendChart chart={data.iopTrend} label="IOP trend (mmHg)" height={120} />
             )}
           </section>
         )}
@@ -211,7 +273,7 @@ function Summary({ data, doctor, onTab }: { data: ChartSummary; doctor: boolean;
               All visits
             </button>
           </div>
-          <VisitTable visits={data.recentVisits.slice(0, 3)} patientId={p.id} doctor={doctor} />
+          <RecentVisits visits={data.recentVisits.slice(0, 3)} patientId={p.id} doctor={doctor} />
         </section>
       </div>
 
@@ -246,6 +308,32 @@ function Summary({ data, doctor, onTab }: { data: ChartSummary; doctor: boolean;
         </section>
       </div>
     </div>
+  );
+}
+
+/**
+ * Recent Visits on S06 (wireframe item 8): date and type on the left, the note
+ * badge on the right, the clinic on a small second line. A list rather than the
+ * four-column table, which cannot fit the narrow summary card without the
+ * badge overflowing it.
+ */
+function RecentVisits({ visits, patientId, doctor }: { visits: ChartSummary['recentVisits']; patientId: string; doctor: boolean }) {
+  if (visits.length === 0) return <p className="muted">No visits yet.</p>;
+  return (
+    <ul className="plain visit-list">
+      {visits.map((v) => (
+        <li key={v.id} className="row between">
+          <div className="visit-main">
+            <strong>
+              {doctor ? <a href={`#/patients/${patientId}/visits/${v.id}`}>{formatDate(v.visitDate)}</a> : formatDate(v.visitDate)}
+            </strong>{' '}
+            <span>{ENCOUNTER_LABEL[v.type]}</span>
+            {v.clinicName && <div className="muted small">{v.clinicName}</div>}
+          </div>
+          {noteBadge(v)}
+        </li>
+      ))}
+    </ul>
   );
 }
 

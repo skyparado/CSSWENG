@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { PATIENT_ID, signIn } from './helpers';
+import { createPatient } from './support';
 
 /**
  * S04 search, S05 registration, S06 chart, S07 consultation note and signing,
@@ -173,5 +174,68 @@ test.describe('S06/S07/S08 chart, consultation note and signing', () => {
     await expect(page.getByText('Visible to the doctor only.')).toBeVisible();
     await page.goto(`/#/patients/${PATIENT_ID}/compare`);
     await expect(page.getByText('Only the doctor can compare results.')).toBeVisible();
+  });
+
+  test('Cancel → discard removes the draft; S06 shows no unsigned note', async ({ page }) => {
+    await signIn(page, 'DOCTOR');
+    // A fresh patient, so no open visit left by another test is reused.
+    const patient = await createPatient(page);
+    await page.goto(`/#/patients/${patient.id}`);
+    await expect(page.getByRole('heading', { name: patient.name })).toBeVisible();
+    await page.getByRole('button', { name: '+ New Note' }).click();
+
+    await page.getByLabel('Subjective').fill('Blurred vision OD');
+    await expect(page.getByText(/saved automatically at/)).toBeVisible({ timeout: 10_000 });
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await expect(page.getByRole('alertdialog', { name: 'Discard this draft?' })).toBeVisible();
+    await page.getByRole('button', { name: 'Yes, discard' }).click();
+
+    await expect(page).toHaveURL(new RegExp(`/patients/${patient.id}$`));
+    await expect(page.getByRole('heading', { name: patient.name })).toBeVisible();
+    await expect(page.getByText('Unsigned note')).toHaveCount(0);
+  });
+
+  test('a signed diagnosis shows in Active Problems on S06 until the Doctor marks it Resolved', async ({ page }) => {
+    const diagnosis = `Moderate diabetic retinopathy ${Date.now()}`;
+    await signIn(page, 'DOCTOR');
+    await page.goto(`/#/patients/${PATIENT_ID}`);
+    await expect(page.getByRole('heading', { name: 'Juan Dela Cruz' })).toBeVisible();
+    await page.getByRole('button', { name: '+ New Note' }).click();
+
+    await page.getByLabel('Subjective').fill('Follow-up for diabetic eye changes.');
+    await page.getByLabel('Add diagnosis').fill(diagnosis);
+    await page.getByRole('button', { name: '+ Add diagnosis' }).click();
+    await expect(page.getByText(/saved automatically at/)).toBeVisible({ timeout: 10_000 });
+
+    // Sign the note: only now do its diagnoses join the problem list.
+    await page.getByRole('button', { name: 'Sign and Lock Note' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Sign and lock this note?' });
+    await dialog.getByRole('button', { name: 'Sign and Lock' }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByText('Signed', { exact: true })).toBeVisible();
+
+    // Signed: the diagnosis is in the Active Problems box on S06.
+    await page.goto(`/#/patients/${PATIENT_ID}`);
+    const box = page.locator('section.card').filter({ has: page.getByRole('heading', { name: 'Active Problems' }) });
+    const row = box.getByRole('listitem').filter({ hasText: diagnosis });
+    await expect(row).toBeVisible();
+    await expect(row.getByText(/Since/)).toBeVisible();
+
+    // Resolved: the row disappears from the box.
+    await row.getByRole('button', { name: /resolved/i }).click();
+    await expect(row).toHaveCount(0);
+
+    // It stays gone after a reload (the record is kept as history, not shown as active).
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Juan Dela Cruz' })).toBeVisible();
+    await expect(page.getByText(diagnosis)).toHaveCount(0);
+  });
+
+  test('the secretary does not see Active Problems', async ({ page }) => {
+    await signIn(page, 'SECRETARY');
+    await page.goto(`/#/patients/${PATIENT_ID}`);
+    await expect(page.getByRole('heading', { name: 'Juan Dela Cruz' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Active Problems' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /resolved/i })).toHaveCount(0);
   });
 });

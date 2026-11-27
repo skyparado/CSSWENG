@@ -95,7 +95,7 @@ tr.selected td { background: #eaf1fb; }
 .preview { width: 100%; height: 640px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 .med { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
 .sig-img { max-height: 60px; max-width: 220px; display: block; margin: 8px 0; }
-.footer-bar { display: flex; justify-content: flex-end; gap: 12px; align-items: center; }
+.footer-bar { display: flex; justify-content: flex-end; gap: 12px; align-items: center; flex-wrap: wrap; }
 
 /* Dialogs, history, misc */
 .backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45); display: grid; place-items: center; z-index: 10; }
@@ -134,9 +134,18 @@ button.link { border: 0; background: none; padding: 4px 0; color: var(--navy); }
 .alert.duplicate .row + .row { margin-top: 8px; }
 .alert.allergy { color: var(--red); margin: 16px 0; }
 .notice { margin: 16px 0; }
-.patient-head { display: flex; align-items: center; gap: 20px; margin-bottom: 16px; }
-.patient-head h1 { font-size: 26px; }
+.patient-head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 16px; }
+.patient-head h1 { font-size: 26px; margin: 0; }
 .patient-head p { margin: 4px 0 0; }
+/* The name and identifiers keep a readable width; below it the action buttons
+   wrap to their own line instead of crushing the text (APP DEV Nov 10 — the
+   S06/S07/S08 header was cramped in the two-column split view). */
+.patient-head > .grow { flex: 1 1 240px; min-width: 0; }
+.patient-head > .row { flex: 0 0 auto; margin-left: auto; }
+@media (max-width: 640px) {
+  .patient-head h1 { font-size: 22px; }
+  .patient-head > .row { margin-left: 0; width: 100%; }
+}
 .avatar { width: 64px; height: 64px; border-radius: 50%; background: #eaf1fb; color: var(--navy); font-weight: 700; font-size: 22px; display: grid; place-items: center; flex: none; }
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: 8px 0 20px; }
 .tabs button { border: 0; border-bottom: 3px solid transparent; border-radius: 0; background: none; color: var(--muted); padding: 10px 16px; }
@@ -147,6 +156,22 @@ button.link { border: 0; background: none; padding: 4px 0; color: var(--navy); }
 ul.plain { list-style: none; padding: 0; margin: 8px 0 0; }
 ul.plain li { padding: 8px 0; border-top: 1px solid var(--line); }
 ul.plain li:first-child { border-top: 0; }
+/* S06 summary fits a desktop viewport (wireframe): tighter cards, a shorter IOP chart. */
+.chart-grid { gap: 16px; }
+.chart-grid .card { padding: 16px 18px; }
+.chart-grid .stack > * + * { margin-top: 16px; }
+.chart-grid .card > .row.between:first-child { margin-bottom: 6px; }
+.chart-grid h3 { margin: 8px 0 2px; }
+.chart-grid .spread { max-width: none; }
+.chart-grid ul.plain { margin-top: 4px; }
+.chart-grid ul.plain li { padding: 6px 0; }
+/* Recent Visits: the date and type keep a readable width; the badge stays inside the card
+   and wraps below them when the column is narrow, instead of overflowing. */
+.visit-list li > .visit-main { flex: 1 1 150px; min-width: 0; }
+.visit-list .badge { flex: none; }
+/* S06 Active Problems: the diagnosis keeps a readable width and the Resolved button wraps below it. */
+.problem-list li { align-items: flex-start; }
+.problem-list li > div { flex: 1 1 180px; min-width: 0; }
 .note-grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 20px; align-items: start; }
 table.findings th[scope='row'] { color: var(--text); font-size: 15px; }
 table.findings input { max-width: 160px; }
@@ -646,7 +671,8 @@ fieldset.plain { border: 0; padding: 0; margin: 0; min-width: 0; }
 .label { font-weight: 600; padding: 0; margin: 12px 0 6px; }
 .seg { display: inline-flex; border: 2px solid var(--navy); border-radius: 8px; overflow: hidden; }
 .seg button { border: 0; border-radius: 0; }
-.seg button[aria-checked='true'] { background: var(--navy); color: #fff; }
+.seg button[aria-checked='true'],
+.seg button[aria-pressed='true'] { background: var(--navy); color: #fff; }
 
 /* S17 reports */
 .report-controls { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; }
@@ -682,6 +708,17 @@ fieldset.plain { border: 0; padding: 0; margin: 0; min-width: 0; }
 .layer-strip button { display: grid; gap: 2px; text-align: left; font-weight: 600; }
 .layer-strip button[aria-pressed='true'] { background: var(--navy); color: #fff; }
 .layer-strip button[aria-pressed='true'] small { color: #dbe7f7; }
+
+/* S07 status bar: the status text keeps a readable width and the buttons wrap below it.
+   In a narrow window (split screen) the status takes its own line, and the long
+   help sentence shrinks to one line (the full text is in its tooltip). */
+.footer-bar.sticky > .grow { flex: 1 1 260px; }
+@media (max-width: 960px) {
+  .footer-bar.sticky { padding: 10px 0; margin-top: 12px; }
+  .footer-bar.sticky > .grow { flex-basis: 100%; }
+  .footer-bar.sticky > button { flex: 1 1 auto; }
+  .footer-note { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
 
 .drawing-area { width: 100%; min-width: 0; }
 .annotate-canvas { max-width: 100%; }

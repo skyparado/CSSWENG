@@ -3,7 +3,8 @@ import { eyeTemplateLabels, eyeTemplateTypes, type EyeTemplate } from '@clinic/s
 import { imagesPath } from './imageApi';
 import { go } from './session';
 
-export default function EyeTemplatePicker({ patientId, visitId }: { patientId: string; visitId: string }) {
+/** beforeOpen: save the S07 draft first; returns false to stay put when the save failed. */
+export default function EyeTemplatePicker({ patientId, visitId, beforeOpen }: { patientId: string; visitId: string; beforeOpen?: () => Promise<boolean> }) {
   const [type, setType] = useState<EyeTemplate>('anterior-od');
   return <div className="row eye-template-picker">
     <label>Eye diagram
@@ -11,6 +12,6 @@ export default function EyeTemplatePicker({ patientId, visitId }: { patientId: s
         {eyeTemplateTypes.map(t => <option key={t} value={t}>{eyeTemplateLabels[t]}</option>)}
       </select>
     </label>
-    <button type="button" onClick={() => go(imagesPath(patientId, visitId, 'new', type))}>Open Drawing</button>
+    <button type="button" onClick={async () => { if (!beforeOpen || await beforeOpen()) go(imagesPath(patientId, visitId, 'new', type)); }}>Open Drawing</button>
   </div>;
 }

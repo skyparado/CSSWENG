@@ -88,6 +88,7 @@ model Patient {
   encounters       Encounter[]
   examFindings     ExamFinding[]
   labResults       LabResult[]
+  problems         Problem[]
 
   tabletIntakeSubmissions TabletIntakeSubmission[]
 
@@ -160,9 +161,10 @@ model Encounter {
   examFindings    ExamFinding[]
   labResults      LabResult[]
   followUps       FollowUp[]
+  problems        Problem[]
 
-  images          ClinicalImage[]
-  walkInKey       String?        @unique
+  images    ClinicalImage[]
+  walkInKey String?         @unique
 
   @@unique([id, patientId])
   @@index([patientId, visitDate])
@@ -291,6 +293,42 @@ model LabResult {
   @@index([encounterId])
 }
 
+/// One entry of the patient's problem list (S06 "Active Problems").
+///
+/// Rows are created when a note is SIGNED, from its diagnoses; a draft never
+/// creates one. The Doctor marks a problem resolved (resolvedDate and
+/// resolvedById are set together, enforced by a CHECK constraint). A resolved
+/// row stays as history and only leaves the active list.
+model Problem {
+  id          String @id @default(cuid())
+  patientId   String
+  /// Clinic of the originating visit.
+  clinicId    String
+  /// The visit whose signed note first recorded this problem.
+  encounterId String
+
+  diagnosis     String // app-encrypted
+  diagnosisCode String? // app-encrypted ICD-10 code, if the note had one
+  /// Null when the diagnosis is not tied to one eye.
+  eye           Eye?
+
+  /// Visit date of the signed note that first recorded it.
+  dateFirstRecorded DateTime  @db.Date
+  resolvedDate      DateTime? @db.Date
+  resolvedById      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  patient    Patient   @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  clinic     Clinic    @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  encounter  Encounter @relation(fields: [encounterId], references: [id], onDelete: Restrict)
+  resolvedBy User?     @relation("ProblemResolvedBy", fields: [resolvedById], references: [id], onDelete: Restrict)
+
+  @@index([patientId, resolvedDate])
+  @@index([encounterId])
+}
+
 /// Staff account. Only the Doctor can approve, change, revoke accounts and the
 /// clinics each account may work in (see UserClinic).
 model User {
@@ -327,20 +365,20 @@ model User {
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt
 
-  approvedBy         User?              @relation("UserApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
-  accountsApproved   User[]             @relation("UserApprovedBy")
+  approvedBy       User?  @relation("UserApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  accountsApproved User[] @relation("UserApprovedBy")
 
   documentRequests   DocumentRequest[]
   clinics            UserClinic[]
   medicineDecisions  ReportedMedicineDecision[]
   approvedReferences MedicationReference[]
   appointmentEvents  AppointmentEvent[]
-  walkInsApproved    Appointment[]      @relation("WalkInApprovedBy")
+  walkInsApproved    Appointment[]              @relation("WalkInApprovedBy")
   documentDeliveries DocumentDelivery[]
   uploadedImages     ClinicalImage[]
   createdAnnotations ImageAnnotation[]
-  documentsSigned    Document[]         @relation("DocumentSignedBy")
-  documentsSent      Document[]         @relation("DocumentSentBy")
+  documentsSigned    Document[]                 @relation("DocumentSignedBy")
+  documentsSent      Document[]                 @relation("DocumentSentBy")
 
   consentsRecorded    PatientConsent[] @relation("ConsentRecordedBy")
   consentsWithdrawn   PatientConsent[] @relation("ConsentWithdrawnBy")
@@ -356,9 +394,10 @@ model User {
   encountersAttended  Encounter[]      @relation("EncounterAttendingDoctor")
   findingsRecorded    ExamFinding[]    @relation("FindingRecordedBy")
   labResultsRecorded  LabResult[]      @relation("LabResultRecordedBy")
+  problemsResolved    Problem[]        @relation("ProblemResolvedBy")
 
-  startedTabletSessions TabletIntakeSession[] @relation("TabletIntakeSessionStarter")
-  reportExports         ReportExport[]        @relation("ReportExportRequestedBy")
+  startedTabletSessions TabletIntakeSession[]    @relation("TabletIntakeSessionStarter")
+  reportExports         ReportExport[]           @relation("ReportExportRequestedBy")
   reviewedIntakeForms   TabletIntakeSubmission[] @relation("IntakeSubmissionReviewedBy")
 
   @@index([status])
@@ -405,6 +444,7 @@ model Clinic {
   encounters         Encounter[]
   examFindings       ExamFinding[]
   labResults         LabResult[]
+  problems           Problem[]
 
   tabletSessions TabletIntakeSession[]
 
@@ -685,20 +725,20 @@ model FollowUp {
   taskType      FollowUpTaskType
 
   /// @encrypted
-  reason        String
-  dueDate       DateTime         @db.Date
-  priority      FollowUpPriority @default(NORMAL)
-  status        FollowUpStatus   @default(OPEN)
+  reason             String
+  dueDate            DateTime         @db.Date
+  priority           FollowUpPriority @default(NORMAL)
+  status             FollowUpStatus   @default(OPEN)
   recallIntervalDays Int?
-  recallOfId    String? @unique
-  reminderCycle Int @default(0)
-  recallRule    String?
-  closureNote   String?
-  createdById   String? // null when generated by a recall rule
-  completedById String?
-  completedAt   DateTime?
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
+  recallOfId         String?          @unique
+  reminderCycle      Int              @default(0)
+  recallRule         String?
+  closureNote        String?
+  createdById        String? // null when generated by a recall rule
+  completedById      String?
+  completedAt        DateTime?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
 
   patient      Patient            @relation(fields: [patientId], references: [id], onDelete: Restrict)
   clinic       Clinic             @relation(fields: [clinicId], references: [id], onDelete: Restrict)
@@ -751,11 +791,11 @@ model OutreachLog {
   outcome       OutreachOutcome
 
   /// @encrypted
-  patientResponse   String?
-  responseIsAdministrative Boolean @default(false)
-  providerMessageId String?
-  deliveryStatus    DeliveryStatus?
-  contactedById     String? // null for automated reminders
+  patientResponse          String?
+  responseIsAdministrative Boolean         @default(false)
+  providerMessageId        String?
+  deliveryStatus           DeliveryStatus?
+  contactedById            String? // null for automated reminders
 
   followUp    FollowUp        @relation(fields: [followUpId], references: [id], onDelete: Restrict)
   patient     Patient         @relation(fields: [patientId], references: [id], onDelete: Restrict)
@@ -792,7 +832,7 @@ model ReminderDelivery {
   consentId         String? // the reminder consent that allowed this send
   status            ReminderDeliveryStatus @default(PENDING)
   providerMessageId String?
-  cycle             Int @default(0)
+  cycle             Int                    @default(0)
   deliveryStatus    DeliveryStatus?
   sentAt            DateTime?
   createdAt         DateTime               @default(now())
@@ -820,7 +860,7 @@ enum MedicationSource {
 /// Versioned medication entry. A change inserts a new row that supersedes the
 /// earlier one (`isCurrent` flips to false); rows are never edited or deleted.
 model Medication {
-  id             String  @id @default(cuid())
+  id             String                    @id @default(cuid())
   patientId      String
   clinicId       String
   documentId     String?
@@ -871,13 +911,13 @@ enum AllergySeverity {
 
 /// A recorded allergy. Never hard-deleted: a removed entry is voided with a reason.
 model Allergy {
-  id           String @id @default(cuid())
-  patientId    String
-  clinicId     String
+  id              String               @id @default(cuid())
+  patientId       String
+  clinicId        String
   /// @encrypted
-  allergenName String
+  allergenName    String
   intakeSessionId String?
-  intakeSession TabletIntakeSession? @relation(fields: [intakeSessionId], references: [id], onDelete: SetNull)
+  intakeSession   TabletIntakeSession? @relation(fields: [intakeSessionId], references: [id], onDelete: SetNull)
 
   /// @encrypted
   reaction      String?
@@ -976,7 +1016,7 @@ model ClinicalImage {
   appointment Appointment?      @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
   uploadedBy  User?             @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
   annotations ImageAnnotation[]
-  visit       Encounter? @relation(fields: [visitId, patientId], references: [id, patientId], onDelete: Restrict, onUpdate: NoAction)
+  visit       Encounter?        @relation(fields: [visitId, patientId], references: [id, patientId], onDelete: Restrict, onUpdate: NoAction)
 
   @@index([visitId])
   @@index([walkInKey, patientId])
@@ -1048,7 +1088,7 @@ model TabletIntakeSession {
   startedBySecretary User?                   @relation("TabletIntakeSessionStarter", fields: [startedBySecretaryId], references: [id], onDelete: SetNull)
   submission         TabletIntakeSubmission?
   consents           PatientConsent[]
-  reportedAllergies   Allergy[]
+  reportedAllergies  Allergy[]
 
   @@index([status])
   @@index([clinicId, createdAt])
@@ -1149,19 +1189,20 @@ model ReportedMedicineDecision {
   submissionId String
   itemIndex    Int
   decidedById  String
-  decidedAt    DateTime @default(now())
-  medicationId String? @unique // null for a dismissed item
+  decidedAt    DateTime               @default(now())
+  medicationId String?                @unique // null for a dismissed item
   submission   TabletIntakeSubmission @relation(fields: [submissionId], references: [id], onDelete: Restrict)
-  decidedBy    User @relation(fields: [decidedById], references: [id], onDelete: Restrict)
-  medication   Medication? @relation(fields: [medicationId], references: [id], onDelete: Restrict)
+  decidedBy    User                   @relation(fields: [decidedById], references: [id], onDelete: Restrict)
+  medication   Medication?            @relation(fields: [medicationId], references: [id], onDelete: Restrict)
+
   @@id([submissionId, itemIndex])
 }
 
 /// Published versions are immutable. The bundled reference stays unapproved.
 model MedicationReference {
-  version Int @id
-  data Json
-  approvedAt DateTime @default(now())
+  version      Int      @id
+  data         Json
+  approvedAt   DateTime @default(now())
   approvedById String
-  approvedBy User @relation(fields: [approvedById], references: [id], onDelete: Restrict)
+  approvedBy   User     @relation(fields: [approvedById], references: [id], onDelete: Restrict)
 }
