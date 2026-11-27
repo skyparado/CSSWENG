@@ -23,7 +23,7 @@ test.describe('Patient rights requests (SDD 7.4)', () => {
     await expect(sec.getByRole('heading', { name: 'Patient Rights Requests' })).toBeVisible();
     await sec.getByRole('button', { name: '+ New Request' }).click();
     const dialog = sec.getByRole('dialog', { name: 'New Rights Request' });
-    await dialog.getByLabel('Patient').fill(patient.firstName);
+    await dialog.getByPlaceholder('Search patient by name').fill(patient.firstName);
     await sec.getByRole('option', { name: patient.name }).click();
     await dialog.getByLabel('Request').selectOption('COPY');
     await dialog.getByLabel('Received').selectOption('PHONE');

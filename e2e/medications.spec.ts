@@ -154,16 +154,7 @@ test.describe('S10 medications and allergies', () => {
     await dialog.getByLabel('Reason').fill('Entered by mistake');
     await dialog.getByRole('button', { name: 'Remove allergy' }).click();
     await expect(page.getByTestId('allergy-row')).toHaveCount(0);
-  });
-});
-
-test.describe('medications for the Secretary', () => {
-  test('the Secretary cannot open medications or allergies', async ({ page }) => {
-    await signIn(page, 'SECRETARY');
-    await page.goto('/#/patients/anything/medications');
-    await expect(page.getByText('Only the Doctor can view medications and allergies.')).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Medications' })).toHaveCount(0); // not in the menu
-  });
+    });
 
   test('the Doctor marks the medication list reviewed for this visit', async ({ page }) => {
     const card = page.getByRole('region', { name: 'Medication review' });
@@ -177,4 +168,13 @@ test.describe('medications for the Secretary', () => {
     await expect(card).toContainText('Patient confirmed no other medicines');
     await expect(card.getByRole('button', { name: /Reviewed$/ })).toHaveCount(0);
   });
+});
+
+  test.describe('medications for the Secretary', () => {
+    test('the Secretary cannot open medications or allergies', async ({ page }) => {
+      await signIn(page, 'SECRETARY');
+      await page.goto('/#/patients/anything/medications');
+      await expect(page.getByText('Only the Doctor can view medications and allergies.')).toBeVisible();
+      await expect(page.getByRole('link', { name: 'Medications' })).toHaveCount(0); // not in the menu
+    });
 });
