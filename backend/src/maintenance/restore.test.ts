@@ -3,10 +3,13 @@ import { assertSafeDatabaseName, compareCounts, onlyHarmlessRestoreErrors, pgToo
 
 describe('restore helpers', () => {
   it('finds pg_restore and psql next to PG_DUMP_PATH, or on the PATH', () => {
-    expect(pgToolPath('pg_restore', 'pg_dump')).toBe('pg_restore');
-    expect(pgToolPath('psql', '/usr/lib/postgresql/16/bin/pg_dump')).toMatch(/16[\\/]bin[\\/]psql$/);
+     // '' = no PG_RESTORE_PATH / PSQL_PATH set, so the test does not depend on the local .env.
+    expect(pgToolPath('pg_restore', 'pg_dump', '')).toBe('pg_restore');
+    expect(pgToolPath('psql', '/usr/lib/postgresql/16/bin/pg_dump', '')).toMatch(/16[\\/]bin[\\/]psql$/);
     // Windows install: same folder, same .exe extension (path.join uses this OS's separator).
-    expect(pgToolPath('pg_restore', 'C:/Program Files/PostgreSQL/18/bin/pg_dump.exe')).toMatch(/18[\\/]bin[\\/]pg_restore\.exe$/);
+    expect(pgToolPath('pg_restore', 'C:/Program Files/PostgreSQL/18/bin/pg_dump.exe', '')).toMatch(/18[\\/]bin[\\/]pg_restore\.exe$/);
+    // An explicit PG_RESTORE_PATH / PSQL_PATH always wins.
+    expect(pgToolPath('pg_restore', 'pg_dump', 'D:/pg/pg_restore.exe')).toBe('D:/pg/pg_restore.exe');
   });
 
   it('points the connection URL at another database and drops Prisma-only options', () => {

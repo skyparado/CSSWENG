@@ -16,8 +16,11 @@ import { pgDumpInvocation } from './backup.js';
  * PG_DUMP_PATH (so on Windows, setting PG_DUMP_PATH to ...\bin\pg_dump.exe is
  * enough), or is found on the PATH.
  */
-export function pgToolPath(tool: 'pg_restore' | 'psql', dumpPath = env.PG_DUMP_PATH): string {
-  const explicit = tool === 'pg_restore' ? env.PG_RESTORE_PATH : env.PSQL_PATH;
+export function pgToolPath(
+  tool: 'pg_restore' | 'psql',
+  dumpPath = env.PG_DUMP_PATH,
+  explicit = tool === 'pg_restore' ? env.PG_RESTORE_PATH : env.PSQL_PATH,
+): string {
   if (explicit) return explicit;
   if (basename(dumpPath) === dumpPath) return tool; // a bare "pg_dump": use the PATH
   return join(dirname(dumpPath), tool + extname(dumpPath));
