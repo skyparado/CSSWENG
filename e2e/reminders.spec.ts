@@ -112,6 +112,9 @@ test.describe('reminders: consent, content and delivery', () => {
   });
 
   test('the daily reminder check sends only to consenting patients', async ({ page }) => {
+    // The scan queues every due, consenting task in the database, including ones
+    // left by earlier specs, so in a full run this one may wait behind them.
+    test.setTimeout(150_000);
     const consenting = patient;
     const notConsenting = await createPatient(page);
     await grantReminderConsent(page, consenting.id, 'SMS');
@@ -123,7 +126,10 @@ test.describe('reminders: consent, content and delivery', () => {
     expect(res.status()).toBe(202);
 
     await page.goto(outreachUrl(withConsent));
-    await expect(page.getByTestId('attempt-row')).toHaveCount(1, { timeout: 30_000 });
+    await expect(async () => {
+      await page.reload();
+      await expect(page.getByTestId('attempt-row')).toHaveCount(1, { timeout: 2_000 });
+    }).toPass({ timeout: 120_000 });
     await expect(page.getByTestId('attempt-row')).toContainText('SMS');
 
     await page.goto(outreachUrl(withoutConsent));
