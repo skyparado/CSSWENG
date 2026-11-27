@@ -16,6 +16,29 @@ async function draftPrescription(page: Page, drug: string) {
 
 const row = (page: Page, text: string) => page.getByRole('row').filter({ hasText: text }).first();
 
+test.describe('S14 prescription pad fields', () => {
+  test('the doctor can enter PTR and S2 numbers and the preview keeps rendering', async ({ page }) => {
+    await signIn(page, 'DOCTOR');
+    await draftPrescription(page, `Latanoprost ${Date.now()}`); /** Latanoprost is a sample medicine */
+    await page.getByLabel('PTR No.').fill('PTR-778899'); /** PTR No. is a placeholder */
+    await page.getByLabel('S2 No.').fill('S2-445566'); /** S2 No. is a placeholder */
+    await expect(page.getByLabel('PTR No.')).toHaveValue('PTR-778899'); /** PTR No. is a placeholder */
+    await expect(page.getByLabel('S2 No.')).toHaveValue('S2-445566'); /** S2 No. is a placeholder */
+    await expect(page.getByText(/saved automatically at/)).toBeVisible();
+    await expect(page.getByTitle('PDF preview')).toBeVisible();
+  });
+
+  test('PTR and S2 are prescription fields only: the certificate form does not show them', async ({ page }) => {
+    await signIn(page, 'DOCTOR');
+    await page.goto('/#/documents/new');
+    await expect(page.getByLabel('PTR No.')).toBeVisible();
+    await expect(page.getByLabel('S2 No.')).toBeVisible();
+    await page.getByRole('button', { name: 'Medical Certificate' }).click();
+    await expect(page.getByLabel('PTR No.')).toHaveCount(0);
+    await expect(page.getByLabel('S2 No.')).toHaveCount(0);
+  });
+});
+
 test.describe('S14/S15 documents', () => {
   test('signing needs the password; the emailed PDF is password-protected and the delivery recorded', async ({ page }) => {
     await signIn(page, 'DOCTOR');
