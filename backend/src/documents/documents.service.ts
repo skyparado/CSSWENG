@@ -13,10 +13,8 @@ import { badRequest, conflict, HttpError, notFound } from '../http.js';
 import { getObject, putObject } from '../storage/s3.js';
 import { createGateways } from '../reminders/gateway.js';
 import { renderHtmlToPdf } from './pdf.service.js';
-import {
-  renderMedicalCertificateHtml,
-  renderPrescriptionHtml,
-} from './templates.js';
+import { renderMedicalCertificateHtml } from './certificateTemplate.js';
+import { renderPrescriptionHtml } from './prescriptionTemplate.js';
 
 export function htmlFor(input: DocumentRequestCreate, signatureDataUri?: string): string {
   switch (input.type) {
@@ -45,6 +43,7 @@ export async function withClinicLetterhead(input: DocumentRequestCreate, userId:
   input.payload.prescriberName = doctor.fullName;
   input.payload.clinicName = clinic.name;
   input.payload.clinicAddress = clinic.address ?? undefined;
+  input.payload.clinicPhone = clinic.phone ?? undefined;
   return input;
 }
 
