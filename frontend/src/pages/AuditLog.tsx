@@ -287,7 +287,8 @@ export default function AuditLog() {
           <p className="muted">No entries match these filters.</p>
         )}
         {data && data.items.length > 0 && (
-          <table className="audit-table">
+          // Scrolls sideways inside the card on a tablet instead of widening the page.
+          <div className="scroll-x"><table className="audit-table">
             <thead>
               <tr>
                 <th>When</th>
@@ -310,7 +311,7 @@ export default function AuditLog() {
                 />
               ))}
             </tbody>
-          </table>
+          </table></div>
         )}
         {data && data.total > 0 && (
           <div className="pager">

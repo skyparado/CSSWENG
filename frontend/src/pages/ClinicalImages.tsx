@@ -1,3 +1,4 @@
+import { randomId } from '../randomId';
 import EyeTemplatePicker from '../EyeTemplatePicker';
 import { clinicalApi } from '../clinicalApi';
 import { imagesPath } from '../imageApi';
@@ -36,7 +37,7 @@ export default function ClinicalImages({ patientId, visitId, appointmentId }: { 
 
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
-  const [walkInKey] = useState(() => crypto.randomUUID());
+  const [walkInKey] = useState(() => randomId());
   const [visits, setVisits] = useState<Awaited<ReturnType<typeof clinicalApi.encounters>>['items']>([]);
   useEffect(() => {
     let active = true;

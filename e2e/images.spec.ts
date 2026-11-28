@@ -1,6 +1,45 @@
 import { createPatient } from './support';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { PATIENT_ID, signIn } from './helpers';
+
+type Box = { x: number; y: number; width: number; height: number };
+
+/**
+ * A one-finger stroke through the given fractions of the canvas.
+ *
+ * Chromium gets real touch input through CDP, the closest thing to a finger.
+ * WebKit (iPad Safari) has no CDP, so it gets the pointer events Safari fires
+ * for a touch, which is what the Konva stage listens to.
+ */
+async function touchStroke(page: Page, canvas: Locator, bounds: Box, fractions: number[], browserName: string) {
+  const at = (f: number) => ({ x: bounds.x + bounds.width * f, y: bounds.y + bounds.height * f });
+  if (browserName === 'chromium') {
+    const touch = await page.context().newCDPSession(page);
+    await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [at(fractions[0]!)] });
+    for (const f of fractions.slice(1)) await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [at(f)] });
+    await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    return;
+  }
+  await pointerSequence(canvas, fractions.map((f, i) => ({
+    type: i === 0 ? 'pointerdown' : 'pointermove', id: 11, pointerType: 'touch', ...at(f),
+  })).concat([{ type: 'pointerup', id: 11, pointerType: 'touch', ...at(fractions[fractions.length - 1]!) }]));
+}
+
+type PointerStep = { type: 'pointerdown' | 'pointermove' | 'pointerup'; id: number; pointerType: 'touch' | 'pen' | 'mouse'; x: number; y: number; primary?: boolean };
+
+/** Dispatch pointer events on the Konva canvas, interleaving pointers as given. */
+async function pointerSequence(canvas: Locator, steps: PointerStep[]) {
+  await canvas.evaluate((el, list) => {
+    for (const s of list) {
+      el.dispatchEvent(new PointerEvent(s.type, {
+        bubbles: true, cancelable: true, composed: true,
+        pointerId: s.id, pointerType: s.pointerType, isPrimary: s.primary ?? true,
+        clientX: s.x, clientY: s.y, buttons: s.type === 'pointerup' ? 0 : 1,
+        pressure: s.type === 'pointerup' ? 0 : 0.5,
+      }));
+    }
+  }, steps);
+}
 
 /**
  * S09 clinical image upload and drawing.
@@ -174,7 +213,7 @@ test.describe('S07 tablet drawings', () => {
     expect(Math.abs(bounds.width / bounds.height - 4 / 3)).toBeLessThan(.01);
   });
 
-  test('switches untouched templates, saves a touch stroke once, and reopens it in the same visit', async ({ page }) => {
+  test('switches untouched templates, saves a touch stroke once, and reopens it in the same visit', async ({ page, browserName }) => {
     await signIn(page, 'DOCTOR');
     const patient = await createPatient(page);
     const start = await page.request.post('/api/encounters', { data: { patientId: patient.id, type: 'WALK_IN' } });
@@ -197,12 +236,7 @@ test.describe('S07 tablet drawings', () => {
     await canvas.scrollIntoViewIfNeeded();
     const bounds = (await canvas.boundingBox())!;
     expect(bounds.width).toBeLessThanOrEqual(800);
-    const touch = await page.context().newCDPSession(page);
-    for (const [type, fraction] of [['touchStart', .25], ['touchMove', .5], ['touchEnd', 0]] as const) {
-      await touch.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [
-        { x: bounds.x + bounds.width * fraction, y: bounds.y + bounds.height * fraction },
-      ] });
-    }
+    await touchStroke(page, canvas, bounds, [.25, .5], browserName);
     expect((await (await page.request.get(gallery)).json()).total).toBe(0);
     const save = page.getByRole('button', { name: 'Save as new layer' });
     await save.scrollIntoViewIfNeeded();
@@ -228,5 +262,55 @@ test.describe('S07 tablet drawings', () => {
     await expect(page.getByRole('button', { name: /Version 2/ })).toBeVisible();
     expect((await (await page.request.get(gallery)).json()).total).toBe(1);
     expect(await (await page.request.get(resource + '/content' + query)).body()).toEqual(original);
+  });
+
+  test('an Apple Pencil stroke ignores the palm resting on the screen', async ({ page }) => {
+    await signIn(page, 'DOCTOR');
+    const patient = await createPatient(page);
+    const start = await page.request.post('/api/encounters', { data: { patientId: patient.id, type: 'WALK_IN' } });
+    expect(start.status()).toBe(201);
+    const visit = await start.json();
+    const gallery = '/api/clinical-images?patientId=' + patient.id + '&visitId=' + visit.id;
+    const query = '?patientId=' + patient.id + '&visitId=' + visit.id;
+
+    await page.goto('/#/patients/' + patient.id + '/visits/' + visit.id);
+    await page.getByLabel('Eye diagram').selectOption('anterior-os');
+    await page.getByRole('button', { name: 'Open Drawing' }).tap();
+    const canvas = page.locator('.annotate-canvas canvas').first();
+    await expect(canvas).toBeVisible();
+    await canvas.scrollIntoViewIfNeeded();
+    const b = (await canvas.boundingBox())!;
+    const at = (fx: number, fy: number) => ({ x: b.x + b.width * fx, y: b.y + b.height * fy });
+
+    await pointerSequence(canvas, [
+      // The hand lands first, low on the screen, as it does when writing...
+      { type: 'pointerdown', id: 21, pointerType: 'touch', ...at(.7, .9) },
+      { type: 'pointermove', id: 21, pointerType: 'touch', ...at(.72, .9) },
+      // ...then the pencil takes over and must replace the palm's stroke.
+      { type: 'pointerdown', id: 22, pointerType: 'pen', ...at(.25, .25), primary: false },
+      { type: 'pointermove', id: 22, pointerType: 'pen', ...at(.4, .3), primary: false },
+      // Palm movement and a second palm contact mid-stroke add nothing.
+      { type: 'pointermove', id: 21, pointerType: 'touch', ...at(.9, .95) },
+      { type: 'pointerdown', id: 23, pointerType: 'touch', ...at(.8, .8), primary: false },
+      { type: 'pointerup', id: 21, pointerType: 'touch', ...at(.9, .95) },
+      { type: 'pointermove', id: 22, pointerType: 'pen', ...at(.5, .35), primary: false },
+      { type: 'pointerup', id: 22, pointerType: 'pen', ...at(.5, .35), primary: false },
+      { type: 'pointerup', id: 23, pointerType: 'touch', ...at(.8, .8), primary: false },
+    ]);
+
+    const save = page.getByRole('button', { name: 'Save as new layer' });
+    await save.scrollIntoViewIfNeeded();
+    await save.tap();
+    await expect(page.getByRole('button', { name: /Version 1/ })).toBeVisible();
+    const { items } = await (await page.request.get(gallery)).json();
+    const layer = await (await page.request.get('/api/clinical-images/' + items[0].id + '/annotations/latest' + query)).json();
+    const shapes = layer.konvaData.shapes;
+    // One stroke, the pencil's, starting where the pencil touched down.
+    expect(shapes).toHaveLength(1);
+    const { width, height } = layer.konvaData;
+    expect(Math.abs(shapes[0].points[0] - width * .25)).toBeLessThan(width * .02);
+    expect(Math.abs(shapes[0].points[1] - height * .25)).toBeLessThan(height * .02);
+    // Every point is on the pencil's path, none from the palm in the lower right.
+    for (let i = 0; i < shapes[0].points.length; i += 2) expect(shapes[0].points[i]).toBeLessThan(width * .55);
   });
 });

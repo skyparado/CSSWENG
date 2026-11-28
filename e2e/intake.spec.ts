@@ -11,6 +11,17 @@ import { signIn } from './helpers';
  * works in the clinic: two devices, one session token between them.
  */
 
+/**
+ * The tablet's browser context. On the iPad and Android tablet projects it is
+ * that device (user agent, size, pixel ratio); on desktop Chromium it is a
+ * generic portrait touch tablet.
+ */
+function tabletOptions() {
+  const use = test.info().project.use;
+  if (!use.hasTouch) return { viewport: { width: 800, height: 1280 }, hasTouch: true, isMobile: true };
+  return { viewport: use.viewport, userAgent: use.userAgent, deviceScaleFactor: use.deviceScaleFactor, isMobile: use.isMobile, hasTouch: true };
+}
+
 /** Unique details per run so the dedup blind index does not match a leftover. */
 function patientDetails(suffix: string) {
   return {
@@ -47,7 +58,7 @@ test('secretary hands over a tablet, patient submits, staff reviews it', async (
 
   /* ---------------------- Patient fills it on the tablet ------------------ */
   // Separate context: no staff cookie, exactly like the real tablet.
-  const tabletContext = await browser.newContext({ viewport: { width: 800, height: 1280 }, hasTouch: true, isMobile: true });
+  const tabletContext = await browser.newContext(tabletOptions());
   const tablet = await tabletContext.newPage();
 
   try {
@@ -137,7 +148,7 @@ test('a cancelled session stops working on the tablet', async ({ page, browser }
   await page.getByRole('button', { name: 'Cancel session' }).click();
   await expect(page.getByRole('status')).toContainText('Cancelled');
 
-  const tabletContext = await browser.newContext({ viewport: { width: 800, height: 1280 }, hasTouch: true, isMobile: true });
+  const tabletContext = await browser.newContext(tabletOptions());
   const tablet = await tabletContext.newPage();
   try {
     await tablet.goto(`/#/tablet/${token}`);
@@ -150,7 +161,7 @@ test('a cancelled session stops working on the tablet', async ({ page, browser }
 test('the tablet surface shows no staff navigation at all', async ({ browser }) => {
   // A patient holding the tablet must not be able to reach the app, even if
   // they poke at the URL.
-  const context = await browser.newContext({ viewport: { width: 800, height: 1280 }, hasTouch: true, isMobile: true });
+  const context = await browser.newContext(tabletOptions());
   const tablet = await context.newPage();
   try {
     await tablet.goto('/#/tablet/not-a-real-token');
@@ -162,7 +173,7 @@ test('the tablet surface shows no staff navigation at all', async ({ browser }) 
 });
 
 test('a signed-in staff tablet locks on handover and clears a patient cancellation', async ({ browser }) => {
-  const context = await browser.newContext({ viewport: { width: 800, height: 1280 }, hasTouch: true, isMobile: true });
+  const context = await browser.newContext(tabletOptions());
   try {
     const page = await context.newPage();
     await signIn(page, 'SECRETARY');

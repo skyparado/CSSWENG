@@ -1,3 +1,4 @@
+import { randomId } from '../randomId';
 import { eyeTemplateLabels, type EyeTemplate } from '@clinic/schemas';
 import { imagesPath } from '../imageApi';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -24,6 +25,9 @@ import {
 
 /** Widest the canvas is drawn, so a 4000px fundus photo still fits a screen. */
 const MAX_DISPLAY_WIDTH = 900;
+
+/** How long after stylus contact a touch is treated as a resting palm. */
+const PALM_WINDOW_MS = 800;
 
 const COLORS = [
   { value: '#e23b3b', label: 'Red' },
@@ -62,10 +66,15 @@ export default function ImageAnnotator({
   const [basedOn, setBasedOn] = useState<number | null>(null);
 
   const drawing = useRef(false);
+  // The one pointer drawing the current stroke, so a second finger or a resting
+  // palm cannot add points to it or start a stroke of its own.
+  const activePointer = useRef<{ id: number; type: string } | null>(null);
+  // Last time an Apple Pencil or other stylus touched the canvas.
+  const lastPenAt = useRef(0);
   const saving = useRef(false);
   const saveTouch = useRef<{ id: number; x: number; y: number } | null>(null);
   const savedOnTouch = useRef(false);
-  const [commitKey] = useState(() => crypto.randomUUID());
+  const [commitKey] = useState(() => randomId());
   const container = useRef<HTMLDivElement>(null);
   const [availableWidth, setAvailableWidth] = useState(0);
   useEffect(() => {
@@ -137,6 +146,21 @@ export default function ImageAnnotator({
   /* ----------------------------- Drawing ---------------------------------- */
 
   function start(e: Konva.KonvaEventObject<PointerEvent>) {
+    const evt = e.evt;
+    const pen = evt.pointerType === 'pen';
+    if (pen) lastPenAt.current = Date.now();
+    // Palm rejection: a hand resting on the screen while writing with a stylus
+    // arrives as touch. Ignore touch shortly after stylus use.
+    else if (evt.pointerType === 'touch' && Date.now() - lastPenAt.current < PALM_WINDOW_MS) return;
+
+    // Already drawing. A stylus taking over from a stroke that a palm started
+    // replaces that stroke; any other second pointer is ignored.
+    let replacePalmStroke = false;
+    if (drawing.current && activePointer.current) {
+      if (!(pen && activePointer.current.type === 'touch')) return;
+      replacePalmStroke = true;
+    }
+
     const at = pointIn(e.target.getStage());
     if (!at) return;
 
@@ -156,8 +180,9 @@ export default function ImageAnnotator({
     }
 
     drawing.current = true;
+    activePointer.current = { id: evt.pointerId, type: evt.pointerType };
     setShapes((prev) => [
-      ...prev,
+      ...(replacePalmStroke ? prev.slice(0, -1) : prev),
       tool === 'pen'
         ? { kind: 'pen', points: [at[0], at[1], at[0], at[1]], color, width: strokeWidth }
         : { kind: 'arrow', points: [at[0], at[1], at[0], at[1]], color, width: strokeWidth },
@@ -165,7 +190,8 @@ export default function ImageAnnotator({
   }
 
   function move(e: Konva.KonvaEventObject<PointerEvent>) {
-    if (!drawing.current) return;
+    if (!drawing.current || e.evt.pointerId !== activePointer.current?.id) return;
+    if (e.evt.pointerType === 'pen') lastPenAt.current = Date.now();
     const at = pointIn(e.target.getStage());
     if (!at) return;
 
@@ -185,8 +211,12 @@ export default function ImageAnnotator({
     });
   }
 
-  function end() {
+  function end(e: Konva.KonvaEventObject<PointerEvent>) {
+    // Lifting a palm or a second finger must not end the stylus stroke.
+    if (activePointer.current && e.evt.pointerId !== activePointer.current.id) return;
+    if (e.evt.pointerType === 'pen') lastPenAt.current = Date.now();
     drawing.current = false;
+    activePointer.current = null;
   }
 
   /* ----------------------------- Actions ---------------------------------- */
@@ -340,7 +370,8 @@ export default function ImageAnnotator({
           <button type="button" className="primary" disabled={busy || !bitmap}
             onPointerDown={e => {
               savedOnTouch.current = false;
-              saveTouch.current = e.pointerType === 'touch' ? { id: e.pointerId, x: e.clientX, y: e.clientY } : null;
+              // Finger or stylus (Apple Pencil reports 'pen'); a mouse uses the click below.
+              saveTouch.current = e.pointerType !== 'mouse' ? { id: e.pointerId, x: e.clientX, y: e.clientY } : null;
             }}
             onPointerCancel={() => { saveTouch.current = null; }}
             onPointerUp={e => {
@@ -364,6 +395,7 @@ export default function ImageAnnotator({
         <p className="muted">Loading image...</p>
       ) : (
         // touchAction none so drawing on the tablet does not scroll the page.
+        // The annotate-canvas CSS also stops iPad Safari's long-press callout and text selection.
         <div className="annotate-canvas" style={{ touchAction: 'none' }}>
           <Stage
             width={displayWidth}

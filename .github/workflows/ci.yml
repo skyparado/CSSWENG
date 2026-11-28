@@ -156,3 +156,91 @@ jobs:
         with:
           name: playwright-traces
           path: test-results
+
+  # Dev 4 tablet screens (S01, S09, S16) on emulated iPad Safari (WebKit, portrait
+  # and landscape) and an Android tablet. Same services as the e2e job above.
+  e2e-tablets:
+    name: Playwright tablets (iPad Safari, Android tablet)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: clinic
+          POSTGRES_PASSWORD: clinic
+          POSTGRES_DB: clinic
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U clinic -d clinic"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+
+      s3:
+        image: adobe/s3mock:latest
+        env:
+          COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: clinic-documents
+        ports:
+          - 9000:9090
+
+      mailpit:
+        image: axllent/mailpit:latest
+        ports:
+          - 1025:1025
+          - 8025:8025
+
+    env:
+      DATABASE_URL: postgresql://clinic:clinic@localhost:5432/clinic?schema=public
+      REDIS_URL: redis://localhost:6379
+      NODE_ENV: test
+      SESSION_SECRET: ci-test-secret-do-not-use-in-production-only-for-e2e-runs
+      S3_ENDPOINT: http://localhost:9000
+      S3_ACCESS_KEY_ID: test
+      S3_SECRET_ACCESS_KEY: test
+      # The reminder worker must run: e2e/reminders.spec.ts waits for the email it sends.
+      REMINDERS_ENABLED: 'true'
+      BACKGROUND_JOBS_ENABLED: 'false'
+      EMAIL_PROVIDER: smtp
+      SMTP_URL: smtp://localhost:1025
+      # env.ts requires this (prisma-field-encryption). Vitest supplies its own
+      # default via vitest.config.ts; the e2e backend is a real server, so it
+      # needs the variable here. Throwaway all-zero key, CI data only.
+      PRISMA_FIELD_ENCRYPTION_KEY: k1.aesgcm256.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      # Patient field encryption and blind indexes (lib/fieldCrypto.ts): 32
+      # bytes, base64. The seed encrypts its patient with them. Same throwaway
+      # values as vitest.config.ts; CI data only.
+      FIELD_ENCRYPTION_KEY: dml0ZXN0LWZpZWxkLWVuY3J5cHRpb24ta2V5LTMyYiE=
+      BLIND_INDEX_KEY: dml0ZXN0LWJsaW5kLWluZGV4LWtleS0tLS0tLTMyYiE=
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npm run prisma:generate --workspace backend
+      - run: npm run prisma:migrate:deploy --workspace backend
+      # Build before seeding: the seed imports backend code that uses @clinic/schemas at runtime.
+      - run: npm run build --workspace @clinic/schemas
+      - run: npm run db:seed --workspace @clinic/backend
+      # WebKit is the engine of Safari on iPad. Chromium is for the Android tablet and Puppeteer.
+      - run: npx playwright install --with-deps webkit chromium
+
+      - name: Run Playwright
+        run: npm run test:e2e:tablets
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces-tablets
+          path: test-results
