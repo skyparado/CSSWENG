@@ -131,7 +131,8 @@ export default function Users() {
           </p>
         )}
         {data && data.items.length > 0 && (
-          <table>
+          // Scrolls sideways inside the card on a tablet instead of widening the page.
+          <div className="scroll-x"><table>
             <thead>
               <tr>
                 <th>Name</th>
@@ -194,7 +195,7 @@ export default function Users() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         )}
         {data && data.total > 0 && (
           <div className="pager">

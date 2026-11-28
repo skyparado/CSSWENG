@@ -29,6 +29,17 @@ async function resetToLogin(page: Page) {
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
 }
 
+/**
+ * Wide tables scroll inside their card. If the page itself is wider than the
+ * screen, a tablet browser zooms out and taps land on the wrong control.
+ */
+async function expectNoSidewaysScroll(page: Page) {
+  const { scrollWidth, innerWidth } = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth,
+  }));
+  expect(scrollWidth).toBeLessThanOrEqual(innerWidth);
+}
+
 test.describe('S01 sign-in', () => {
   test('signs the doctor in and asks for an active clinic', async ({ page }) => {
     await page.goto('/');
@@ -177,9 +188,14 @@ test.describe('role restrictions', () => {
     const nav = page.getByRole('navigation', { name: 'Main' });
     await nav.getByRole('link', { name: 'User Accounts' }).click();
     await expect(page.getByRole('heading', { name: 'User Accounts' })).toBeVisible();
+    await page.getByRole('button', { name: 'All accounts' }).click();
+    await expect(page.getByRole('table').first()).toBeVisible();
+    await expectNoSidewaysScroll(page);
 
     await nav.getByRole('link', { name: 'Audit Log' }).click();
     await expect(page.getByRole('heading', { name: 'Audit Log' })).toBeVisible();
+    await expect(page.getByRole('table').first()).toBeVisible();
+    await expectNoSidewaysScroll(page);
   });
 });
 

@@ -47,7 +47,7 @@ label { display: block; font-weight: 600; margin: 12px 0 6px; }
 .clinic-switch { width: auto; border: 2px solid var(--navy); color: var(--navy); font-weight: 700; }
 .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.pills { display: flex; gap: 10px; margin: 16px 0; }
+.pills { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0; }
 .pills button[aria-pressed='true'] { background: var(--navy); color: #fff; }
 
 /* Cards, tables, badges */
