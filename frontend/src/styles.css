@@ -14,6 +14,8 @@
   background: var(--bg);
 }
 * { box-sizing: border-box; }
+/* iPad Safari enlarges text when the tablet rotates to landscape unless told not to. */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body { margin: 0; }
 h1 { font-size: 28px; margin: 0 0 4px; }
 h2 { font-size: 20px; margin: 0 0 12px; }
@@ -474,6 +476,8 @@ tr.nowrap td { white-space: nowrap; }
   font-size: 20px;
   line-height: 1.5;
   overflow-y: auto;
+  /* Pulling down at the top must not trigger Android pull-to-refresh and lose the answers. */
+  overscroll-behavior: contain;
 }
 .tablet-header {
   flex: 0 0 auto;
@@ -726,6 +730,15 @@ fieldset.plain { border: 0; padding: 0; margin: 0; min-width: 0; }
 .tablet-extra summary, .eye-template-picker select, .eye-template-picker button { min-height: 44px; }
 @media (pointer: coarse) {
   .annotate-toolbar button, .annotate-toolbar .swatch, .layer-strip button { min-width: 44px; min-height: 44px; }
+  /* iPad Safari and Android Chrome: a quick second tap on a control must not zoom the page. */
+  button, .btn, a, label, select, input[type='checkbox'], input[type='radio'] { touch-action: manipulation; }
+}
+/* A long press while drawing must not open iPad Safari's image callout or select text. */
+.annotate-canvas, .annotate-canvas canvas {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 @media (max-width: 900px) {

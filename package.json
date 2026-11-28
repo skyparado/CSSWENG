@@ -16,7 +16,8 @@
     "dev:frontend": "npm run dev --workspace frontend",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test --project=chromium",
+    "test:e2e:tablets": "playwright test --project=ipad-safari --project=ipad-safari-landscape --project=android-tablet"
   },
   "engines": {
     "node": ">=20.0.0"

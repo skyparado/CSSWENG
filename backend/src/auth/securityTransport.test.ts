@@ -36,6 +36,18 @@ it('enforces HTTPS, Helmet, rate limits and secure cookies during production-mod
       for (const flag of ['HttpOnly', 'Secure', 'SameSite=Lax']) expect(cookie.includes(flag)).toBe(true);
     }
     expect(challengeCookie.split(';')[0] === verifiedCookie.split(';')[0]).toBe(false);
+    // Pages opened over HTTP are redirected; the health check and the API are not.
+    const page = await client.get('/patients?tab=1').expect(301);
+    expect(page.headers.location).toMatch(/^https:\/\/[^/]+\/patients\?tab=1$/);
+    await client.get('/health').expect(res => expect(res.status).not.toBe(301));
+    await client.post('/login-form').expect(403);
+
+    // Successful sign-ins from one shared clinic IP never trip the limiter.
+    const clinicWifi = { ...https, 'X-Forwarded-For': '192.0.2.15' };
+    for (let attempt = 0; attempt < 12; attempt++) {
+      await client.post('/api/auth/login').set(clinicWifi).send({ username, password }).expect(202);
+    }
+
     const syntheticClient = { ...https, 'X-Forwarded-For': '192.0.2.14' };
     for (let attempt = 0; attempt < 10; attempt++) {
       await client.post('/api/auth/login').set(syntheticClient).send({}).expect(400);

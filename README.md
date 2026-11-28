@@ -153,7 +153,19 @@ npm run db:seed --workspace @clinic/backend
 npm run test:e2e
 ```
 
-CI (`.github/workflows/ci.yml`) runs the Playwright suite in its own job, and Vitest, type-check and lint on every PR,
+The sign-in, S09 drawing and S16 intake suites also run on emulated tablets
+(iPad Safari in portrait and landscape, and an Android tablet):
+
+```bash
+npx playwright install webkit chromium   # once
+npm run test:e2e:tablets
+```
+
+Tablet kiosk setup (Android screen pinning, iPad Guided Access) and the
+physical-device sign-off are in `DEV4-DEMO.md`. To check the deployed site's
+HTTPS, headers and cookies, run `node scripts/check-security.mjs https://<site>`.
+
+CI (`.github/workflows/ci.yml`) runs the Playwright suite and the tablet suites in their own jobs, and Vitest, type-check and lint on every PR,
 with PostgreSQL and Redis service containers. See `CONTRIBUTING.md` for the
 branch model and the branch-protection rules an admin must enable.
 

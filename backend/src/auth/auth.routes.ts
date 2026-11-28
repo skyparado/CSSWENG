@@ -36,6 +36,12 @@ const loginRateLimiter = rateLimit({
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: { error: 'Too many login attempts from this IP. Try again later.' },
+  // Count failed attempts only. /login and /mfa share this limiter, and a clinic's
+  // staff usually share one public IP, so counting successes too let about five
+  // normal sign-ins in 15 minutes lock the doctor and secretary out together.
+  // Guessing is still capped at 10 failures per window, on top of the
+  // per-account lockout after five.
+  skipSuccessfulRequests: true,
   // The e2e suite signs in well over 10 times against one long-lived server
   // from one IP, so the limiter would reject the later specs. Off in tests
   // only; development and production still enforce it.

@@ -58,6 +58,17 @@ export function createApp(): Express {
     }),
   );
 
+  // Pages opened over plain HTTP move to HTTPS before anything is sent, so the
+  // sign-in form is never served unencrypted. /health stays reachable for the
+  // platform's internal health check, and /api refuses below instead (a
+  // redirected POST would resend the password over HTTP first).
+  app.use((req, res, next) => {
+    if (env.NODE_ENV !== 'production' || req.secure || req.path.startsWith('/api') || req.path.startsWith('/health')) return next();
+    if (req.method !== 'GET' && req.method !== 'HEAD') return res.status(403).json({ error: 'HTTPS is required' });
+    // Prefer the configured site address over the request's Host header.
+    const origin = env.CORS_ORIGIN.startsWith('https://') ? env.CORS_ORIGIN.replace(/\/+$/, '') : `https://${req.hostname}`;
+    res.redirect(301, origin + req.originalUrl);
+  });
   app.use('/api', (req, res, next) => {
     if (env.NODE_ENV === 'production' && !req.secure) return res.status(403).json({ error: 'HTTPS is required' });
     next();
